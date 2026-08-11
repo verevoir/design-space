@@ -27,6 +27,17 @@ expression rather than order.
 - **A matrix** of those variations against your design systems, each cell a real clickable site
   rather than a picture of one.
 
+## Running it
+
+Requires **Node.js ≥ 20**. From a clean clone:
+
+```sh
+npm install
+npm run verify
+```
+
+`npm run verify` builds every package with `tsc -b`, runs all tests with Vitest, and lints with ESLint. It must be green before any change merges.
+
 ## Status
 
 Phase 1, in progress. See [`backlog.md`](./backlog.md) for the stories,

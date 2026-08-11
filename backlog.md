@@ -16,6 +16,9 @@ topology.
 **Critical path:** `0.1 → 1.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — seven edges, each a genuine
 dependency rather than narrative order.
 
+This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and
+it is updated in the change that moves it — not afterwards.
+
 The two barriers that matter are both **contracts**, and they are why the plan fans at all:
 wave 1 settles the journey schema and wave 2 settles the port, so the three stories in wave 3
 never have to guess either.
@@ -40,6 +43,12 @@ fails.
 
 **Writes.** Repository root, every package manifest.
 **Unblocks.** Everything.
+
+**Status.** Done. Nine packages wired with one-way TypeScript project references in dependency
+order; `npm run verify` runs build → test → lint from a clean install on Node 20+. Deep imports
+are blocked by an eslint `no-restricted-imports` pattern over `@design-space/*/**` and by each
+package's single `"."` exports entry. The boundary test drives ESLint programmatically over a
+deep import and a clean one; removing the rule was confirmed to turn it red.
 
 ---
 

@@ -36,6 +36,10 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
 
 ## Working discipline
 
+- **`backlog.md` is this project's tracker**, deliberately — not the Notion work tracker that
+  holds aigency's own state. Story status is updated in the file, in the change that moves it.
+  Revisit if design-space acquires contributors beyond the operator, or when it moves out of
+  `aigency/projects/`.
 - **Pull the bar before implementing or decomposing.** `provision` from the verevoir
   capabilities MCP, with a short description of the work. Planning is governed too.
 - **Route substantial work rather than hand-writing it.** `enact_capability` for
