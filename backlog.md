@@ -58,9 +58,10 @@ deep import and a clean one; removing the rule was confirmed to turn it red.
 
 **Outcome.** The shape of a journey document — screens, blocks, actions with weight and target,
 annotations — lives in a machine-readable schema, and a document is validated against it at the
-boundary rather than by hand-written per-field checks. Both reference journeys validate; a
-document with a dangling action target, an unknown action weight, or an unreachable screen is
-rejected with a message naming the offending path.
+boundary rather than by hand-written per-field checks. Both reference journeys validate; and a
+document that is missing a required field, carries a dangling action target, uses an unknown
+action weight, or contains a screen that no action and no entry point can reach is rejected with
+a message naming the offending path.
 
 **Why.** This is the contract every later story reads. It is also what makes a generated journey
 checkable rather than hopefully parsed — the same property the port gets in wave 2.
