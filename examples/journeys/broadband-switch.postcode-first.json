@@ -1,0 +1,167 @@
+{
+  "id": "broadband-switch",
+  "title": "Switch to a new broadband package",
+  "intent": "An existing customer moves to a different package on the same line.",
+  "variationOf": "broadband-switch",
+  "variationBecause": "Ask for the postcode first, so we only show packages the customer can actually get.",
+  "entry": "check-availability",
+  "screens": [
+    {
+      "id": "check-availability",
+      "purpose": "The customer tells us where the line is, before seeing anything they might not be able to have.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Where is your line?",
+            "explain": "We will only show you packages we can actually deliver to this address."
+          }
+        },
+        {
+          "component": "input-set",
+          "props": {
+            "fields": [
+              { "label": "Postcode", "kind": "text", "required": true },
+              { "label": "House number or name", "kind": "text", "required": true }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Find my packages", "weight": "primary", "target": "browse-packages" }
+      ],
+      "annotations": [
+        "This is the whole point of the variation: nothing is offered that cannot be delivered, so no choice is taken away later.",
+        "Cost of the reversal — the customer is asked to do work before being shown any reason to care."
+      ]
+    },
+    {
+      "id": "browse-packages",
+      "purpose": "The customer picks from the packages their line can actually carry.",
+      "blocks": [
+        {
+          "component": "status",
+          "props": {
+            "tone": "good",
+            "message": "Full Fibre is available at 12 Example Street."
+          }
+        },
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Choose a new package",
+            "explain": "These are the packages we can deliver to your address."
+          }
+        },
+        {
+          "component": "compare-set",
+          "props": {
+            "attributes": ["Average speed", "Monthly price", "Contract"],
+            "items": [
+              { "name": "Family", "values": ["67 Mb", "£31", "18 months"] },
+              { "name": "Full Fibre", "values": ["500 Mb", "£44", "24 months"], "emphasis": true }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Continue", "weight": "primary", "target": "add-extras" },
+        { "label": "Keep my current package", "weight": "escape", "target": null }
+      ],
+      "annotations": [
+        "Essential is absent because it is not available here — the customer never learns it exists. Whether that is a kindness or a lost sale is exactly the business conversation.",
+        "The status block is new in this variation. It carries the answer to the question the customer just did work to ask."
+      ]
+    },
+    {
+      "id": "add-extras",
+      "purpose": "The customer adds optional services before committing.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Anything else?",
+            "explain": "You can add or remove these later without changing your contract."
+          }
+        },
+        {
+          "component": "option-list",
+          "props": {
+            "selection": "many",
+            "options": [
+              { "label": "Whole-home wifi discs", "detail": "£7 a month" },
+              { "label": "Static IP address", "detail": "£5 a month" },
+              { "label": "Engineer install", "detail": "One-off £50" }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Continue", "weight": "primary", "target": "your-details" },
+        { "label": "Skip", "weight": "secondary", "target": "your-details" }
+      ],
+      "annotations": []
+    },
+    {
+      "id": "your-details",
+      "purpose": "The customer confirms who they are and how to reach them.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Your details",
+            "explain": "We already have your address. We just need a way to reach you."
+          }
+        },
+        {
+          "component": "input-set",
+          "props": {
+            "fields": [
+              { "label": "Full name", "kind": "text", "required": true },
+              { "label": "Email", "kind": "email", "required": true },
+              { "label": "Mobile", "kind": "tel", "required": false }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Continue", "weight": "primary", "target": "confirm" },
+        { "label": "Back", "weight": "secondary", "target": "add-extras" }
+      ],
+      "annotations": [
+        "Shorter than the base journey's version of this screen, because the address is already known."
+      ]
+    },
+    {
+      "id": "confirm",
+      "purpose": "The customer reviews everything and commits.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Check and confirm",
+            "explain": "Your new package starts on the next billing date."
+          }
+        },
+        {
+          "component": "summary",
+          "props": {
+            "rows": [
+              { "label": "Address", "value": "12 Example Street, AB1 2CD", "editTarget": "check-availability" },
+              { "label": "Package", "value": "Full Fibre — 500 Mb, £44 a month", "editTarget": "browse-packages" },
+              { "label": "Extras", "value": "Whole-home wifi discs", "editTarget": "add-extras" },
+              { "label": "Contact", "value": "someone@example.com", "editTarget": "your-details" }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Confirm the switch", "weight": "primary", "target": null },
+        { "label": "Cancel", "weight": "destructive", "target": null }
+      ],
+      "annotations": [
+        "Address is the first row here and the last row in the base journey. The summary follows the order the customer supplied things in."
+      ]
+    }
+  ]
+}

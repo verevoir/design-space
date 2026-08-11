@@ -1,0 +1,168 @@
+{
+  "id": "broadband-switch",
+  "title": "Switch to a new broadband package",
+  "intent": "An existing customer moves to a different package on the same line.",
+  "entry": "browse-packages",
+  "screens": [
+    {
+      "id": "browse-packages",
+      "purpose": "The customer sees what they could move to, and picks one.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Choose a new package",
+            "explain": "You can change package once a month. Your line stays connected throughout."
+          }
+        },
+        {
+          "component": "compare-set",
+          "props": {
+            "attributes": ["Average speed", "Monthly price", "Contract"],
+            "items": [
+              { "name": "Essential", "values": ["36 Mb", "£24", "18 months"] },
+              { "name": "Family", "values": ["67 Mb", "£31", "18 months"], "emphasis": true },
+              { "name": "Full Fibre", "values": ["500 Mb", "£44", "24 months"] }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Continue", "weight": "primary", "target": "check-availability" },
+        { "label": "Keep my current package", "weight": "escape", "target": null }
+      ],
+      "annotations": [
+        "Emphasis on Family is a business decision, not a design one — it is the most-switched-to package.",
+        "Nothing here knows the customer's address yet, so every package is shown whether or not it is available."
+      ]
+    },
+    {
+      "id": "check-availability",
+      "purpose": "The customer confirms the line can carry the package they chose.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Check your line",
+            "explain": "We need your postcode to confirm the speed we can deliver."
+          }
+        },
+        {
+          "component": "input-set",
+          "props": {
+            "fields": [
+              { "label": "Postcode", "kind": "text", "required": true },
+              { "label": "House number or name", "kind": "text", "required": true }
+            ]
+          }
+        },
+        {
+          "component": "status",
+          "props": {
+            "tone": "pending",
+            "message": "We will check this against the exchange before you confirm."
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Check availability", "weight": "primary", "target": "add-extras" },
+        { "label": "Back to packages", "weight": "secondary", "target": "browse-packages" }
+      ],
+      "annotations": [
+        "This is the screen the postcode-first variation moves to the front. If the chosen package turns out to be unavailable here, the customer has already invested in a choice we then take away."
+      ]
+    },
+    {
+      "id": "add-extras",
+      "purpose": "The customer adds optional services before committing.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Anything else?",
+            "explain": "You can add or remove these later without changing your contract."
+          }
+        },
+        {
+          "component": "option-list",
+          "props": {
+            "selection": "many",
+            "options": [
+              { "label": "Whole-home wifi discs", "detail": "£7 a month" },
+              { "label": "Static IP address", "detail": "£5 a month" },
+              { "label": "Engineer install", "detail": "One-off £50" }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Continue", "weight": "primary", "target": "your-details" },
+        { "label": "Skip", "weight": "secondary", "target": "your-details" }
+      ],
+      "annotations": [
+        "Skip and Continue reach the same screen. Whether that is two actions or one is a journey question, and a good example of something the sketch should make arguable."
+      ]
+    },
+    {
+      "id": "your-details",
+      "purpose": "The customer confirms who they are and how to reach them.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Your details",
+            "explain": "We will use these to confirm the switch and tell you when it happens."
+          }
+        },
+        {
+          "component": "input-set",
+          "props": {
+            "fields": [
+              { "label": "Full name", "kind": "text", "required": true },
+              { "label": "Email", "kind": "email", "required": true },
+              { "label": "Mobile", "kind": "tel", "required": false }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Continue", "weight": "primary", "target": "confirm" },
+        { "label": "Back", "weight": "secondary", "target": "add-extras" }
+      ],
+      "annotations": [
+        "In the postcode-first variation the address is already known here, so this screen is shorter."
+      ]
+    },
+    {
+      "id": "confirm",
+      "purpose": "The customer reviews everything and commits.",
+      "blocks": [
+        {
+          "component": "prompt",
+          "props": {
+            "heading": "Check and confirm",
+            "explain": "Your new package starts on the next billing date."
+          }
+        },
+        {
+          "component": "summary",
+          "props": {
+            "rows": [
+              { "label": "Package", "value": "Family — 67 Mb, £31 a month", "editTarget": "browse-packages" },
+              { "label": "Address", "value": "12 Example Street, AB1 2CD", "editTarget": "check-availability" },
+              { "label": "Extras", "value": "Whole-home wifi discs", "editTarget": "add-extras" },
+              { "label": "Contact", "value": "someone@example.com", "editTarget": "your-details" }
+            ]
+          }
+        }
+      ],
+      "actions": [
+        { "label": "Confirm the switch", "weight": "primary", "target": null },
+        { "label": "Cancel", "weight": "destructive", "target": null }
+      ],
+      "annotations": [
+        "Every row here reaches back into the journey. A design system with no answer for an inline edit affordance will show up as an escape hatch on this screen first."
+      ]
+    }
+  ]
+}
