@@ -63,8 +63,6 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
       server = undefined;
     }
     await rm(tmpDir, { recursive: true, force: true });
-    // Clean up the env override so the next test starts fresh.
-    delete process.env['DOCUMENT_PATH_OVERRIDE'];
   });
 
   it('serves the exact bytes written to disk when the document path is real', async () => {
@@ -79,14 +77,10 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
     // Pick a free port and point serve.ts at the temp document.
     const port = await findFreePort();
     process.env['PORT'] = String(port);
-    process.env['DOCUMENT_PATH_OVERRIDE'] = docPath;
-
-    // Import serve.ts (no mocks). The module-level main() runs immediately.
-    // Awaiting `ready` gives a deterministic signal that startup has completed.
-    const { vi } = await import('vitest');
-    vi.resetModules();
-    const serveMod = await import('./serve.js');
-    server = (await serveMod.ready) ?? undefined;
+    // Drive the real composition against the real path. No mocks, and no environment
+    // variable telling production code which file to open.
+    const { serveDocument } = await import('./serve.js');
+    server = await serveDocument(docPath);
 
     // Fetch from the real server.
     const res = await fetch(`http://127.0.0.1:${port}/`);
@@ -110,12 +104,8 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
 
     const port = await findFreePort();
     process.env['PORT'] = String(port);
-    process.env['DOCUMENT_PATH_OVERRIDE'] = docPath;
-
-    const { vi } = await import('vitest');
-    vi.resetModules();
-    const serveMod = await import('./serve.js');
-    server = (await serveMod.ready) ?? undefined;
+    const { serveDocument } = await import('./serve.js');
+    server = await serveDocument(docPath);
 
     // /healthz does not surface gaps, but a 200 confirms the server started
     // and the gaps sidecar did not prevent startup.

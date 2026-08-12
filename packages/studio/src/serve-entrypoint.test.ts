@@ -66,11 +66,11 @@ async function loadServeWithReadFileError(cause: Error): Promise<{
   };
 
   try {
-    // Fresh module load — main() runs to completion before `ready` resolves.
-    // Awaiting the exported `ready` promise gives a deterministic signal that all
-    // module-level async work has settled, with no reliance on a sleep timer.
-    const serveMod = await import('./serve.js');
-    await serveMod.ready;
+    // Drive the entry point's behaviour directly. Importing the module no longer starts a
+    // server — it self-starts only when it IS the process entry point — so the test calls the
+    // exported startup path rather than relying on an import side effect.
+    const { runEntryPoint } = await import('./serve.js');
+    await runEntryPoint('/document.html');
   } finally {
     process.stderr.write = origStderrWrite;
     exitSpy.mockRestore();
@@ -126,8 +126,8 @@ async function loadServeWithDocument(
   };
 
   try {
-    const serveMod = await import('./serve.js');
-    await serveMod.ready;
+    const { runEntryPoint } = await import('./serve.js');
+    await runEntryPoint('/document.html');
   } finally {
     process.stdout.write = origStdoutWrite;
     process.stderr.write = origStderrWrite;
