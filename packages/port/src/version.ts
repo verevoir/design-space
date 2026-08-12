@@ -8,4 +8,4 @@
  * Format: MAJOR.MINOR — MAJOR bumps on a breaking shape change, MINOR on an
  * additive change (new optional prop or new component).
  */
-export const PORT_VERSION = '0.1.0' as const;
+export const PORT_VERSION = '0.1' as const;
