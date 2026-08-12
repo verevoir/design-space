@@ -98,8 +98,23 @@ export class ObjectLookupError extends Error {
   readonly ref: string;
 
   constructor(object: ObjectRef, ref: string, cause?: unknown) {
+    // Derive a human-readable cause label from the error object so a reader
+    // of the message learns which of the two transient failure kinds occurred:
+    //   - a signal kill (subprocess killed by SIGTERM/SIGKILL, including the
+    //     timeout kill sent by execFile's `timeout` option)
+    //   - a maxBuffer overflow (subprocess output exceeded the configured limit)
+    // Without this, an oversized-object failure would say "killed by signal",
+    // which is factually wrong and misleads anyone diagnosing the error.
+    const isErrObj = cause !== null && typeof cause === 'object';
+    const code = isErrObj && 'code' in cause
+      ? (cause as Record<string, unknown>)['code']
+      : undefined;
+    const causeLabel = code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+      ? 'maxBuffer overflow (object too large)'
+      : 'subprocess killed by signal';
+
     super(
-      `object lookup failed (subprocess killed by signal): kind=${object.kind} id=${object.id} at ref=${ref}`,
+      `object lookup failed (${causeLabel}): kind=${object.kind} id=${object.id} at ref=${ref}`,
     );
     this.name = 'ObjectLookupError';
     this.object = object;

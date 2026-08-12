@@ -186,6 +186,24 @@ describe('check()', () => {
       // The error field must reflect the actual thrown message, not 'unknown error'
       expect((f as { kind: 'defect'; error: string } | undefined)?.error).toBe('renderer exploded');
     });
+
+    it('defect finding falls back to "unknown error" when the GapRecord carries no error text', () => {
+      // `check()` is public API accepting `renderGaps` directly, so a caller may
+      // pass a GapRecord with no `error` field. The fallback `gap.error ?? 'unknown error'`
+      // at gate.ts:97 is reachable and must produce the literal string 'unknown error'
+      // rather than undefined or an empty string.
+      //
+      // We pass a hand-crafted GapRecord: the adapter has a `prompt` renderer (so
+      // check() classifies the gap as kind='defect'), but the record carries no
+      // `error` field — exercising the ?? branch.
+      const gapWithNoError = [
+        { screenId: 'screen-1', component: 'prompt' },  // no `error` property
+      ];
+      const report = check(SKETCH_LIKE_ADAPTER, gapWithNoError);
+      const f = report.findings.find((x) => x.component === 'prompt');
+      expect(f?.kind).toBe('defect');
+      expect((f as { kind: 'defect'; error: string } | undefined)?.error).toBe('unknown error');
+    });
   });
 
   describe('schema finding classification', () => {

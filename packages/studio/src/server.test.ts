@@ -329,6 +329,24 @@ describe('startServer()', () => {
     }
   });
 
+  it('rejects when PORT is set to 65536 (one above the valid upper bound)', async () => {
+    // The guard is `port > 65535`; this test pins the upper bound by supplying
+    // the first integer above it. PORT=65535 is the last valid value; 65536 must be rejected.
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = '65536';
+    try {
+      await expect(
+        startServer({ rendered: makeRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
   // ---------------------------------------------------------------------------
   // Post-startup error handling
   //

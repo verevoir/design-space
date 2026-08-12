@@ -129,6 +129,38 @@ describe('resolve() against a real git repository', () => {
     expect(indexAfter).toBe(indexBefore);
   });
 
+  it('four concurrent resolve() calls at different refs leave the working tree and index unchanged', async () => {
+    // ADR 0003 depends on all four variation columns being readable at once from a single
+    // working tree. This test exercises the concurrency property directly: if resolve()
+    // were to perform a checkout under the hood, concurrent calls at different refs would
+    // race and corrupt each other's reads. git-show is read-only and never touches the
+    // index or working tree, so all four must complete successfully and the tree must be
+    // unchanged after all four settle.
+    const statusBefore = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexBefore = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
+
+    // Four concurrent reads: two object kinds at each of the two commits.
+    const results = await Promise.all([
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitShaToo),
+      resolve(repoDir, { kind: 'port', id: 'port' }, commitSha),
+      resolve(repoDir, { kind: 'token-set', id: 'base' }, commitSha),
+    ]);
+
+    // All four reads must have returned content.
+    expect(results).toHaveLength(4);
+    for (const r of results) {
+      expect(typeof r).toBe('string');
+      expect(r.length).toBeGreaterThan(0);
+    }
+
+    // The working tree and index must be exactly as they were before.
+    const statusAfter = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexAfter = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
+    expect(statusAfter).toBe(statusBefore);
+    expect(indexAfter).toBe(indexBefore);
+  });
+
   it('throws ObjectNotFoundError for an id that does not exist at the ref', async () => {
     await expect(
       resolve(repoDir, { kind: 'journey', id: 'nonexistent' }, commitSha),
@@ -323,6 +355,51 @@ describe('resolve() subprocess failure classification', () => {
       expect(lookupErr.ref).toBe(commitSha);
       expect(lookupErr.message).toContain('journey');
       expect(lookupErr.message).toContain('test-journey');
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ObjectLookupError message names "killed by signal" when the subprocess exits via a signal', async () => {
+    // A signal kill must produce a message that says "killed by signal", not
+    // "maxBuffer overflow", so the two causes are distinguishable in the message text.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-sigterm-msg-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(shimPath, '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ObjectLookupError);
+      expect((err as ObjectLookupError).message).toContain('killed by signal');
+      expect((err as ObjectLookupError).message).not.toContain('maxBuffer');
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ObjectLookupError message names "maxBuffer overflow" when the subprocess output exceeds the limit', async () => {
+    // A maxBuffer overflow must produce a message that says "maxBuffer overflow", not
+    // "killed by signal" — the previous implementation always said the latter, which
+    // was factually wrong for this case. This test pins the corrected message.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-maxbuf-msg-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(
+      shimPath,
+      '#!/bin/sh\ndd if=/dev/zero bs=1048576 count=200 2>/dev/null\n',
+      { mode: 0o755 },
+    );
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ObjectLookupError);
+      expect((err as ObjectLookupError).message).toContain('maxBuffer overflow');
+      expect((err as ObjectLookupError).message).not.toContain('killed by signal');
     } finally {
       process.env['PATH'] = origPath;
       rmSync(shimDir, { recursive: true, force: true });
