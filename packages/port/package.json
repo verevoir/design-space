@@ -13,6 +13,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@design-space/journey-model": "*"
+    "@design-space/journey-model": "*",
+    "zod": "^3.23.8"
   }
 }

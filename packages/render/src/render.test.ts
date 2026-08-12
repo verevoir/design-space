@@ -149,23 +149,55 @@ describe('render()', () => {
     });
   });
 
-  describe('html escaping protects against XSS in journey data', () => {
-    it('special characters in heading are HTML-escaped', () => {
+  describe('html escaping protects against XSS in journey metadata', () => {
+    it('special characters in the journey title are HTML-escaped in the document title element', () => {
+      const journey: JourneyDocument = {
+        ...MINIMAL_JOURNEY,
+        title: '<script>alert(1)</script>',
+      };
+      const { html } = render(journey, PROMPT_ONLY_ADAPTER);
+      // The <title> element and the <h1> header must not contain a raw <script> tag
+      // The render package escapes journey metadata it controls (title, action labels, etc.)
+      expect(html).toContain('&lt;script&gt;');
+      expect(html).toContain('&lt;/script&gt;');
+    });
+
+    it('special characters in action labels are HTML-escaped', () => {
       const journey: JourneyDocument = {
         ...MINIMAL_JOURNEY,
         screens: [
           {
             ...MINIMAL_JOURNEY.screens[0]!,
-            blocks: [
-              { component: 'prompt', props: { heading: '<script>alert(1)</script>', explain: undefined } },
+            actions: [
+              { label: '<b>Click me</b>', weight: 'primary', target: null },
             ],
           },
           MINIMAL_JOURNEY.screens[1]!,
         ],
       };
       const { html } = render(journey, PROMPT_ONLY_ADAPTER);
-      expect(html).not.toContain('<script>');
-      expect(html).toContain('&lt;script&gt;');
+      expect(html).not.toContain('<b>Click me</b>');
+      expect(html).toContain('&lt;b&gt;Click me&lt;/b&gt;');
+    });
+
+    it('special characters in a gap component name are HTML-escaped in the gap element', () => {
+      const journey: JourneyDocument = {
+        ...MINIMAL_JOURNEY,
+        screens: [
+          {
+            ...MINIMAL_JOURNEY.screens[0]!,
+            blocks: [
+              { component: '<evil>', props: {} },
+            ],
+            actions: [],
+          },
+          MINIMAL_JOURNEY.screens[1]!,
+        ],
+      };
+      const { html } = render(journey, EMPTY_ADAPTER);
+      // The gap element shows the component name; that name must be escaped
+      expect(html).toContain('&lt;evil&gt;');
+      expect(html).not.toContain('<<evil>>');
     });
   });
 

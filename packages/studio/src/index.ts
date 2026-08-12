@@ -13,4 +13,5 @@
 export const PACKAGE_NAME = '@design-space/studio';
 
 export { createStudioServer, startServer } from './server.js';
+export { prerender, type PrerenderOptions } from './prerender.js';
 export type { ServerOptions } from './server.js';

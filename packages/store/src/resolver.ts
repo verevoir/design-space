@@ -77,6 +77,18 @@ export class ObjectNotFoundError extends Error {
  *   adapters/<id>.js        — adapter modules
  *   tokens/<id>.json        — token sets
  */
+/**
+ * Where a collection of objects is rooted within the repository.
+ *
+ * This is configuration, not a path a caller builds: the caller says which collection to read
+ * from, and the resolver still decides how an object of a given kind is named inside it. Without
+ * it the convention below is fixed at the repository root, which silently cannot reach a journey
+ * stored anywhere else — the defect this option was added to fix.
+ */
+export interface ResolveOptions {
+  readonly root?: string;
+}
+
 function objectPath(object: ObjectRef): string {
   switch (object.kind) {
     case 'journey':
@@ -110,8 +122,10 @@ export async function resolve(
   repoPath: string,
   object: ObjectRef,
   ref: string,
+  options: ResolveOptions = {},
 ): Promise<string> {
-  const gitPath = objectPath(object);
+  const root = options.root?.replace(/^\/+|\/+$/g, '') ?? '';
+  const gitPath = root ? `${root}/${objectPath(object)}` : objectPath(object);
   const refPath = `${ref}:${gitPath}`;
 
   try {
