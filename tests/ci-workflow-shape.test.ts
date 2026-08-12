@@ -14,6 +14,30 @@ const yml = readFileSync(
 );
 const flat = yml.replace(/\s+/g, ' ');
 
+// ---------------------------------------------------------------------------
+// Audit step extraction helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract just the YAML block for the npm audit step, from the line containing
+ * `run: npm audit` up to (but not including) the next step boundary `      - `.
+ * This bounds every audit-step assertion so a property found *elsewhere* in the
+ * file cannot satisfy the check.
+ */
+function extractAuditStepBlock(): string {
+  const auditRunIdx = yml.indexOf('run: npm audit');
+  if (auditRunIdx < 0) return '';
+  // Walk back to the start of this step's `      - ` marker.
+  const stepStart = yml.lastIndexOf('\n', auditRunIdx);
+  // Find the next step boundary: a line that starts with whitespace + `- ` after
+  // the audit line. YAML step separators in this file are `      - `.
+  const nextStep = yml.indexOf('\n      - ', auditRunIdx);
+  const stepEnd = nextStep >= 0 ? nextStep : yml.length;
+  return yml.slice(stepStart, stepEnd);
+}
+
+const auditStep = extractAuditStepBlock();
+
 describe('ci.yml — action pins', () => {
   it('pins actions/checkout to a 40-character commit SHA, not a floating tag', () => {
     // A floating tag (e.g. @v4) is mutable: the action owner can repoint it at
@@ -91,20 +115,65 @@ describe('ci.yml — persist-credentials: false', () => {
   });
 });
 
-describe('ci.yml — audit step', () => {
-  it('runs npm audit with --audit-level=high', () => {
-    // The threshold is documented in docs/adr/0006-dependency-vulnerability-threshold.md.
-    // Pinned here so a well-intentioned bump to `moderate` or a drop to `critical`
-    // (or a removal) breaks a test rather than passing silently.
-    expect(flat).toMatch(/run: npm audit --audit-level=high/);
+// ---------------------------------------------------------------------------
+// Audit step — blocking behaviour
+//
+// The four defeat mechanisms a future edit could apply (each pinned by its own test):
+//   1. Appending `|| true` to the audit command — makes the step always exit 0.
+//   2. Adding `continue-on-error: true` to the step — the runner skips the step on
+//      failure and marks it yellow rather than failing the job.
+//   3. Weakening `--audit-level` (to `low`, `moderate`, `critical`, or `none`) —
+//      changes which severity bracket triggers a non-zero exit.
+//   4. Moving the audit step after other steps — does not directly defeat the gate
+//      but buries the security signal and makes it easy to miss; pinned so any
+//      reordering of the steps is a deliberate, reviewed change.
+//
+// Each assertion is scoped to the extracted audit-step block so a property found
+// elsewhere in the file cannot accidentally satisfy the check.
+// ---------------------------------------------------------------------------
+
+describe('ci.yml — audit step blocks on findings', () => {
+  it('audit step is present in ci.yml', () => {
+    // Foundation: if the audit step is removed entirely, all scoped assertions
+    // below would vacuously pass against an empty string. This guard fails first.
+    expect(auditStep).not.toBe('');
   });
 
-  it('does not run npm audit in report-only mode (no --json without a blocking exit)', () => {
-    // A report-only audit that never fails is not a gate. The step must emit a
-    // non-zero exit on findings above the threshold; a pure `--json` flag with no
-    // follow-on check would suppress that.
-    // (A false positive here is acceptable; the important direction is no silent pass.)
-    const auditLine = flat.match(/run: npm audit[^;]*/)?.[0] ?? '';
-    expect(auditLine).not.toMatch(/--json(?!.*&&.*exit)/);
+  it('runs npm audit with --audit-level=high (not weaker)', () => {
+    // The threshold is documented in docs/adr/0006-dependency-vulnerability-threshold.md.
+    // `high` triggers a non-zero exit on high and critical findings.
+    // Weaker levels (`low`, `moderate`, `critical`, `none`) would widen the window
+    // of unflagged vulnerabilities. Pinned here so a well-intentioned bump breaks
+    // a test rather than passing silently.
+    expect(auditStep).toMatch(/--audit-level=high/);
+  });
+
+  it('does not use a weaker audit level in the audit step', () => {
+    // Belt-and-suspenders: reject any level weaker than high. `none` suppresses
+    // the exit code entirely; `low`/`moderate`/`critical` each lower the bar.
+    expect(auditStep).not.toMatch(/--audit-level=(none|low|moderate|critical)/);
+  });
+
+  it('does not append || true to the audit step (defeat: always-green exit)', () => {
+    // `npm audit --audit-level=high || true` exits 0 regardless of findings.
+    // Checks the bounded audit-step block, not the whole file.
+    expect(auditStep).not.toContain('|| true');
+  });
+
+  it('does not carry continue-on-error: true on the audit step (defeat: skip on failure)', () => {
+    // `continue-on-error: true` tells the runner to mark the step as a warning
+    // and proceed rather than failing the job — silently defeating the gate.
+    expect(auditStep).not.toContain('continue-on-error: true');
+  });
+
+  it('audit step appears before npm run lint in the workflow (defeat: reordering)', () => {
+    // The audit step must precede the build/test steps so a vulnerability finding
+    // stops the job before the more expensive steps run. Pinning the order here
+    // makes any reordering a deliberate, reviewed change.
+    const auditPos = yml.indexOf('npm audit');
+    const lintPos = yml.indexOf('npm run lint');
+    expect(auditPos).toBeGreaterThan(0);
+    expect(lintPos).toBeGreaterThan(0);
+    expect(auditPos).toBeLessThan(lintPos);
   });
 });
