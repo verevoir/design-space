@@ -104,12 +104,15 @@ error naming both.
 
 **Status.** Done. Reads go through `git show` via `execFile` with argv only — no shell, no
 checkout, no working-tree mutation. The resolver owns path construction; callers name an object
-by kind and id. Tested against a real temporary git repository; the no-checkout property is
-demonstrated by reading the same object at two different refs concurrently and getting different
-content (a checkout would have changed the working tree). Subprocess failures are classified:
-a normal non-zero exit (git answered "not there") surfaces as `ObjectNotFoundError`; a
-signal-killed subprocess (timeout or hung git) surfaces as `ObjectLookupError`, which a caller
-can retry.
+by kind and id. Tested against a real temporary git repository; the no-checkout guarantee is
+demonstrated by reading a non-HEAD ref and confirming that neither the working-tree status nor
+the index fingerprint changes (a checkout would have mutated both). Two separate tests confirm
+that reading the same object at two different refs yields different content. Subprocess failures
+are classified: a normal non-zero exit (git answered "not there") surfaces as
+`ObjectNotFoundError`; a signal-killed subprocess (timeout or hung git) surfaces as
+`ObjectLookupError`, which a caller can retry. Input is validated at the boundary: a ref, root,
+or id that fails the allow-pattern is rejected with `InvalidRefError` before any subprocess is
+spawned.
 
 The fan was real: 1.1 and 1.2 were built concurrently in separate worktrees, which they needed
 because both run `npm install` and would otherwise have collided on the lockfile.

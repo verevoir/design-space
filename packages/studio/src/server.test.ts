@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { createStudioServer, startServer } from './server.js';
 import type { RenderResult } from '@design-space/render';
 import { PORT_VERSION } from '@design-space/port';
@@ -27,6 +28,33 @@ function bindServer(server: Server, teardown: (fn: () => void) => void): Promise
       }
       teardown(() => server.close());
       resolve(`http://127.0.0.1:${addr.port}`);
+    });
+  });
+}
+
+/**
+ * Ask the OS for a free port by binding a net server to port 0, recording the
+ * assigned port, then closing it. Returns the port number.
+ *
+ * The caller must use the port immediately — there is a tiny window between
+ * close() and the next bind, but that is unavoidable for any strategy that
+ * does not modify startServer() to accept port 0 directly.
+ */
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const net = createNetServer();
+    net.once('error', reject);
+    net.listen(0, '0.0.0.0', () => {
+      const addr = net.address();
+      if (!addr || typeof addr === 'string') {
+        net.close(() => reject(new Error('unexpected address shape')));
+        return;
+      }
+      const port = addr.port;
+      net.close((err) => {
+        if (err) reject(err);
+        else resolve(port);
+      });
     });
   });
 }
@@ -63,11 +91,17 @@ describe('createStudioServer()', () => {
       expect(body['status']).toBe('ok');
     });
 
-    it('returns the port version in the response body', async () => {
+    it('returns the port version in MAJOR.MINOR format', async () => {
+      // PORT_VERSION is documented as "MAJOR.MINOR" (two dot-separated integer
+      // segments). This assertion checks the actual format — a value like
+      // "0.1.0" (three segments) would fail, proving the doc-comment is honoured.
       const server = createStudioServer({ rendered: makeRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/healthz`);
       const body = await res.json() as Record<string, unknown>;
+      expect(body['portVersion']).toMatch(/^\d+\.\d+$/);
+      // Also confirm it matches what the package exports, so a version bump
+      // the server did not pick up would still fail here.
       expect(body['portVersion']).toBe(PORT_VERSION);
     });
   });
@@ -120,11 +154,16 @@ describe('createStudioServer()', () => {
 
 describe('startServer()', () => {
   let blocker: Server | undefined;
+  let started: Server | undefined;
 
   afterEach(async () => {
     if (blocker) {
       await new Promise<void>((res) => blocker!.close(() => res()));
       blocker = undefined;
+    }
+    if (started) {
+      await new Promise<void>((res) => started!.close(() => res()));
+      started = undefined;
     }
   });
 
@@ -148,6 +187,35 @@ describe('startServer()', () => {
       });
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // Success path — startServer() resolves and the server is listening
+  // ---------------------------------------------------------------------------
+
+  it('resolves to a listening Server when the port is available', async () => {
+    const port = await findFreePort();
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = String(port);
+    try {
+      const server = await startServer({ rendered: makeRendered('<html></html>') });
+      started = server;
+      const addr = server.address();
+      expect(addr).not.toBeNull();
+      expect(typeof addr).toBe('object');
+      if (addr && typeof addr === 'object') {
+        expect(addr.port).toBe(port);
+      }
+      // Confirm it is actually serving HTTP.
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      expect(res.status).toBe(200);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
 
   it('rejects with a legible error when the port is already in use (EADDRINUSE)', async () => {
     const port = await occupyPort();
@@ -270,26 +338,29 @@ describe('startServer()', () => {
   // that is attached inside the listen callback, after the startup handler is
   // detached.
   //
-  // Strategy: use createStudioServer() to get a server and listen on the
-  // OS-assigned port 0 — no PORT env var required, no free-then-rebind TOCTOU
-  // window. Attach the same post-startup handler that startServer() wires up,
-  // then emit a synthetic 'error' event directly on the server and assert the
-  // handler forwarded it to stderr.
+  // Strategy: call startServer() on a known-free port so it resolves
+  // successfully, then emit a synthetic 'error' event on the returned server
+  // and assert that the post-startup handler forwarded it to stderr. This
+  // exercises startServer() — the function that wires up the post-startup
+  // handler — rather than recreating the handler manually.
   // ---------------------------------------------------------------------------
 
   it('forwards post-startup server errors to stderr rather than leaving them unhandled', async () => {
-    // Bind on an OS-assigned port — no PORT env, no TOCTOU.
-    const server = createStudioServer({ rendered: makeRendered('<html></html>') });
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', () => resolve());
-    });
-
-    // Attach the post-startup error handler — the same handler startServer()
-    // adds inside its listen callback once the startup listener is detached.
-    server.on('error', (err: Error) => {
-      process.stderr.write(`Studio server runtime error: ${err.message}\n`);
-    });
+    // Let startServer() bind on a free port and resolve.
+    const port = await findFreePort();
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = String(port);
+    let server: Server;
+    try {
+      server = await startServer({ rendered: makeRendered('<html></html>') });
+      started = server;
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
 
     // Capture writes to stderr.
     const stderrChunks: string[] = [];
@@ -301,6 +372,8 @@ describe('startServer()', () => {
 
     try {
       // Emit a synthetic post-startup error directly on the server.
+      // startServer() wires a post-startup 'error' handler inside its listen
+      // callback; that handler must forward this to stderr.
       const syntheticError = new Error('synthetic post-startup socket error');
       server.emit('error', syntheticError);
 
@@ -308,7 +381,6 @@ describe('startServer()', () => {
       expect(stderrChunks.some((c) => c.includes('synthetic post-startup socket error'))).toBe(true);
     } finally {
       process.stderr.write = origWrite;
-      await new Promise<void>((res) => server.close(() => res()));
     }
   });
 });
