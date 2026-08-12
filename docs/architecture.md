@@ -214,6 +214,55 @@ looks exactly like a panel that ran and found nothing. That is deliberate (the m
 gate a merge), and it is why the gate's tests live in `tests/` rather than being trusted to a
 green build.
 
+## 9a. The operational plane
+
+How this is built, deployed and identified — recorded here so nobody has to read the Dockerfile,
+IAM or a workflow to learn it.
+
+### Build
+
+Two stages. The builder installs dependencies, runs `tsc -b`, then runs `prerender` against the
+repository to write `dist/document.html` and its gaps sidecar. The runtime stage copies only the
+compiled output and production dependencies: **no git, no devDependencies, no source**, and it
+does not carry `gate` or `pipeline`, which `serve.ts` never imports.
+
+Both stages pin `node:20-slim` **by digest**, not by tag, so the same source builds the same
+image over time.
+
+**The image must be `linux/amd64`.** A build on Apple Silicon produces `arm64`, which Cloud Run
+rejects at startup with `exec format error` — the container never listens and the deploy fails on
+the startup probe. Where no cross-builder is available, `gcloud builds submit` builds natively.
+
+### Deploy
+
+| | |
+|---|---|
+| service | `design-space-studio`, Cloud Run, `europe-west2` |
+| project | `design-space-505306` (number `959702328785`) |
+| scaling | `min-instances=0`, `max-instances=2`, 256Mi, 1 vCPU |
+| ingress | authenticated only — not public |
+| runtime identity | `ds-runtime@…` — **holds no permissions at all** |
+| deploy identity | `ds-deployer@…` — `run.admin`, `artifactregistry.writer`, and `actAs` scoped to `ds-runtime` alone |
+| CI auth | Workload Identity Federation, provider condition `assertion.repository=='verevoir/design-space'`. **No service-account key exists**, which matters because the repository is public. |
+
+### Idle cost
+
+`min-instances=0` means no instance runs when nothing is being served, so **compute at idle is
+zero** — Cloud Run bills per request and per instance-second. The standing cost is Artifact
+Registry storage for the pushed images.
+
+*Not yet a measured figure.* Story 2S.2's done-bar asks for a number rather than the word "cheap",
+and a real billing read is the only thing that supplies one. Recorded as outstanding rather than
+estimated, because an arithmetic guess dressed as a measurement is the failure this project keeps
+finding.
+
+### The health endpoint is `/health`
+
+Not `/healthz`. Cloud Run's frontend intercepts `/healthz` and returns its own 404 — the request
+never reaches the container — while `/health`, `/readyz`, `/-/health` and arbitrary paths all
+arrive normally. This was established against the running service after Google's own documentation
+suggested the opposite; see the README for the evidence.
+
 ## 10. Deferred, with triggers
 
 Recorded as deferred rather than silently defaulted (ADR 0005).
