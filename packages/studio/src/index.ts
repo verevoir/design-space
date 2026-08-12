@@ -16,7 +16,7 @@
  *
  * The listen call is NOT at module top-level so tests can import freely.
  * Nothing in this package currently wires these two halves together into a
- * runnable entry point; that arrives with the deployment step (backlog.md §2S.1).
+ * runnable entry point; that arrives with backlog.md §2S.2.
  */
 export const PACKAGE_NAME = '@design-space/studio';
 
