@@ -1,10 +1,10 @@
 /**
  * Unit tests for serve.ts module-level behaviour.
  *
- * serve.ts runs main() at module level. These tests load it in isolation —
- * with node:fs/promises and ./server.js mocked — so each test can exercise
- * all three paths through main() without touching the real filesystem or
- * binding a real port.
+ * serve.ts exports `runEntryPoint`, which these tests call directly — with node:fs/promises
+ * and ./server.js mocked — so each path is exercised without touching the real filesystem or
+ * binding a real port. Importing the module does NOT start anything: it self-starts only when
+ * it is the process entry point.
  *
  * Paths under test:
  *   (a) readFile fails — wrapped with the specific legible message that names
@@ -28,7 +28,7 @@ vi.mock('./server.js');
 
 /**
  * Capture exit code and stderr from a fresh execution of the serve.ts module.
- * The module is reset before each call so main() runs from scratch.
+ * The module is reset before each call so runEntryPoint runs against fresh mocks.
  */
 async function loadServeWithReadFileError(cause: Error): Promise<{
   exitCode: number | undefined;
@@ -169,7 +169,7 @@ describe('serve.ts: readFile failure path', () => {
       { code: 'ENOENT' } as NodeJS.ErrnoException,
     );
     const { stderrOutput } = await loadServeWithReadFileError(cause);
-    // The outer catch in main().catch() writes:
+    // runEntryPoint's catch writes:
     //   "Studio server startup failed: Studio server failed to read the
     //    pre-rendered document at <path>: <msg>. Run the prerender build step..."
     expect(stderrOutput).toMatch(

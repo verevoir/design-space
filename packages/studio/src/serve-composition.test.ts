@@ -2,10 +2,11 @@
  * Tests for the serve entry point's composition: that it reads a document from
  * disk and serves it via startServer at / and /healthz.
  *
- * The entry point's wiring is tested here by driving its two dependencies
- * (readFile + startServer) through the public HTTP interface, supplying a real
- * temporary file as the pre-rendered document so the test confirms actual I/O
- * rather than mocked internals.
+ * The wiring is tested here by driving its two dependencies (readFile + startServer) through
+ * the public HTTP interface, supplying a real temporary file as the pre-rendered document so
+ * the test confirms actual I/O rather than mocked internals. It does not import serve.ts —
+ * these tests predate `serveDocument` being exported, and cover the seam rather than the
+ * entry point, which serve-entrypoint.test.ts and serve-e2e.test.ts own.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { writeFile, mkdir, rm } from 'node:fs/promises';

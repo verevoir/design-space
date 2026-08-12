@@ -10,9 +10,10 @@
  * without invoking serve.ts itself).
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { writeFile, rm, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { writeFile, rm, mkdir, readFile } from 'node:fs/promises';
+import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { createServer } from 'node:net';
 
@@ -96,7 +97,7 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
     expect(body).toBe(HTML);
   });
 
-  it('carries the real gap records through from the sidecar to the served result', async () => {
+  it('starts and serves normally when a valid gaps sidecar is present', async () => {
     // Write a document with a known gaps sidecar.
     const docPath = join(tmpDir, 'document.html');
     const gapsPath = join(tmpDir, 'document.gaps.json');
@@ -114,8 +115,10 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
     const { serveDocument } = await import('./serve.js');
     server = await serveDocument(docPath);
 
-    // /healthz does not surface gaps, but a 200 confirms the server started
-    // and the gaps sidecar did not prevent startup.
+    // No response surfaces gaps today (handleRequest reads only rendered.html), so this can
+    // only assert that a well-formed sidecar is read without disturbing startup. Asserting the
+    // records reach the served output has to wait until the server actually surfaces them —
+    // the same point at which an unreadable sidecar should become a hard failure.
     const res = await fetch(`http://127.0.0.1:${port}/healthz`);
     expect(res.status).toBe(200);
   });
@@ -219,5 +222,61 @@ describe('serveDocument: an absent gaps sidecar is silent', () => {
     }
 
     expect(stderrChunks.join('')).not.toContain('gaps sidecar');
+  });
+});
+
+describe('serve.ts as the process entry point', () => {
+  let entryDir: string;
+
+  beforeEach(async () => {
+    entryDir = join(tmpdir(), `ds-entry-${process.pid}-${Math.abs(Number(process.hrtime.bigint() % 100000n))}`);
+    await rm(entryDir, { recursive: true, force: true });
+    await mkdir(entryDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(entryDir, { recursive: true, force: true });
+  });
+
+  it('starts and announces its port when run as the entry point, the way the container runs it', async () => {
+    // The Dockerfile's CMD is `node packages/studio/dist/serve.js`. That path — module as
+    // process entry point — is the one line of production behaviour the rest of the suite
+    // cannot reach, because every other test imports the module instead of running it.
+    // So it is spawned here exactly as the container spawns it.
+    const { execFile } = await import('node:child_process');
+    const serveJs = resolve(dirname(fileURLToPath(import.meta.url)), '../dist/serve.js');
+    const docPath = resolve(dirname(serveJs), 'document.html');
+    const hadDocument = await readFile(docPath, 'utf-8').then(
+      () => true,
+      () => false,
+    );
+    if (!hadDocument) await writeFile(docPath, HTML, 'utf-8');
+
+    const port = await findFreePort();
+    const child = execFile('node', [serveJs], {
+      env: { ...process.env, PORT: String(port) },
+    });
+
+    try {
+      const line = await new Promise<string>((res, rej) => {
+        const timer = setTimeout(() => rej(new Error('entry point did not announce a port')), 15_000);
+        child.stdout?.on('data', (d: Buffer | string) => {
+          const text = String(d);
+          if (text.includes('listening on port')) {
+            clearTimeout(timer);
+            res(text);
+          }
+        });
+        child.on('error', (e) => {
+          clearTimeout(timer);
+          rej(e);
+        });
+      });
+
+      expect(line).toContain(`listening on port ${port}`);
+    } finally {
+      child.kill();
+      if (!hadDocument) await rm(docPath, { force: true });
+    }
   });
 });
