@@ -29,6 +29,8 @@ expression rather than order.
 
 ## Running it
 
+### Development (Node.js)
+
 Requires **Node.js ≥ 20**. From a clean clone:
 
 ```sh
@@ -37,6 +39,30 @@ npm run verify
 ```
 
 `npm run verify` builds every package with `tsc -b`, runs all tests with Vitest, and lints with ESLint. It must be green before any change merges.
+
+### Container (Docker)
+
+The studio server is packaged as a multi-stage Docker image. The build stage compiles every package and prerenders the broadband-switch journey into a static HTML document; the runtime stage serves it from that document with no git dependency.
+
+**Build:**
+
+```sh
+docker build -t design-space-studio .
+```
+
+**Run:**
+
+```sh
+docker run --rm -p 8080:8080 design-space-studio
+```
+
+Then open <http://localhost:8080> to see the rendered journey, or curl the health endpoint:
+
+```sh
+curl -s http://localhost:8080/healthz
+```
+
+The `PORT` environment variable is read by the server (default `8080`). Cloud Run sets it automatically; override it locally with `-e PORT=9000`.
 
 ## Status
 

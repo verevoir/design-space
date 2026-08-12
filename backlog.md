@@ -263,6 +263,16 @@ against any particular adapter, which is what keeps it a sibling of 3.1 rather t
 
 ### 3.1 The sketch adapter renders every component in the port
 
+**Known gap, found 2026-08-12 by running the container rather than the suite.** `render.ts` owns the
+`<style>` block through a module constant, and the `Adapter` interface has **no way to contribute
+CSS at all**. So every adapter currently renders with identical styling, and
+`SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — defined, exported, pinned by ten assertions, and
+referenced by nothing outside its own test. The served page contains no `--ds-*` properties.
+
+That is ADR 0001's central claim unimplemented: an adapter is supposed to decide what a component
+looks like. **This story must widen the `Adapter` contract to carry presentation**, not only
+markup, or the sketch style cannot exist and 4.1 cannot work.
+
 **Outcome.** A hand-drawn adapter implements the whole port. The rendering reads as provisional
 through typography and colour — handwriting face, warm paper, ink rather than black, one hard
 offset shadow, straight geometry — and stays legible with content of arbitrary length.
@@ -317,6 +327,10 @@ design system) from a *defect* (a finding about the adapter).
 ## Wave 4 — the cheap axis, and the view
 
 ### 4.1 Token-variant adapters carry the airy-versus-dense conversation
+
+**Blocked on 3.1's adapter-contract widening.** A token-variant adapter changes values over shared
+markup (ADR 0001's degenerate case) — which is only meaningful once an adapter can supply those
+values. Today it cannot, so swapping a token set would change nothing on screen.
 
 **Outcome.** At least two adapters that reuse the sketch adapter's markup and change only token
 values, so that "it is a bit crowded, can we try something lighter" is answerable by swapping a
