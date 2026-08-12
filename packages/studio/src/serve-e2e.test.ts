@@ -47,17 +47,24 @@ const GAPS_JSON = JSON.stringify([{ screenId: 'screen-1', component: 'compare-se
 // Tests
 // ---------------------------------------------------------------------------
 
+let origPort: string | undefined;
+
 describe('serve.ts end-to-end: real document on disk → real server → real HTTP response', () => {
   let tmpDir: string;
   let server: Server | undefined;
 
   beforeEach(async () => {
+    origPort = process.env['PORT'];
     tmpDir = join(tmpdir(), `ds-serve-e2e-${process.pid}-${Date.now()}`);
     await rm(tmpDir, { recursive: true, force: true });
     await mkdir(tmpDir, { recursive: true });
   });
 
   afterEach(async () => {
+    // PORT is process-wide and vitest reuses a worker context across files, so a leaked value
+    // would silently steer whichever test runs next in this worker.
+    if (origPort === undefined) delete process.env['PORT'];
+    else process.env['PORT'] = origPort;
     if (server) {
       await new Promise<void>((res) => server!.close(() => res()));
       server = undefined;
@@ -160,5 +167,57 @@ describe('serveDocument: an unreadable gaps sidecar does not stop the document b
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(HTML);
     expect(stderrChunks.join('')).toContain('could not read the gaps sidecar');
+  });
+});
+
+describe('serve.ts self-start guard', () => {
+  it('does not start a server when the module is merely imported', async () => {
+    // The container runs `node dist/serve.js`, where this module IS the entry point. An import
+    // must not bind a port or read the baked-in document — otherwise importing it for a helper
+    // would leave a server running that nobody asked for, which is what used to happen.
+    const { ready } = await import('./serve.js');
+
+    await expect(ready).resolves.toBeUndefined();
+  });
+});
+
+describe('serveDocument: an absent gaps sidecar is silent', () => {
+  let quietDir: string;
+  let quietSrv: Server | undefined;
+
+  beforeEach(async () => {
+    quietDir = join(tmpdir(), `ds-serve-nogaps-${process.pid}-${Math.abs(Number(process.hrtime.bigint() % 100000n))}`);
+    await rm(quietDir, { recursive: true, force: true });
+    await mkdir(quietDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    if (quietSrv) {
+      await new Promise<void>((res) => quietSrv!.close(() => res()));
+      quietSrv = undefined;
+    }
+    await rm(quietDir, { recursive: true, force: true });
+  });
+
+  it('writes nothing to stderr when there is no sidecar at all', async () => {
+    const docPath = join(quietDir, 'document.html');
+    await writeFile(docPath, HTML, 'utf-8');
+    // No sidecar written. Absent is the ordinary case for an older build and must stay quiet —
+    // the warning is reserved for a sidecar that exists and cannot be read.
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: Uint8Array | string): boolean => {
+      stderrChunks.push(String(chunk));
+      return true;
+    };
+
+    try {
+      const { serveDocument } = await import('./serve.js');
+      quietSrv = await serveDocument(docPath);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+
+    expect(stderrChunks.join('')).not.toContain('gaps sidecar');
   });
 });

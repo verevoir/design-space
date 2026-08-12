@@ -97,10 +97,9 @@ export async function runEntryPoint(documentPath: string): Promise<Server | unde
 }
 
 /**
- * Resolves to the running server when main() completes successfully, or to
- * `undefined` after the catch handler runs (startup failed). Tests can await
- * this promise instead of sleeping on a timer, giving a deterministic signal
- * that all module-level async work has settled.
+ * Resolves to the running server when this module is the process entry point and startup
+ * succeeded, and to `undefined` otherwise — including when the module is merely imported,
+ * which must not start anything. Tests drive `runEntryPoint` directly rather than awaiting this.
  */
 /**
  * Only start when this module IS the process entry point. Importing it — which tests do, to
