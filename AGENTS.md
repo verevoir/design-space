@@ -42,15 +42,6 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
   `aigency/projects/`.
 - **Pull the bar before implementing or decomposing.** `provision` from the verevoir
   capabilities MCP, with a short description of the work. Planning is governed too.
-- **Every commit that touches `packages/*/src/**.ts` carries a `Practices:` trailer** naming the
-  practices it was held to. CI blocks a PR without it, so provision-before-code is structural
-  rather than remembered:
-
-  ```
-  Practices: declarative-contract, automated-testing, complexity-matches-the-problem
-  ```
-
-  Docs-, config- and test-config-only commits are exempt.
 - **Route substantial work rather than hand-writing it.** `enact_capability` for
   capability-shaped work; `dispatch` for a task a worker can drive over this source. A small,
   surgical edit is the exception, not the rule.
