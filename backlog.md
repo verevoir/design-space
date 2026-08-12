@@ -12,8 +12,8 @@ the same time, and hold disjoint write-sets. An increment is a real **barrier** 
 the previous wave lands before the next begins. The numbering states merge order, not branch
 topology.
 
-**Width:** fans to 2 after wave 0, and to 3 after wave 2.
-**Critical path:** `0.1 → 1.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — seven edges, each a genuine
+**Width:** fans to 2 after wave 0, narrows to 1 for the steel thread, and fans to 3 after wave 2.
+**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight edges, each a genuine
 dependency rather than narrative order.
 
 This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and
@@ -104,6 +104,40 @@ proved by capturing working-tree state either side of a read at a non-current re
 
 The fan was real: 1.1 and 1.2 were built concurrently in separate worktrees, which they needed
 because both run `npm install` and would otherwise have collided on the lockfile.
+
+---
+
+## Wave 2S — the steel thread
+
+One component, all the way through, deployed. Everything after this wave **widens** a chain that
+already works rather than discovering whether it works at all.
+
+This wave is deliberately a **barrier, not a fan**: it writes a little of `port`,
+`adapter-sketch`, `render` and `gate`, which are exactly the write-sets waves 2 and 3 own. One
+writer per target — so nothing in those waves runs alongside it.
+
+### 2S.1 One component travels the whole chain and is reachable at a URL
+
+**Outcome.** A single port component — `prompt`, the simplest one the reference journey uses — is
+defined as a contract, implemented by the sketch adapter, composed into a standalone document
+from a journey document read through the store, checked by the gate, and served at a URL that
+costs nothing while nobody is looking at it.
+
+**Why.** The waves as first drawn were layer-shaped: schema, then port, then adapters, then
+studio. That produces a chain by construction, and it leaves deployment until last — the point at
+which discovering a problem with it is most expensive. Threading one component through every
+layer proves the chain, the gate and the deployment while each is still cheap to change. It also
+means every later story ships to somewhere real rather than to a branch.
+
+**Done when.** The URL serves a rendered screen from `examples/journeys/broadband-switch.json`;
+the service scales to zero and its idle cost is stated as a number rather than as "cheap"; a
+merge to `main` redeploys without a manual step; the gate runs in CI and a red gate blocks the
+deploy.
+
+**Writes.** A thin slice of `packages/port`, `packages/adapter-sketch`, `packages/render` and
+`packages/gate`; plus deployment configuration and CI.
+**Reads.** `packages/journey-model`, `packages/store`, `examples/journeys`.
+**Unblocks.** Nothing structurally — but everything after it inherits a working deployment.
 
 ---
 
