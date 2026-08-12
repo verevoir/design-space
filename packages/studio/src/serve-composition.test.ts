@@ -1,6 +1,6 @@
 /**
  * Tests for the serve entry point's composition: that it reads a document from
- * disk and serves it via startServer at / and /healthz.
+ * disk and serves it via startServer at / and /health.
  *
  * The wiring is tested here by driving its two dependencies (readFile + startServer) through
  * the public HTTP interface, supplying a real temporary file as the pre-rendered document so
@@ -101,7 +101,7 @@ describe('serve entry-point composition: document from disk → createStudioServ
     expect(text).toBe(html);
   });
 
-  it('answers /healthz with status 200', async () => {
+  it('answers /health with status 200', async () => {
     const html = '<html></html>';
     const dir = join(tmpdir(), `studio-serve-test-${process.pid}-${Date.now()}`);
     await mkdir(dir, { recursive: true });
@@ -114,11 +114,11 @@ describe('serve entry-point composition: document from disk → createStudioServ
     const server = createStudioServer({ rendered: { html: content, gaps: [] } });
     const base = await bindServer(server, register);
 
-    const res = await fetch(`${base}/healthz`);
+    const res = await fetch(`${base}/health`);
     expect(res.status).toBe(200);
   });
 
-  it('/healthz returns JSON with status=ok', async () => {
+  it('/health returns JSON with status=ok', async () => {
     const html = '<html></html>';
     const dir = join(tmpdir(), `studio-serve-test-${process.pid}-${Date.now()}`);
     await mkdir(dir, { recursive: true });
@@ -131,7 +131,7 @@ describe('serve entry-point composition: document from disk → createStudioServ
     const server = createStudioServer({ rendered: { html: content, gaps: [] } });
     const base = await bindServer(server, register);
 
-    const res = await fetch(`${base}/healthz`);
+    const res = await fetch(`${base}/health`);
     const body = await res.json() as Record<string, unknown>;
     expect(body['status']).toBe('ok');
   });

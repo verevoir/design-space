@@ -4,7 +4,7 @@
  *
  * Endpoints:
  *   GET /        — the rendered journey HTML
- *   GET /healthz — 200 JSON { status: 'ok', portVersion }
+ *   GET /health — 200 JSON { status: 'ok', portVersion }
  *
  * Export surface:
  *   - createStudioServer — creates the http.Server without binding a port,

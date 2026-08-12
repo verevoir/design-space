@@ -45,13 +45,10 @@ async function loadServeWithReadFileError(cause: Error): Promise<{
   } as ReturnType<typeof serverMod.startServer> extends Promise<infer S> ? S : never);
 
   // Spy on process.exit before the module runs so the process is not killed.
-  let capturedExitCode: number | undefined;
-  const exitSpy = vi
-    .spyOn(process, 'exit')
-    .mockImplementation((code?: number | string | null) => {
-      capturedExitCode = typeof code === 'number' ? code : undefined;
-      return undefined as never;
-    });
+  // The entry point sets process.exitCode rather than calling process.exit(), so that an
+  // unflushed stderr write is not truncated. Capture and restore it.
+  const origExitCode = process.exitCode;
+  process.exitCode = undefined;
 
   // Capture stderr writes.
   const stderrChunks: string[] = [];
@@ -73,9 +70,10 @@ async function loadServeWithReadFileError(cause: Error): Promise<{
     await runEntryPoint('/document.html');
   } finally {
     process.stderr.write = origStderrWrite;
-    exitSpy.mockRestore();
   }
 
+  const capturedExitCode = typeof process.exitCode === 'number' ? process.exitCode : undefined;
+  process.exitCode = origExitCode;
   return { exitCode: capturedExitCode, stderrOutput: stderrChunks.join('') };
 }
 
@@ -104,13 +102,10 @@ async function loadServeWithDocument(
     vi.mocked(serverMod.startServer).mockRejectedValueOnce(startServerBehaviour.error);
   }
 
-  let capturedExitCode: number | undefined;
-  const exitSpy = vi
-    .spyOn(process, 'exit')
-    .mockImplementation((code?: number | string | null) => {
-      capturedExitCode = typeof code === 'number' ? code : undefined;
-      return undefined as never;
-    });
+  // The entry point sets process.exitCode rather than calling process.exit(), so that an
+  // unflushed stderr write is not truncated. Capture and restore it.
+  const origExitCode = process.exitCode;
+  process.exitCode = undefined;
 
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
@@ -131,9 +126,10 @@ async function loadServeWithDocument(
   } finally {
     process.stdout.write = origStdoutWrite;
     process.stderr.write = origStderrWrite;
-    exitSpy.mockRestore();
   }
 
+  const capturedExitCode = typeof process.exitCode === 'number' ? process.exitCode : undefined;
+  process.exitCode = origExitCode;
   return {
     exitCode: capturedExitCode,
     stdoutOutput: stdoutChunks.join(''),
@@ -154,7 +150,7 @@ describe('serve.ts: readFile failure path', () => {
     vi.restoreAllMocks();
   });
 
-  it('calls process.exit(1) when the pre-rendered document cannot be read', async () => {
+  it('sets a non-zero exit code when the pre-rendered document cannot be read', async () => {
     const cause = Object.assign(
       new Error('no such file or directory'),
       { code: 'ENOENT' } as NodeJS.ErrnoException,

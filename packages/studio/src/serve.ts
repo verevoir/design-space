@@ -88,10 +88,15 @@ export async function runEntryPoint(documentPath: string): Promise<Server | unde
   try {
     return await serveDocument(documentPath);
   } catch (err: unknown) {
+    // Set the exit code rather than calling process.exit(). When stderr is a pipe — which is
+    // exactly how a container's logs are collected — process.exit() can truncate a write that
+    // has not flushed, losing the only explanation of why startup failed. Nothing keeps the
+    // loop alive once startup has failed, so the process ends on its own after the write
+    // drains, with the same non-zero status.
+    process.exitCode = 1;
     process.stderr.write(
       `Studio server startup failed: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.exit(1);
     return undefined;
   }
 }

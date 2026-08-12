@@ -119,7 +119,7 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
     // only assert that a well-formed sidecar is read without disturbing startup. Asserting the
     // records reach the served output has to wait until the server actually surfaces them —
     // the same point at which an unreadable sidecar should become a hard failure.
-    const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(200);
   });
 });

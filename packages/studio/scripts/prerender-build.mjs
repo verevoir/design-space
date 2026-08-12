@@ -44,8 +44,10 @@ prerender({
     process.stdout.write('Prerender complete.\n');
   })
   .catch((err) => {
+    // exitCode, not exit(): process.exit() can truncate an unflushed stderr write when stderr
+    // is a pipe, which is how a docker build captures it — losing the reason the build failed.
+    process.exitCode = 1;
     process.stderr.write(
       `Prerender failed: ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    process.exit(1);
   });

@@ -59,17 +59,24 @@ docker run --rm -p 8080:8080 design-space-studio
 Then open <http://localhost:8080> to see the rendered journey, or curl the health endpoint:
 
 ```sh
-curl -s http://localhost:8080/healthz
+curl -s http://localhost:8080/health
 ```
 
 The `PORT` environment variable is read by the server (default `8080`). Cloud Run sets it automatically; override it locally with `-e PORT=9000`.
 
-**On `/healthz`.** A review raised that this path might be one the platform reserves and swallows.
-It is not. Cloud Run has no reserved paths: a health-check probe is only sent to a path you
-explicitly configure it to use, and every other request — `/healthz` included — is forwarded to
-the container as ordinary traffic ([container health checks][chc], [container runtime
-contract][crc]). The path stays as it is, and the deploy in 2S.3 will confirm it empirically by
-curling the deployed URL.
+**Why the health endpoint is `/health` and not `/healthz`.** A review raised that `/healthz`
+might be a path the platform reserves and swallows. That was checked against Google's
+documentation ([container health checks][chc], [container runtime contract][crc]), which describes
+no reserved paths, and the finding was pushed back on as unfounded.
+
+**The deployment disproved that.** Against the live service, `/healthz` returns a Google frontend
+404 — an HTML error page from Google's infrastructure, which never reaches the container. Every
+other path tested (`/health`, `/readyz`, `/-/health`, and a deliberately meaningless one) reaches
+the container and gets its own 404. `/` serves normally throughout.
+
+So `/healthz` is intercepted on Cloud Run whatever the documentation implies, the endpoint moved
+to `/health`, and the lesson is recorded rather than the mistake quietly corrected: documentation
+plus confident reasoning lost to one curl against the real thing.
 
 [chc]: https://docs.cloud.google.com/run/docs/configuring/healthchecks
 [crc]: https://docs.cloud.google.com/run/docs/container-contract
