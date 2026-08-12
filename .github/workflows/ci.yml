@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same PR to avoid wasted work.
+# The group key includes the PR number when one exists, so every push to a PR
+# cancels the previous run and only the latest proceeds.
+# For pushes to main, github.event.pull_request.number is empty and the key
+# falls back to github.run_id — a unique value per run — so no two main runs
+# share a group and cancel-in-progress never cancels a main run. This is the
+# correct behaviour: cancelling a superseded PR run is free; cancelling a main
+# run would leave the head commit on main with no completed CI record.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+# Least-privilege token: this workflow reads code and reports check status; it writes nothing.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    # A hung checkout or npm registry call would otherwise hold a runner open until the
+    # repository-wide 6h ceiling. The build takes well under a minute; 10 is generous.
+    timeout-minutes: 10
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs, not floating major tags.
+      # A tag is mutable: whoever controls the action can repoint v6 at new code, and it
+      # runs here with the repository token. The trailing comment records the human-readable
+      # version so the pin stays legible and can be bumped deliberately.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # This is a public repo; PRs run untrusted code via npm ci/npm test.
+          # Drop the token from .git/config so subsequent steps cannot read it.
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # The floor package.json declares. Running CI on the floor rather than on
+          # whatever is newest is what makes that declaration true.
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # Dependency vulnerability scan — see docs/adr/0006-dependency-vulnerability-threshold.md.
+      - run: npm audit --audit-level=high
+      # Separate steps rather than one `npm run verify`, so a failure names itself in the
+      # checks list instead of every failure reading as "verify".
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
