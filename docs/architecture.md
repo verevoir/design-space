@@ -196,12 +196,23 @@ packages/
   adapter-sketch/   the reference adapter. Hand-crafted.
   adapter-tokens/   degenerate token-variant adapters over the sketch markup.
   store/            the (object, ref) resolver. Git-backed today.
+  render/           journey + adapter -> one standalone document.
   gate/             the structural checks of §7.
   pipeline/         plan/gate/layer/execute over @verevoir/recipes/engine.
   studio/           the two modes: journey editing, and the matrix.
 examples/journeys/  the reference journey the port is induced from.
 docs/               this file, and the ADRs.
+tests/              the review gate's own tests (see below).
+.github/
+  workflows/        CI, including the antagonistic-review panel.
+  antagonistic-review/   the panel's scripts. All of them move together.
 ```
+
+Two of the panel's scripts fail **silently** when absent — `stamp-diff-hash.sh` sits behind an
+`if [ -f ]` guard and `panel-memory.sh`'s step is `continue-on-error` — so an incomplete seed
+looks exactly like a panel that ran and found nothing. That is deliberate (the memory must never
+gate a merge), and it is why the gate's tests live in `tests/` rather than being trusted to a
+green build.
 
 ## 10. Deferred, with triggers
 
