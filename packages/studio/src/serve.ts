@@ -50,19 +50,24 @@ export async function serveDocument(documentPath: string): Promise<Server> {
     );
   });
 
-  // An ABSENT sidecar is tolerable — the document is still serveable, and older builds did not
-  // write one. A sidecar that exists but does not parse is not: it means the build wrote
-  // something corrupt, and silently serving an empty gap list would hide exactly the finding
-  // the gaps exist to surface (architecture §7). So only ENOENT falls back.
+  // The gaps sidecar is carried so the server HAS the data; no response surfaces it yet
+  // (`handleRequest` reads only `rendered.html`). So an unreadable sidecar must not stop a
+  // perfectly good document being served — refusing to start over data nothing reads would
+  // trade real availability for none. It is reported on stderr instead, because a build that
+  // writes an unparseable sidecar is still a defect worth seeing.
+  //
+  // Revisit when the server actually surfaces gaps: at that point serving an empty list WOULD
+  // hide a finding, and failing loudly becomes the right call.
   const gaps: readonly GapRecord[] = await readFile(gapsPath, 'utf-8')
     .then((raw) => JSON.parse(raw) as GapRecord[])
     .catch((err: NodeJS.ErrnoException) => {
-      if (err.code === 'ENOENT') return [];
-      throw new Error(
-        `Studio server found a gaps sidecar at ${gapsPath} that could not be read as JSON: ` +
-          `${err.message}. The prerender build step wrote something unusable.`,
-        { cause: err },
-      );
+      if (err.code !== 'ENOENT') {
+        process.stderr.write(
+          `Studio server could not read the gaps sidecar at ${gapsPath}: ${err.message}. ` +
+            'Serving the document with an empty gap list.\n',
+        );
+      }
+      return [];
     });
 
   const server = await startServer({ rendered: { html, gaps } });

@@ -113,3 +113,52 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
     expect(res.status).toBe(200);
   });
 });
+
+describe('serveDocument: an unreadable gaps sidecar does not stop the document being served', () => {
+  let tmpDir2: string;
+  let srv: Server | undefined;
+
+  beforeEach(async () => {
+    tmpDir2 = join(tmpdir(), `ds-serve-gaps-${process.pid}-${Math.abs(Number(process.hrtime.bigint() % 100000n))}`);
+    await rm(tmpDir2, { recursive: true, force: true });
+    await mkdir(tmpDir2, { recursive: true });
+  });
+
+  afterEach(async () => {
+    if (srv) {
+      await new Promise<void>((res) => srv!.close(() => res()));
+      srv = undefined;
+    }
+    await rm(tmpDir2, { recursive: true, force: true });
+  });
+
+  it('serves the document and reports the bad sidecar rather than refusing to start', async () => {
+    const docPath = join(tmpDir2, 'document.html');
+    await writeFile(docPath, HTML, 'utf-8');
+    // A sidecar that exists but is not JSON. Nothing serves gaps yet, so refusing to start
+    // here would trade a working page for a warning nobody needed.
+    await writeFile(join(tmpDir2, 'document.gaps.json'), 'not json at all{', 'utf-8');
+
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: Uint8Array | string): boolean => {
+      stderrChunks.push(String(chunk));
+      return true;
+    };
+
+    try {
+      const { serveDocument } = await import('./serve.js');
+      srv = await serveDocument(docPath);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+
+    const addr = srv?.address();
+    const port = addr && typeof addr === 'object' ? addr.port : 0;
+    const res = await fetch(`http://127.0.0.1:${port}/`);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(HTML);
+    expect(stderrChunks.join('')).toContain('could not read the gaps sidecar');
+  });
+});

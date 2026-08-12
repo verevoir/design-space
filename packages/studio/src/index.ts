@@ -9,7 +9,7 @@
  * Export surface:
  *   - createStudioServer — creates the http.Server without binding a port,
  *     so tests can import and exercise it without a network dependency.
-   - startServer — binds the server to a port; used by serve.ts, which reads
+ *   - startServer — binds the server to a port; used by serve.ts, which reads
  *     the pre-rendered document from disk and passes it to startServer at startup.
  *   - prerender — reads a journey through the store and writes a document;
  *     the build-time half invoked by scripts/prerender-build.mjs.
