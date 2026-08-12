@@ -216,16 +216,19 @@ protects the review panel.
 ### 2S.4 A change reaches `main` only after serving production traffic
 
 **Outcome.** Promotion is: assert the branch fast-forwards onto `main`, deploy a `candidate`
-revision with no traffic, smoke it, cut traffic to it, then merge. Any failure removes the
-candidate, restores traffic to the previous revision, and records a failed deployment.
+revision with no traffic, smoke it, cut 10% of traffic to it, health-check the live service, cut
+the remaining 90%, then merge. Every step is bounded by a timeout. Any failure — including a step
+that exceeds its bound — removes the candidate, restores traffic to the previous revision, and
+records a failed deployment.
 
 **Why.** ADR 0007. `main` is what every later story branches from, so it must never be
 known-bad; reverting a merged change is worse than never merging it.
 
 **Done when.** A change reaches `main` only via that sequence; a deliberately broken candidate is
-rolled back without traffic reaching it and without merging; the image that served canary traffic
-is the image retagged onto the merged commit rather than a rebuild; and the merged tree is
-asserted equal to the canaried tree.
+rolled back without traffic reaching it and without merging; a candidate that passes smoke but
+fails the health check at 10% is rolled back before the remaining traffic moves; the image that
+served canary traffic is the image retagged onto the merged commit rather than a rebuild; and the
+merged tree is asserted equal to the canaried tree.
 
 **Writes.** `.github/workflows/`.
 

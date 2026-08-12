@@ -21,10 +21,16 @@ zero, a revision nobody is talking to costs nothing to keep.
 |---|---|
 | PR opens or updates | `run deploy --no-traffic --tag pr-<n>` — its own URL, zero traffic |
 | verification | smoke tests run against that tag URL, and the URL is posted on the PR |
-| promotion | `--no-traffic --tag candidate`, smoke the candidate, then `update-traffic --to-tags candidate=100` |
-| merge | only after the traffic cut succeeds |
+| promotion | `--no-traffic --tag candidate`, smoke the candidate at zero traffic |
+| staged cut | `update-traffic --to-tags candidate=10`, health-check the live service, then `candidate=100` |
+| merge | only after the full cut succeeds |
 | failure at any step | `update-traffic` back to the previous revision, `--remove-tags`, and the deployment is recorded as failed |
 | PR closes | the `pr-<n>` tag is removed |
+
+**Every step is bounded.** A `run deploy`, a smoke run, a health check and an `update-traffic`
+call each carry an explicit timeout, and a step that exceeds it is a failure that rolls back — not
+a run that hangs. An unbounded promotion step is worse than a failed one, because it leaves
+traffic in a split state with nobody watching.
 
 Two conditions make this safe, and both are checkable rather than hoped for:
 
@@ -36,6 +42,22 @@ Two conditions make this safe, and both are checkable rather than hoped for:
   new commit SHAs, so the merged commit is not the one that was canaried. Rather than rebuild
   from the merged SHA — which would deploy an artefact nothing tested — the proven image is
   **retagged** onto it, and the merged tree is asserted equal to the canaried tree.
+
+### Why the cut is staged rather than immediate
+
+The first draft cut straight from 0% to 100% once the candidate passed smoke. That is the
+`deploy-safety` reject signal — all-at-once, with defects reaching every user before detection.
+
+The counter-argument is real and worth recording rather than hiding: smoke runs against a revision
+carrying **no traffic**, so it already catches defects at zero users, and 10% of a service whose
+traffic is a handful of people is not a statistical sample. A percentage step nobody watches is
+theatre.
+
+It is staged anyway, for a reason the sample size does not affect: smoke tests exercise what they
+were written to exercise, and the interesting failures are the ones nobody wrote a test for. A
+staged cut with a health check against the **live** service is the only step in this sequence that
+observes real traffic hitting the new revision. It costs one extra command and it is the only
+place an unanticipated failure can surface before it reaches everyone.
 
 ## Alternatives rejected
 
