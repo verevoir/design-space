@@ -4,24 +4,22 @@
  * Two layers:
  *   1. Integration — exercised against a real temporary git repository so git-show, the object
  *      layout and the no-checkout guarantee are confirmed against an actual process.
- *   2. Subprocess failure / timeout — a fake git shim that exits non-zero immediately confirms
- *      the catch block that also handles timed-out subprocesses is wired correctly.
+ *   2. Subprocess failure classification — fake git shims that exit with a normal code or a
+ *      signal confirm that the resolver distinguishes the two failure kinds correctly:
+ *        - a non-zero normal exit  → ObjectNotFoundError (git answered "not there")
+ *        - a signal kill           → ObjectLookupError   (question unanswered; may retry)
  *
- * The `timeout: 10_000` option in the resolver's execFileAsync call is what kills a hung git
- * process; the rejection it produces reaches the same `catch` block as any other subprocess
- * error, so driving a fast-failing fake git exercises the same wrapping path. A test that merely
- * asserted the constant `10_000` is set would not catch a broken catch block.
- *
- * Note: the actual 10_000 ms timeout bound is never driven to expiry by any test — doing so
- * would require a 10-second wall-clock wait. The wrapping behaviour is confirmed by the
- * fast-fail shim tests instead.
+ * The `timeout: 10_000` option in the resolver's execFileAsync call sends SIGTERM when a
+ * subprocess runs too long; the rejection it produces sets `signal: 'SIGTERM'` on the error
+ * object, which is exactly what ObjectLookupError tests for. The signal-kill test below
+ * exercises that path directly, without waiting 10 s, by using a shim that signals itself.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolve, ObjectNotFoundError } from './resolver.js';
+import { resolve, ObjectNotFoundError, ObjectLookupError } from './resolver.js';
 
 // ---------------------------------------------------------------------------
 // Real git repository fixture
@@ -115,25 +113,26 @@ describe('resolve() against a real git repository', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Subprocess failure / timeout bound
+// Subprocess failure classification
 //
-// This is the critical path: the resolver uses `timeout: 10_000` when calling
-// execFileAsync. When a git process is killed by that timeout, the execFile
-// callback receives an error — the same path as any non-zero exit. These tests
-// drive that exact path by pointing the resolver at a nonexistent repository
-// path or a shim that exits non-zero immediately, then confirming the error is
-// wrapped as ObjectNotFoundError rather than propagating as an unhandled
-// rejection.
+// The resolver distinguishes two failure kinds:
+//   ObjectNotFoundError — git exited normally (non-zero code, no signal). The
+//     object is absent; retrying will not help. This is a terminal condition.
+//   ObjectLookupError   — the subprocess was killed by a signal (including the
+//     SIGTERM sent when execFile's timeout fires). The question was not
+//     answered; the caller may retry.
 //
-// The wrapping is the bound: a caller never receives a raw execFile error from
-// a slow or missing git process — it always gets ObjectNotFoundError.
+// Both cases are exercised by shims rather than by real slow or absent git
+// processes, so the tests complete quickly. The shim for signal kills uses
+// `kill -TERM $$` to exit via SIGTERM, which produces `signal: 'SIGTERM'` on
+// the Node error — the same value the execFile timeout sets.
 // ---------------------------------------------------------------------------
 
-describe('resolve() subprocess failure / timeout error path', () => {
-  it('wraps a subprocess failure (fast-fail, same code path as timeout) as ObjectNotFoundError', async () => {
-    // A path that is not a git repository causes `git show` to exit non-zero
-    // immediately — exercising the same catch block that a timed-out process
-    // reaches, since execFile rejects the promise in both cases.
+describe('resolve() subprocess failure classification', () => {
+  it('a non-zero normal exit (git answered "not there") is wrapped as ObjectNotFoundError', async () => {
+    // A path that is not a git repository causes `git show` to exit with a
+    // normal non-zero code and no signal — the same class of failure as a
+    // genuine missing object or bad ref.
     const notARepo = mkdtempSync(join(tmpdir(), 'ds-not-a-repo-'));
     try {
       await expect(
@@ -144,16 +143,10 @@ describe('resolve() subprocess failure / timeout error path', () => {
     }
   });
 
-  it('a git shim exiting with code 1 (non-zero exit, same catch path as a timed-out process) is wrapped as ObjectNotFoundError', async () => {
-    // Put a fake "git" shim first on PATH that exits with code 1 immediately.
-    // This is a fast-fail with a non-zero exit code — NOT a SIGTERM kill.
-    // It exercises the same catch block that a process killed by the execFile
-    // timeout would reach, since execFile rejects the promise in both cases.
-    // The actual 10_000 ms timeout bound is not driven to expiry here —
-    // see the module-level note about why.
+  it('a shim that exits with a non-zero code (no signal) is wrapped as ObjectNotFoundError', async () => {
+    // Shell shim: exits with code 1 — a normal non-zero exit, not a signal kill.
     const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-shim-'));
     const shimPath = join(shimDir, 'git');
-    // Shell shim: exits with code 1 immediately (a non-zero exit, not a signal)
     writeFileSync(shimPath, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     const origPath = process.env['PATH'] ?? '';
     process.env['PATH'] = `${shimDir}:${origPath}`;
@@ -161,6 +154,48 @@ describe('resolve() subprocess failure / timeout error path', () => {
       await expect(
         resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
       ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a subprocess killed by SIGTERM (signal kill, same mechanism as the execFile timeout) is wrapped as ObjectLookupError', async () => {
+    // Shell shim: kills itself with SIGTERM, producing `signal: 'SIGTERM'` on
+    // the Node error — the exact value the execFile timeout sets when it kills
+    // a hung process. This exercises the ObjectLookupError branch without
+    // waiting for the 10 s timeout to fire.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-sigterm-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(shimPath, '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectLookupError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ObjectLookupError names the object and ref so the caller can log and retry', async () => {
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-sigterm2-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(shimPath, '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ObjectLookupError);
+      const lookupErr = err as ObjectLookupError;
+      expect(lookupErr.object.kind).toBe('journey');
+      expect(lookupErr.object.id).toBe('test-journey');
+      expect(lookupErr.ref).toBe(commitSha);
+      expect(lookupErr.message).toContain('journey');
+      expect(lookupErr.message).toContain('test-journey');
     } finally {
       process.env['PATH'] = origPath;
       rmSync(shimDir, { recursive: true, force: true });

@@ -40,12 +40,16 @@ export interface ObjectRef {
 }
 
 // ---------------------------------------------------------------------------
-// Error type
+// Error types
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown when an (object, ref) pair cannot be resolved. Both the object identity and the
- * git ref are included so the caller knows exactly what was missing.
+ * Thrown when an (object, ref) pair is confirmed absent — git answered "not
+ * found" with a normal (non-signal) exit. Both the object identity and the git
+ * ref are included so the caller knows exactly what was missing.
+ *
+ * This is a terminal condition: the object is not there and retrying will not
+ * help.
  */
 export class ObjectNotFoundError extends Error {
   readonly object: ObjectRef;
@@ -56,6 +60,32 @@ export class ObjectNotFoundError extends Error {
       `object not found: kind=${object.kind} id=${object.id} at ref=${ref}`,
     );
     this.name = 'ObjectNotFoundError';
+    this.object = object;
+    this.ref = ref;
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
+  }
+}
+
+/**
+ * Thrown when the lookup could not be completed because the subprocess was
+ * killed by a signal (including the timeout kill sent when `execFile`'s
+ * `timeout` option fires). The object may or may not exist — the question was
+ * not answered.
+ *
+ * This is a transient condition: a caller that can retry should, rather than
+ * treating the object as absent.
+ */
+export class ObjectLookupError extends Error {
+  readonly object: ObjectRef;
+  readonly ref: string;
+
+  constructor(object: ObjectRef, ref: string, cause?: unknown) {
+    super(
+      `object lookup failed (subprocess killed by signal): kind=${object.kind} id=${object.id} at ref=${ref}`,
+    );
+    this.name = 'ObjectLookupError';
     this.object = object;
     this.ref = ref;
     if (cause !== undefined) {
@@ -77,18 +107,6 @@ export class ObjectNotFoundError extends Error {
  *   adapters/<id>.js        — adapter modules
  *   tokens/<id>.json        — token sets
  */
-/**
- * Where a collection of objects is rooted within the repository.
- *
- * This is configuration, not a path a caller builds: the caller says which collection to read
- * from, and the resolver still decides how an object of a given kind is named inside it. Without
- * it the convention below is fixed at the repository root, which silently cannot reach a journey
- * stored anywhere else — the defect this option was added to fix.
- */
-export interface ResolveOptions {
-  readonly root?: string;
-}
-
 function objectPath(object: ObjectRef): string {
   switch (object.kind) {
     case 'journey':
@@ -100,6 +118,22 @@ function objectPath(object: ObjectRef): string {
     case 'token-set':
       return `tokens/${object.id}.json`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a collection of objects is rooted within the repository.
+ *
+ * This is configuration, not a path a caller builds: the caller says which collection to read
+ * from, and the resolver still decides how an object of a given kind is named inside it. Without
+ * it the convention below is fixed at the repository root, which silently cannot reach a journey
+ * stored anywhere else — the defect this option was added to fix.
+ */
+export interface ResolveOptions {
+  readonly root?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,8 +149,13 @@ function objectPath(object: ObjectRef): string {
  * @param repoPath  Absolute path to the git repository root.
  * @param object    The object to read, identified by kind and id.
  * @param ref       The git ref (branch name, tag, or commit SHA) to read at.
+ * @param options   Optional settings; `root` scopes the lookup to a subdirectory.
  * @returns         The raw UTF-8 content of the object at that ref.
- * @throws          `ObjectNotFoundError` if the object does not exist at the given ref.
+ * @throws          `ObjectNotFoundError` if git confirmed the object does not exist at the
+ *                  given ref (normal non-zero exit).
+ * @throws          `ObjectLookupError` if the subprocess was killed by a signal (including
+ *                  the timeout kill when the process runs too long) — the object's existence
+ *                  is unknown and the caller may retry.
  */
 export async function resolve(
   repoPath: string,
@@ -135,12 +174,26 @@ export async function resolve(
       // Prevent any git pager from blocking the process.
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       // Bound the subprocess so a hung git process does not stall the caller
-      // indefinitely. 10 s is generous for a local read; treat timeout as
-      // not-found so callers receive a legible ObjectNotFoundError.
+      // indefinitely. 10 s is generous for a local read.
       timeout: 10_000,
     });
     return stdout;
   } catch (err) {
+    // A process killed by signal (including the SIGTERM sent when the timeout
+    // fires) means the question was not answered — the object may or may not
+    // exist. Surface this as a distinct error so callers can retry rather than
+    // treating it as a confirmed absence.
+    //
+    // execFile errors carry a `signal` property (string | null) when the child
+    // process was terminated by a signal; it is null for a normal non-zero exit.
+    const signal =
+      err !== null && typeof err === 'object' && 'signal' in err
+        ? (err as Record<string, unknown>)['signal']
+        : null;
+
+    if (signal !== null && signal !== undefined) {
+      throw new ObjectLookupError(object, ref, err);
+    }
     throw new ObjectNotFoundError(object, ref, err);
   }
 }

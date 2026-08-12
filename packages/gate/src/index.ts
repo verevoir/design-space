@@ -5,7 +5,7 @@
  * missing, and which rendered blocks fell back to a gap. Distinguishes three
  * finding kinds: a gap (adapter has no renderer), a defect (renderer threw),
  * and a schema finding (props failed the port schema before the adapter was
- * called \u2014 a data problem, not an adapter problem).
+ * called — a data problem, not an adapter problem).
  */
 export const PACKAGE_NAME = '@design-space/gate';
 

@@ -99,8 +99,12 @@ error naming both.
 
 **Status.** Done. Reads go through `git show` via `execFile` with argv only — no shell, no
 checkout, no working-tree mutation. The resolver owns path construction; callers name an object
-by kind and id. Tested against a real temporary git repository, with the no-checkout property
-proved by capturing working-tree state either side of a read at a non-current ref. 27 tests.
+by kind and id. Tested against a real temporary git repository; the no-checkout property is
+demonstrated by reading the same object at two different refs concurrently and getting different
+content (a checkout would have changed the working tree). Subprocess failures are classified:
+a normal non-zero exit (git answered "not there") surfaces as `ObjectNotFoundError`; a
+signal-killed subprocess (timeout or hung git) surfaces as `ObjectLookupError`, which a caller
+can retry. 11 tests.
 
 The fan was real: 1.1 and 1.2 were built concurrently in separate worktrees, which they needed
 because both run `npm install` and would otherwise have collided on the lockfile.

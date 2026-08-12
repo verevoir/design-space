@@ -5,6 +5,7 @@
  * the seam ADR 0002 exists to protect.
  */
 import { execFile } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +13,7 @@ import { promisify } from 'node:util';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { ObjectLookupError, ObjectNotFoundError } from '@design-space/store';
 import { prerender } from './prerender.js';
 
 const execFileAsync = promisify(execFile);
@@ -101,9 +103,30 @@ describe('prerender', () => {
     ).rejects.toThrow(/not a valid journey document/);
   });
 
-  it('names both the object and the ref when the journey is not there', async () => {
-    await expect(
-      prerender({ repoPath, journeyId: 'absent', ref: 'HEAD', outPath }),
-    ).rejects.toThrow(/absent/);
+  it('propagates ObjectNotFoundError (with the object id and ref) when the journey is genuinely absent', async () => {
+    const err = await prerender({ repoPath, journeyId: 'absent', ref: 'HEAD', outPath })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ObjectNotFoundError);
+    // Both the id and the ref must be named so the caller can diagnose without grepping logs.
+    expect((err as ObjectNotFoundError).message).toContain('absent');
+    expect((err as ObjectNotFoundError).message).toContain('HEAD');
+  });
+
+  it('propagates ObjectLookupError unchanged (not flattened to ObjectNotFoundError) when the subprocess is killed by a signal', async () => {
+    // Put a fake "git" shim first on PATH that kills itself with SIGTERM —
+    // same signal the execFile timeout sends. prerender must not flatten this
+    // into ObjectNotFoundError; the caller needs to know this is transient.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-prerender-sigterm-'));
+    writeFileSync(join(shimDir, 'git'), '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      const err = await prerender({ repoPath, journeyId: 'demo', ref: 'HEAD', outPath })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ObjectLookupError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
   });
 });

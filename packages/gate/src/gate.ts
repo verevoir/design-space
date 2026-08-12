@@ -29,7 +29,7 @@ export interface DefectFinding {
 /**
  * A schema finding: the adapter HAS a renderer but the block's props failed
  * the component's port schema, so the renderer was never called. This is a
- * data problem \u2014 neither a missing adapter nor an adapter defect.
+ * data problem — neither a missing adapter nor an adapter defect.
  */
 export interface SchemaFinding {
   readonly kind: 'schema';
