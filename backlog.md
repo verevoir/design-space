@@ -127,9 +127,9 @@ because both run `npm install` and would otherwise have collided on the lockfile
 One component, all the way through, deployed. Everything after this wave **widens** a chain that
 already works rather than discovering whether it works at all.
 
-**2S.1 is a barrier**: it writes a little of `port`, `adapter-sketch`, `render` and `gate`, which
-are exactly the write-sets waves 2 and 3 own. One writer per target, so nothing in those waves
-runs alongside it.
+**2S.1 is a barrier**: it writes `port`, `adapter-sketch`, `render` and `gate` — which waves 2 and
+3 also own — and `studio`, which 2S.2 owns. One writer per target, so nothing in those waves runs
+alongside it.
 
 **2S.2–2S.4 are not.** They write `studio`, `Dockerfile` and `.github/`, so once 2S.1 lands they
 run concurrently with wave 2 — they are a chain among themselves (each needs the previous one's
@@ -160,7 +160,8 @@ reports coverage, gaps and defects distinctly.
 **Writes.** A thin slice of `packages/port`, `packages/adapter-sketch`, `packages/render`,
 `packages/gate` and `packages/studio`.
 **Reads.** `packages/journey-model`, `packages/store`, `examples/journeys`.
-**Unblocks.** Nothing structurally — but everything after it inherits a working deployment.
+**Unblocks.** 2S.2, which wires its two halves together, and waves 2–3, which cannot start while
+it holds their write-sets.
 
 **Status.** Done. `prompt` is defined in the port with a Zod prop schema, implemented by the
 sketch adapter, rendered into a standalone HTML document, and checked by the gate, which
