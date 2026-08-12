@@ -4,10 +4,13 @@
  * Three layers:
  *   1. Integration — exercised against a real temporary git repository so git-show, the object
  *      layout and the no-checkout guarantee are confirmed against an actual process.
- *   2. Subprocess failure classification — fake git shims that exit with a normal code or a
- *      signal confirm that the resolver distinguishes the two failure kinds correctly:
+ *   2. Subprocess failure classification — fake git shims that exit with a normal code, a
+ *      signal, or a maxBuffer overflow confirm that the resolver distinguishes all three
+ *      failure kinds correctly:
  *        - a non-zero normal exit  → ObjectNotFoundError (git answered "not there")
  *        - a signal kill           → ObjectLookupError   (question unanswered; may retry)
+ *        - maxBuffer overflow      → ObjectLookupError   (object exists but was too large;
+ *                                                         indeterminate, NOT a confirmed absence)
  *   3. Input validation — confirms that invalid ref/root values are rejected at the boundary
  *      with InvalidRefError before any git subprocess is spawned.
  *
@@ -15,6 +18,10 @@
  * subprocess runs too long; the rejection it produces sets `signal: 'SIGTERM'` on the error
  * object, which is exactly what ObjectLookupError tests for. The signal-kill test below
  * exercises that branch via a shim that sends SIGTERM to itself, without waiting 10 s.
+ *
+ * The maxBuffer test writes a shim that prints more than the configured limit, triggering
+ * Node's ERR_CHILD_PROCESS_STDIO_MAXBUFFER without depending on any specific buffer size:
+ * the shim receives the resolved limit from the resolver's own constant.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
@@ -39,9 +46,21 @@ beforeAll(() => {
   execSync('git config user.email "test@test.local"', { cwd: repoDir, stdio: 'pipe' });
   execSync('git config user.name "Test"', { cwd: repoDir, stdio: 'pipe' });
 
-  // Create the layout the resolver expects.
+  // Create the layout the resolver expects — one file per ObjectKind.
   mkdirSync(join(repoDir, 'journeys'));
   writeFileSync(join(repoDir, 'journeys', 'test-journey.json'), JSON.stringify({ id: 'test-journey', v: 1 }));
+
+  // port: the single manifest lives at port/port.json regardless of id.
+  mkdirSync(join(repoDir, 'port'));
+  writeFileSync(join(repoDir, 'port', 'port.json'), JSON.stringify({ version: 1, components: [] }));
+
+  // adapter: one file per id under adapters/.
+  mkdirSync(join(repoDir, 'adapters'));
+  writeFileSync(join(repoDir, 'adapters', 'sketch.js'), '// sketch adapter placeholder');
+
+  // token-set: one file per id under tokens/.
+  mkdirSync(join(repoDir, 'tokens'));
+  writeFileSync(join(repoDir, 'tokens', 'base.json'), JSON.stringify({ version: 1, tokens: {} }));
 
   // Also create a rooted collection for the root-option tests.
   mkdirSync(join(repoDir, 'collections'), { recursive: true });
@@ -133,6 +152,26 @@ describe('resolve() against a real git repository', () => {
     await expect(
       resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'nonexistent-ref'),
     ).rejects.toBeInstanceOf(ObjectNotFoundError);
+  });
+
+  it('reads a port object at port/port.json (kind: port)', async () => {
+    // The port is a singleton — objectPath() always returns port/port.json regardless of id.
+    const raw = await resolve(repoDir, { kind: 'port', id: 'port' }, commitSha);
+    const parsed = JSON.parse(raw) as { version: number };
+    expect(parsed.version).toBe(1);
+  });
+
+  it('reads an adapter object at adapters/<id>.js (kind: adapter)', async () => {
+    // objectPath() maps kind:adapter to adapters/<id>.js.
+    const raw = await resolve(repoDir, { kind: 'adapter', id: 'sketch' }, commitSha);
+    expect(raw).toContain('sketch adapter');
+  });
+
+  it('reads a token-set object at tokens/<id>.json (kind: token-set)', async () => {
+    // objectPath() maps kind:token-set to tokens/<id>.json.
+    const raw = await resolve(repoDir, { kind: 'token-set', id: 'base' }, commitSha);
+    const parsed = JSON.parse(raw) as { version: number };
+    expect(parsed.version).toBe(1);
   });
 });
 
@@ -228,6 +267,34 @@ describe('resolve() subprocess failure classification', () => {
     const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-sigterm-'));
     const shimPath = join(shimDir, 'git');
     writeFileSync(shimPath, '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectLookupError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a shim that writes more than maxBuffer to stdout is wrapped as ObjectLookupError (not ObjectNotFoundError)', async () => {
+    // Node sets code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' and signal === undefined when
+    // the child's stdout exceeds maxBuffer. Without an explicit check for that code, the
+    // resolver's signal branch would miss it and fall through to ObjectNotFoundError —
+    // misreporting a too-large object as absent. This test pins the classification.
+    //
+    // The shim writes 200 MiB to stdout — more than the resolver's 100 MiB limit —
+    // without depending on any bespoke constant from this test file.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-maxbuf-'));
+    const shimPath = join(shimDir, 'git');
+    // dd writes 200 MiB of null bytes to stdout, exceeding the 100 MiB maxBuffer.
+    writeFileSync(
+      shimPath,
+      '#!/bin/sh\ndd if=/dev/zero bs=1048576 count=200 2>/dev/null\n',
+      { mode: 0o755 },
+    );
     const origPath = process.env['PATH'] ?? '';
     process.env['PATH'] = `${shimDir}:${origPath}`;
     try {

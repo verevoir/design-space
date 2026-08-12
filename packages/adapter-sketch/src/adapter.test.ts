@@ -66,5 +66,17 @@ describe('sketchAdapter', () => {
       expect(html).toContain('Cats &amp; Dogs');
       expect(html).not.toContain('Cats & Dogs');
     });
+
+    it('double-quotes in heading are escaped as &quot; to stay safe inside HTML attributes', () => {
+      const html = renderPrompt({ heading: 'Say "hello"' });
+      expect(html).toContain('Say &quot;hello&quot;');
+      expect(html).not.toContain('Say "hello"');
+    });
+
+    it('double-quotes in explain text are escaped as &quot;', () => {
+      const html = renderPrompt({ heading: 'Title', explain: 'Click "OK" to continue.' });
+      expect(html).toContain('Click &quot;OK&quot; to continue.');
+      expect(html).not.toContain('Click "OK"');
+    });
   });
 });

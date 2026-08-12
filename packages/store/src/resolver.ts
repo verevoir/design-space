@@ -86,8 +86,9 @@ export class ObjectNotFoundError extends Error {
 /**
  * Thrown when the lookup could not be completed because the subprocess was
  * killed by a signal (including the timeout kill sent when `execFile`'s
- * `timeout` option fires). The object may or may not exist — the question was
- * not answered.
+ * `timeout` option fires), OR because the subprocess output exceeded
+ * `maxBuffer` and was truncated. In both cases the object may or may not
+ * exist — the question was not answered.
  *
  * This is a transient condition: a caller that can retry should, rather than
  * treating the object as absent.
@@ -327,6 +328,10 @@ export async function resolve(
       // Bound the subprocess so a hung git process does not stall the caller
       // indefinitely. 10 s is generous for a local read.
       timeout: 10_000,
+      // 100 MiB — large enough for any realistic object, small enough to bound
+      // memory. An overflow is an indeterminate outcome (ObjectLookupError),
+      // not a confirmed absence: the object exists but could not be delivered.
+      maxBuffer: 100 * 1024 * 1024,
     });
     return stdout;
   } catch (err) {
@@ -337,12 +342,18 @@ export async function resolve(
     //
     // execFile errors carry a `signal` property (string | null) when the child
     // process was terminated by a signal; it is null for a normal non-zero exit.
-    const signal =
-      err !== null && typeof err === 'object' && 'signal' in err
-        ? (err as Record<string, unknown>)['signal']
-        : null;
+    // A maxBuffer overflow sets code 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' and
+    // leaves signal undefined — it is also an indeterminate outcome, not a
+    // confirmed absence, so it must NOT fall through to ObjectNotFoundError.
+    const isErrObj = err !== null && typeof err === 'object';
+    const signal = isErrObj && 'signal' in err
+      ? (err as Record<string, unknown>)['signal']
+      : null;
+    const code = isErrObj && 'code' in err
+      ? (err as Record<string, unknown>)['code']
+      : undefined;
 
-    if (signal !== null && signal !== undefined) {
+    if ((signal !== null && signal !== undefined) || code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
       throw new ObjectLookupError(object, ref, err);
     }
     throw new ObjectNotFoundError(object, ref, err);
