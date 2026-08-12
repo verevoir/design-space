@@ -73,6 +73,14 @@ from, so they cannot drift.
 **Writes.** `packages/journey-model`.
 **Unblocks.** 2.1, and through it everything downstream.
 
+**Status.** Done. Zod is the single source; the TypeScript types come from `z.infer` and the
+JSON Schema artefact is emitted from the same schema at build time. Structural checks cover
+dangling action targets and screens unreachable from the entry point. 23 tests.
+
+One defect worth remembering: the emitter was wired to a package script the root build never
+invoked, so the artefact was never produced while `npm run verify` stayed green. The gate now
+catches it — `artefact.test.ts` fails if the artefact is missing or has drifted from the schema.
+
 ### 1.2 Any object resolves at a ref through a single resolver
 
 **Outcome.** Journey documents, the port, adapters and token sets are all read as
@@ -88,6 +96,14 @@ error naming both.
 
 **Writes.** `packages/store`.
 **Reads.** Nothing — deliberately independent of 1.1, which is what lets these two run together.
+
+**Status.** Done. Reads go through `git show` via `execFile` with argv only — no shell, no
+checkout, no working-tree mutation. The resolver owns path construction; callers name an object
+by kind and id. Tested against a real temporary git repository, with the no-checkout property
+proved by capturing working-tree state either side of a read at a non-current ref. 27 tests.
+
+The fan was real: 1.1 and 1.2 were built concurrently in separate worktrees, which they needed
+because both run `npm install` and would otherwise have collided on the lockfile.
 
 ---
 
