@@ -147,9 +147,56 @@ describe('render()', () => {
       // Leave action has target: null
       expect(html).toContain('href="#"');
     });
+
+    it('action whose target is not null but does not exist in allScreenIds falls through to href="#"', () => {
+      // A non-null target that is NOT in the screen set (dangling reference) must
+      // produce href="#" rather than a broken anchor — the guard is
+      // `target !== null && allScreenIds.has(target)`.
+      const journey: JourneyDocument = {
+        ...MINIMAL_JOURNEY,
+        screens: [
+          {
+            id: 'screen-a',
+            purpose: 'Only screen.',
+            blocks: [],
+            actions: [
+              // 'screen-gone' does not exist in the journey — dangling target
+              { label: 'Go somewhere', weight: 'primary', target: 'screen-gone' },
+            ],
+            annotations: [],
+          },
+        ],
+      };
+      const { html } = render(journey, EMPTY_ADAPTER);
+      // The anchor must not contain 'screen-gone' in its href — it should fall through to '#'
+      expect(html).toContain('href="#"');
+      expect(html).not.toContain('href="#screen-screen-gone"');
+    });
   });
 
   describe('html escaping protects against XSS in journey metadata', () => {
+    it("single quotes in a screen's purpose are escaped as &#39; in the aria-label attribute", () => {
+      // escapeAttr() replaces single quotes with &#39; to prevent attribute injection.
+      // This test asserts on the ATTRIBUTE value (aria-label), not the element text,
+      // because escapeHtml (used for text content) does not escape single quotes.
+      const journey: JourneyDocument = {
+        ...MINIMAL_JOURNEY,
+        screens: [
+          {
+            id: 'screen-a',
+            purpose: "It's a trap",
+            blocks: [],
+            actions: [],
+            annotations: [],
+          },
+        ],
+      };
+      const { html } = render(journey, EMPTY_ADAPTER);
+      // The aria-label attribute must carry the escaped form, not a raw single quote
+      expect(html).toContain('aria-label="It&#39;s a trap"');
+      expect(html).not.toContain("aria-label=\"It's a trap\"");
+    });
+
     it('special characters in the journey title are HTML-escaped in the document title element', () => {
       const journey: JourneyDocument = {
         ...MINIMAL_JOURNEY,

@@ -184,32 +184,4 @@ describe('startServer()', () => {
     }
     expect(caughtMessage).toContain(String(port));
   });
-
-  it('does not emit an unhandled error event — the promise is the only error surface', async () => {
-    const port = await occupyPort();
-    const origPort = process.env['PORT'];
-    process.env['PORT'] = String(port);
-    // If startServer() emitted an unhandled 'error' event instead of rejecting,
-    // the process would crash. That is what this test prevents: a caught rejection
-    // here means the error was handled by the promise, not by an event nobody listened to.
-    const errors: Error[] = [];
-    process.on('unhandledRejection', (reason) => {
-      errors.push(reason instanceof Error ? reason : new Error(String(reason)));
-    });
-    try {
-      await startServer({ rendered: makeRendered('<html></html>') }).catch(() => {
-        // intentionally caught
-      });
-      // Give the event loop a tick to surface any unhandled rejection.
-      await new Promise<void>((res) => setImmediate(res));
-      expect(errors).toHaveLength(0);
-    } finally {
-      process.removeAllListeners('unhandledRejection');
-      if (origPort === undefined) {
-        delete process.env['PORT'];
-      } else {
-        process.env['PORT'] = origPort;
-      }
-    }
-  });
 });

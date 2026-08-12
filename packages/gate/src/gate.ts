@@ -1,5 +1,4 @@
 import { PORT_COMPONENTS, type ComponentName } from '@design-space/port';
-import type { JourneyDocument } from '@design-space/journey-model';
 import type { AdapterLike, GapRecord } from './adapter-like.js';
 
 // ---------------------------------------------------------------------------
@@ -44,15 +43,14 @@ export interface CoverageReport {
 // ---------------------------------------------------------------------------
 
 /**
- * Check adapter coverage against the port and render the journey to collect
- * gap findings.
+ * Check adapter coverage against the port and classify gap findings from a
+ * prior render() call.
  *
  * Gaps (missing renderer) are distinguished from defects (renderer threw).
  * A gap is a finding about the adapter's completeness; a defect is a bug.
  */
 export function check(
   adapter: AdapterLike,
-  journey: JourneyDocument,
   renderGaps: readonly GapRecord[],
 ): CoverageReport {
   const portNames = Object.keys(PORT_COMPONENTS) as ComponentName[];
@@ -84,10 +82,6 @@ export function check(
       screenId: gap.screenId,
     };
   });
-
-  // Suppress unused-var warning: journey is accepted for future use (block
-  // enumeration once render is not called separately).
-  void journey;
 
   return { implemented, missing, findings };
 }

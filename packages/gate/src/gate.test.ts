@@ -66,13 +66,13 @@ describe('check()', () => {
   describe('implemented components', () => {
     it('lists prompt as implemented when the adapter has a prompt renderer', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
-      const report = check(SKETCH_LIKE_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       expect(report.implemented).toContain('prompt');
     });
 
     it('implemented list is empty when the adapter has no components', () => {
       const { gaps } = render(MINIMAL_JOURNEY, EMPTY_ADAPTER);
-      const report = check(EMPTY_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(EMPTY_ADAPTER, gaps);
       expect(report.implemented).toHaveLength(0);
     });
   });
@@ -80,14 +80,14 @@ describe('check()', () => {
   describe('missing components', () => {
     it('lists no port components as missing when prompt-only adapter is used (prompt is the only port component)', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
-      const report = check(SKETCH_LIKE_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       // The port only defines "prompt" in wave 2S.1, so nothing is missing
       expect(report.missing).toHaveLength(0);
     });
 
     it('lists prompt as missing when the adapter has no components', () => {
       const { gaps } = render(MINIMAL_JOURNEY, EMPTY_ADAPTER);
-      const report = check(EMPTY_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(EMPTY_ADAPTER, gaps);
       expect(report.missing).toContain('prompt');
     });
   });
@@ -95,7 +95,7 @@ describe('check()', () => {
   describe('gap findings', () => {
     it('reports a gap finding for compare-set which the adapter did not implement', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
-      const report = check(SKETCH_LIKE_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       const compareFinding = report.findings.find(
         (f) => f.component === 'compare-set',
       );
@@ -104,7 +104,7 @@ describe('check()', () => {
 
     it('gap finding carries the screen id where the block appears', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
-      const report = check(SKETCH_LIKE_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       const compareFinding = report.findings.find(
         (f) => f.component === 'compare-set',
       );
@@ -114,7 +114,7 @@ describe('check()', () => {
     it('produces one finding per gap record returned by render()', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
       // compare-set (screen-1) and input-set (screen-2) are unimplemented
-      const report = check(SKETCH_LIKE_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       expect(report.findings).toHaveLength(2);
     });
 
@@ -131,7 +131,7 @@ describe('check()', () => {
         }],
       };
       const { gaps } = render(journey, SKETCH_LIKE_ADAPTER);
-      const report = check(SKETCH_LIKE_ADAPTER, journey, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       expect(report.findings).toHaveLength(0);
     });
   });
@@ -139,7 +139,7 @@ describe('check()', () => {
   describe('defect vs gap distinction', () => {
     it('classifies a gap for a component NOT in the adapter as kind=gap', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
-      const report = check(SKETCH_LIKE_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       const f = report.findings.find((x) => x.component === 'compare-set');
       expect(f?.kind).toBe('gap');
     });
@@ -148,14 +148,14 @@ describe('check()', () => {
       // THROWING_ADAPTER has prompt but it always throws, so render() records
       // a gap for prompt with the error text. gate should classify it as defect.
       const { gaps } = render(MINIMAL_JOURNEY, THROWING_ADAPTER);
-      const report = check(THROWING_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(THROWING_ADAPTER, gaps);
       const f = report.findings.find((x) => x.component === 'prompt');
       expect(f?.kind).toBe('defect');
     });
 
     it('defect finding carries the renderer error message from the real render output', () => {
       const { gaps } = render(MINIMAL_JOURNEY, THROWING_ADAPTER);
-      const report = check(THROWING_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(THROWING_ADAPTER, gaps);
       const f = report.findings.find((x) => x.component === 'prompt');
       expect(f?.kind).toBe('defect');
       // The error field must reflect the actual thrown message, not 'unknown error'
@@ -166,7 +166,7 @@ describe('check()', () => {
   describe('report shape is stable', () => {
     it('report has implemented, missing, and findings keys', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
-      const report = check(SKETCH_LIKE_ADAPTER, MINIMAL_JOURNEY, gaps);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
       expect(report).toMatchObject({
         implemented: expect.any(Array),
         missing: expect.any(Array),

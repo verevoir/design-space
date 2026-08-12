@@ -11,6 +11,10 @@
  * process; the rejection it produces reaches the same `catch` block as any other subprocess
  * error, so driving a fast-failing fake git exercises the same wrapping path. A test that merely
  * asserted the constant `10_000` is set would not catch a broken catch block.
+ *
+ * Note: the actual 10_000 ms timeout bound is never driven to expiry by any test — doing so
+ * would require a 10-second wall-clock wait. The wrapping behaviour is confirmed by the
+ * fast-fail shim tests instead.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
@@ -115,11 +119,11 @@ describe('resolve() against a real git repository', () => {
 //
 // This is the critical path: the resolver uses `timeout: 10_000` when calling
 // execFileAsync. When a git process is killed by that timeout, the execFile
-// callback receives an error — the same path as any non-zero exit. This test
-// drives that exact path by pointing the resolver at a nonexistent repository
-// path (which causes git to exit immediately with a non-zero status), then
-// confirming the error is wrapped as ObjectNotFoundError rather than
-// propagating as an unhandled rejection.
+// callback receives an error — the same path as any non-zero exit. These tests
+// drive that exact path by pointing the resolver at a nonexistent repository
+// path or a shim that exits non-zero immediately, then confirming the error is
+// wrapped as ObjectNotFoundError rather than propagating as an unhandled
+// rejection.
 //
 // The wrapping is the bound: a caller never receives a raw execFile error from
 // a slow or missing git process — it always gets ObjectNotFoundError.
@@ -140,14 +144,16 @@ describe('resolve() subprocess failure / timeout error path', () => {
     }
   });
 
-  it('a subprocess killed by SIGTERM (timeout simulation) is also wrapped as ObjectNotFoundError', async () => {
-    // Create a real git repo; then put a fake "git" shim first on PATH that
-    // immediately exits with SIGTERM (signal 15) to simulate the kill sent
-    // when the execFile timeout fires. The wrapping must convert it to
-    // ObjectNotFoundError rather than letting it propagate as a raw Error.
+  it('a git shim exiting with code 1 (non-zero exit, same catch path as a timed-out process) is wrapped as ObjectNotFoundError', async () => {
+    // Put a fake "git" shim first on PATH that exits with code 1 immediately.
+    // This is a fast-fail with a non-zero exit code — NOT a SIGTERM kill.
+    // It exercises the same catch block that a process killed by the execFile
+    // timeout would reach, since execFile rejects the promise in both cases.
+    // The actual 10_000 ms timeout bound is not driven to expiry here —
+    // see the module-level note about why.
     const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-shim-'));
     const shimPath = join(shimDir, 'git');
-    // Shell shim: exits immediately with code 1 (fast-fail; same wrapping path as SIGTERM kill)
+    // Shell shim: exits with code 1 immediately (a non-zero exit, not a signal)
     writeFileSync(shimPath, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     const origPath = process.env['PATH'] ?? '';
     process.env['PATH'] = `${shimDir}:${origPath}`;
