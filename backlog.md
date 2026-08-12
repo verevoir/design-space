@@ -266,8 +266,9 @@ against any particular adapter, which is what keeps it a sibling of 3.1 rather t
 **Known gap, found 2026-08-12 by running the container rather than the suite.** `render.ts` owns the
 `<style>` block through a module constant, and the `Adapter` interface has **no way to contribute
 CSS at all**. So every adapter currently renders with identical styling, and
-`SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — defined, exported, pinned by ten assertions, and
-referenced by nothing outside its own test. The served page contains no `--ds-*` properties.
+`SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — defined, exported, pinned by a test file that
+asserts every one of its token values, and referenced by nothing outside that test. The served
+page contains no `--ds-*` properties.
 
 That is ADR 0001's central claim unimplemented: an adapter is supposed to decide what a component
 looks like. **This story must widen the `Adapter` contract to carry presentation**, not only
