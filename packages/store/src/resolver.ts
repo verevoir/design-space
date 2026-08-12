@@ -136,7 +136,7 @@ export class InvalidRefError extends Error {
  * Applied together with an explicit `..` rejection: the pattern alone would
  * permit `a..b` which is a git range operator and not a valid single-object ref.
  */
-const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._\\/-]*$/;
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
  * Allow-pattern for a repository-relative root path.
@@ -144,7 +144,7 @@ const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._\\/-]*$/;
  * Same character set as SAFE_REF. Applied together with explicit checks for
  * `..` (path traversal) and empty segments (consecutive `/` or a leading `/`).
  */
-const SAFE_ROOT = /^[A-Za-z0-9][A-Za-z0-9._\\/-]*$/;
+const SAFE_ROOT = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
  * Allow-pattern for an object id.

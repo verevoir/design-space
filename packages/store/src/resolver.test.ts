@@ -88,12 +88,26 @@ describe('resolve() against a real git repository', () => {
     expect(parsed.v).toBe(2);
   });
 
-  it('two different refs return different content, proving no working-tree mutation', async () => {
-    const [r1, r2] = await Promise.all([
-      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
-      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitShaToo),
-    ]);
-    expect(r1).not.toEqual(r2);
+  it('reading at a non-current ref leaves the working tree and index unchanged (no-checkout guarantee)', async () => {
+    // ADR 0003 is load-bearing: rendering reads at a ref without checking anything out,
+    // so all four variation columns can be read concurrently from one working tree.
+    // This test proves that guarantee holds against a real git subprocess.
+    //
+    // Strategy: capture the full working-tree status and the index fingerprint (ls-files -s)
+    // before the read, perform the read at the first (non-HEAD) commit, then capture again.
+    // If git-show touched the index or the working tree, the before/after snapshots will differ.
+    const statusBefore = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexBefore = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
+
+    // Read at commitSha — which is NOT HEAD (commitShaToo is HEAD). A checkout would
+    // mutate both the index and the working tree to the first commit's state.
+    await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha);
+
+    const statusAfter = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexAfter = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
+
+    expect(statusAfter).toBe(statusBefore);
+    expect(indexAfter).toBe(indexBefore);
   });
 
   it('throws ObjectNotFoundError for an id that does not exist at the ref', async () => {
@@ -291,6 +305,14 @@ describe('resolve() input validation', () => {
       ).rejects.toBeInstanceOf(InvalidRefError);
     });
 
+    it('rejects a ref containing a backslash (SAFE_REF admits only [A-Za-z0-9._/-])', async () => {
+      // A backslash is not in the documented character set for refs. This test
+      // pins the fix: the character class must not include a backslash.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'a\\b'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
     it('accepts a valid branch name ref', async () => {
       // The ref does not exist in the repo, so we expect ObjectNotFoundError —
       // but NOT InvalidRefError. This proves the allow-pattern passes valid refs.
@@ -355,6 +377,14 @@ describe('resolve() input validation', () => {
       await expect(
         resolve(repoDir, { kind: 'journey', id: 'rooted-journey' }, commitSha, { root: 'collections' }),
       ).resolves.toBeDefined();
+    });
+
+    it('rejects a root containing a backslash (SAFE_ROOT admits only [A-Za-z0-9._/-])', async () => {
+      // A backslash is not in the documented character set for root paths. This test
+      // pins the fix: the character class must not include a backslash.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: 'a\\b' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
     });
   });
 
