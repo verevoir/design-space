@@ -1,0 +1,19 @@
+# The build context is COPYed wholesale (packages/, examples/), so anything left here ends up in
+# the image and makes the build depend on whoever's working tree produced it. Build
+# reproducibility is the point: the same source must produce the same image.
+node_modules
+**/node_modules
+dist
+**/dist
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+.git
+.github
+coverage
+.pre-gate
+
+*.log
+.DS_Store
+.env
+.env.local

@@ -5,7 +5,9 @@
 # Git is available in this stage because prerender reads the journey via
 # `git show`. It is absent from the final image.
 #
-FROM node:20-slim AS builder
+# Pinned by digest, not by tag: node:20-slim is retagged upstream, so a floating tag makes the
+# same source build differently over time. Same reasoning as the SHA-pinned actions in CI.
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS builder
 
 WORKDIR /app
 
@@ -57,7 +59,7 @@ RUN node packages/studio/scripts/prerender-build.mjs /app
 # Slim image that carries only compiled JS artefacts and production
 # node_modules. No git, no devDependencies, no source.
 #
-FROM node:20-slim AS runtime
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runtime
 
 WORKDIR /app
 

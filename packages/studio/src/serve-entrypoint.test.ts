@@ -66,11 +66,11 @@ async function loadServeWithReadFileError(cause: Error): Promise<{
   };
 
   try {
-    // Fresh module load — main().catch() runs synchronously up to the first
-    // await, then the async tail settles in the microtask queue.
-    await import('./serve.js');
-    // Drain the microtask queue so the main().catch() handler has run.
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    // Fresh module load — main() runs to completion before `ready` resolves.
+    // Awaiting the exported `ready` promise gives a deterministic signal that all
+    // module-level async work has settled, with no reliance on a sleep timer.
+    const serveMod = await import('./serve.js');
+    await serveMod.ready;
   } finally {
     process.stderr.write = origStderrWrite;
     exitSpy.mockRestore();
@@ -91,6 +91,9 @@ async function loadServeWithDocument(
 ): Promise<{ exitCode: number | undefined; stdoutOutput: string; stderrOutput: string }> {
   const fsMod = await import('node:fs/promises');
   vi.mocked(fsMod.readFile).mockResolvedValueOnce(html);
+  // serve.ts makes a second readFile call for the gaps sidecar (.catch(() => []) handles any
+  // error, but the auto-mock returns undefined which is not a promise — supply an explicit value).
+  vi.mocked(fsMod.readFile).mockResolvedValueOnce('[]');
 
   const serverMod = await import('./server.js');
   if (startServerBehaviour.ok) {
@@ -123,8 +126,8 @@ async function loadServeWithDocument(
   };
 
   try {
-    await import('./serve.js');
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    const serveMod = await import('./serve.js');
+    await serveMod.ready;
   } finally {
     process.stdout.write = origStdoutWrite;
     process.stderr.write = origStderrWrite;
