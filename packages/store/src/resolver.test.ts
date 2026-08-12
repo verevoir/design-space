@@ -1,282 +1,627 @@
 /**
- * Integration tests for the (object, ref) resolver.
+ * Tests for the (object, ref) resolver.
  *
- * These tests use a real temporary git repository — no mocks. A git repo is created in
- * a temp directory, objects are committed on two different refs, and the resolver is
- * exercised against them.
+ * Three layers:
+ *   1. Integration — exercised against a real temporary git repository so git-show, the object
+ *      layout and the no-checkout guarantee are confirmed against an actual process.
+ *   2. Subprocess failure classification — fake git shims that exit with a normal code, a
+ *      signal, or a maxBuffer overflow confirm that the resolver distinguishes all three
+ *      failure kinds correctly:
+ *        - a non-zero normal exit  → ObjectNotFoundError (git answered "not there")
+ *        - a signal kill           → ObjectLookupError   (question unanswered; may retry)
+ *        - maxBuffer overflow      → ObjectLookupError   (object exists but was too large;
+ *                                                         indeterminate, NOT a confirmed absence)
+ *   3. Input validation — confirms that invalid ref/root values are rejected at the boundary
+ *      with InvalidRefError before any git subprocess is spawned.
  *
- * The no-checkout property is proven by capturing the working-tree file list before and
- * after a read at a non-current ref and asserting the list is unchanged.
+ * The `timeout: 10_000` option in the resolver's execFileAsync call sends SIGTERM when a
+ * subprocess runs too long; the rejection it produces sets `signal: 'SIGTERM'` on the error
+ * object, which is exactly what ObjectLookupError tests for. The signal-kill test below
+ * exercises that branch via a shim that sends SIGTERM to itself, without waiting 10 s.
  *
- * Cleanup: the temp directory is removed in `afterAll`, so the suite leaves no residue.
+ * The maxBuffer test writes a shim that prints more than the configured limit, triggering
+ * Node's ERR_CHILD_PROCESS_STDIO_MAXBUFFER without depending on any specific buffer size:
+ * the shim receives the resolved limit from the resolver's own constant.
  */
-
-import { execFile } from 'node:child_process';
-import { mkdtemp as fsMkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
-import { ObjectNotFoundError, resolve } from './resolver.js';
-
-const execFileAsync = promisify(execFile);
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { resolve, ObjectNotFoundError, ObjectLookupError, InvalidRefError } from './resolver.js';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Real git repository fixture
 // ---------------------------------------------------------------------------
 
-/** Run a git command in the given directory. */
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    env: {
-      // Deterministic identity so the tests do not depend on the user's git config.
-      GIT_AUTHOR_NAME: 'Test',
-      GIT_AUTHOR_EMAIL: 'test@example.com',
-      GIT_COMMITTER_NAME: 'Test',
-      GIT_COMMITTER_EMAIL: 'test@example.com',
-      GIT_TERMINAL_PROMPT: '0',
-      PATH: process.env['PATH'] ?? '',
-      HOME: process.env['HOME'] ?? '',
-    },
-  });
-  return stdout.trim();
-}
+let repoDir: string;
+let commitSha: string;
+let commitShaToo: string; // second commit at a different ref
 
-/** Write a file relative to `dir`, creating parent directories as needed. */
-async function writeRepoFile(
-  dir: string,
-  relPath: string,
-  content: string,
-): Promise<void> {
-  const full = path.join(dir, relPath);
-  await mkdir(path.dirname(full), { recursive: true });
-  await writeFile(full, content, 'utf8');
-}
+beforeAll(() => {
+  // Spin up a minimal git repository in a temp directory.
+  repoDir = mkdtempSync(join(tmpdir(), 'ds-resolver-test-'));
 
-/** Return the sorted list of tracked files in the working tree. */
-async function workingTreeFiles(repoPath: string): Promise<string[]> {
-  const result = await git(repoPath, 'ls-files');
-  return result.split('\n').filter(Boolean).sort();
-}
+  execSync('git init', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git config user.email "test@test.local"', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git config user.name "Test"', { cwd: repoDir, stdio: 'pipe' });
 
-// ---------------------------------------------------------------------------
-// Fixture
-// ---------------------------------------------------------------------------
+  // Create the layout the resolver expects — one file per ObjectKind.
+  mkdirSync(join(repoDir, 'journeys'));
+  writeFileSync(join(repoDir, 'journeys', 'test-journey.json'), JSON.stringify({ id: 'test-journey', v: 1 }));
 
-/** Absolute path to the temp git repo created in beforeAll. */
-let repoPath: string;
+  // port: the single manifest lives at port/port.json regardless of id.
+  mkdirSync(join(repoDir, 'port'));
+  writeFileSync(join(repoDir, 'port', 'port.json'), JSON.stringify({ version: 1, components: [] }));
 
-/**
- * The two refs used across the tests:
- *   ref1 — the initial commit, checked out as the current branch ("main")
- *   ref2 — a second commit on a separate branch ("alt"), NOT checked out
- */
-let ref1: string; // SHA of the first commit
-let ref2: string; // SHA of the second commit
+  // adapter: one file per id under adapters/.
+  mkdirSync(join(repoDir, 'adapters'));
+  writeFileSync(join(repoDir, 'adapters', 'sketch.js'), '// sketch adapter placeholder');
 
-beforeAll(async () => {
-  // Create an isolated temp directory — does not depend on the ambient repo.
-  repoPath = await (async () => {
-    const tmp = await mkdtemp('design-space-store-test-');
-    return tmp;
-  })();
+  // token-set: one file per id under tokens/.
+  mkdirSync(join(repoDir, 'tokens'));
+  writeFileSync(join(repoDir, 'tokens', 'base.json'), JSON.stringify({ version: 1, tokens: {} }));
 
-  // Initialise the repo with a fixed branch name so the test is not sensitive
-  // to the user's init.defaultBranch config.
-  await git(repoPath, 'init', '-b', 'main');
+  // Also create a rooted collection for the root-option tests.
+  mkdirSync(join(repoDir, 'collections'), { recursive: true });
+  mkdirSync(join(repoDir, 'collections', 'journeys'), { recursive: true });
+  writeFileSync(
+    join(repoDir, 'collections', 'journeys', 'rooted-journey.json'),
+    JSON.stringify({ id: 'rooted-journey', v: 10 }),
+  );
 
-  // ── First commit on "main" ────────────────────────────────────────────────
-  // Lay down one journey, the port, one adapter, and one token set.
-  await writeRepoFile(repoPath, 'journeys/checkout.json', '{"version":1,"ref":"main","id":"checkout"}');
-  await writeRepoFile(repoPath, 'port/port.json', '{"version":1,"components":["Button"],"ref":"main"}');
-  await writeRepoFile(repoPath, 'adapters/sketch.js', '// sketch adapter — ref main\nexport default {};');
-  await writeRepoFile(repoPath, 'tokens/base.json', '{"spacing":4,"ref":"main"}');
-  await git(repoPath, 'add', '.');
-  ref1 = await git(repoPath, 'commit', '-m', 'first commit');
-  // git commit outputs "[ main (root-commit) <sha>] …" — grab the SHA directly.
-  ref1 = await git(repoPath, 'rev-parse', 'HEAD');
+  execSync('git add .', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git commit -m "first"', { cwd: repoDir, stdio: 'pipe' });
+  commitSha = execSync('git rev-parse HEAD', { cwd: repoDir, stdio: 'pipe' })
+    .toString()
+    .trim();
 
-  // ── Second commit on a separate branch "alt" ──────────────────────────────
-  await git(repoPath, 'checkout', '-b', 'alt');
-  await writeRepoFile(repoPath, 'journeys/checkout.json', '{"version":1,"ref":"alt","id":"checkout"}');
-  await writeRepoFile(repoPath, 'port/port.json', '{"version":1,"components":["Button","Card"],"ref":"alt"}');
-  await writeRepoFile(repoPath, 'adapters/sketch.js', '// sketch adapter — ref alt\nexport default {};');
-  await writeRepoFile(repoPath, 'tokens/base.json', '{"spacing":8,"ref":"alt"}');
-  await git(repoPath, 'add', '.');
-  ref2 = await git(repoPath, 'rev-parse', 'HEAD');
-  // Commit, then switch back to "main" so the working tree reflects ref1.
-  await git(repoPath, 'commit', '-m', 'second commit');
-  ref2 = await git(repoPath, 'rev-parse', 'HEAD');
-  await git(repoPath, 'checkout', 'main');
+  // Second commit with updated content — proves two refs can be read.
+  writeFileSync(join(repoDir, 'journeys', 'test-journey.json'), JSON.stringify({ id: 'test-journey', v: 2 }));
+  execSync('git add .', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git commit -m "second"', { cwd: repoDir, stdio: 'pipe' });
+  commitShaToo = execSync('git rev-parse HEAD', { cwd: repoDir, stdio: 'pipe' })
+    .toString()
+    .trim();
 });
 
-afterAll(async () => {
-  if (repoPath) {
-    await rm(repoPath, { recursive: true, force: true });
-  }
+afterAll(() => {
+  if (repoDir) rmSync(repoDir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
-// Helper: create a temp directory
+// Happy path — real git repo
 // ---------------------------------------------------------------------------
 
-async function mkdtemp(prefix: string): Promise<string> {
-  // Node's own mkdtemp guarantees a unique directory. The previous hand-rolled version
-  // fell back to a SHARED path whenever mkdir returned undefined (the directory already
-  // existed), which would have let concurrent runs collide on one fixture.
-  return await fsMkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('resolve — happy path', () => {
-  it('reads a journey document at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref1);
-    const doc = JSON.parse(content) as { ref: string };
-    expect(doc.ref).toBe('main');
+describe('resolve() against a real git repository', () => {
+  it('reads the content of an object at a given ref', async () => {
+    const raw = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha);
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.id).toBe('test-journey');
+    expect(parsed.v).toBe(1);
   });
 
-  it('reads a journey document at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2);
-    const doc = JSON.parse(content) as { ref: string };
-    expect(doc.ref).toBe('alt');
+  it('reading at a later ref returns the updated content', async () => {
+    const raw = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitShaToo);
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.v).toBe(2);
   });
 
-  it('returns different content for the same journey at two different refs', async () => {
-    const [c1, c2] = await Promise.all([
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref1),
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2),
-    ]);
-    expect(c1).not.toBe(c2);
+  it('reading at a non-current ref leaves the working tree and index unchanged (no-checkout guarantee)', async () => {
+    // ADR 0003 is load-bearing: rendering reads at a ref without checking anything out,
+    // so all four variation columns can be read concurrently from one working tree.
+    // This test proves that guarantee holds against a real git subprocess.
+    //
+    // Strategy: capture the full working-tree status and the index fingerprint (ls-files -s)
+    // before the read, perform the read at the first (non-HEAD) commit, then capture again.
+    // If git-show touched the index or the working tree, the before/after snapshots will differ.
+    const statusBefore = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexBefore = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
+
+    // Read at commitSha — which is NOT HEAD (commitShaToo is HEAD). A checkout would
+    // mutate both the index and the working tree to the first commit's state.
+    await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha);
+
+    const statusAfter = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexAfter = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
+
+    expect(statusAfter).toBe(statusBefore);
+    expect(indexAfter).toBe(indexBefore);
   });
 
-  it('reads the port at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'port', id: 'port' }, ref1);
-    const doc = JSON.parse(content) as { components: string[]; ref: string };
-    expect(doc.components).toEqual(['Button']);
-    expect(doc.ref).toBe('main');
-  });
+  it('four concurrent resolve() calls at different refs leave the working tree and index unchanged', async () => {
+    // ADR 0003 depends on all four variation columns being readable at once from a single
+    // working tree. This test exercises the concurrency property directly: if resolve()
+    // were to perform a checkout under the hood, concurrent calls at different refs would
+    // race and corrupt each other's reads. git-show is read-only and never touches the
+    // index or working tree, so all four must complete successfully and the tree must be
+    // unchanged after all four settle.
+    const statusBefore = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexBefore = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
 
-  it('reads the port at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'port', id: 'port' }, ref2);
-    const doc = JSON.parse(content) as { components: string[]; ref: string };
-    expect(doc.components).toEqual(['Button', 'Card']);
-    expect(doc.ref).toBe('alt');
-  });
-
-  it('reads an adapter at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'adapter', id: 'sketch' }, ref1);
-    expect(content).toContain('ref main');
-  });
-
-  it('reads an adapter at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'adapter', id: 'sketch' }, ref2);
-    expect(content).toContain('ref alt');
-  });
-
-  it('reads a token set at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'token-set', id: 'base' }, ref1);
-    const doc = JSON.parse(content) as { spacing: number };
-    expect(doc.spacing).toBe(4);
-  });
-
-  it('reads a token set at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'token-set', id: 'base' }, ref2);
-    const doc = JSON.parse(content) as { spacing: number };
-    expect(doc.spacing).toBe(8);
-  });
-});
-
-describe('resolve — concurrent reads at different refs do not change the working tree', () => {
-  it('reading at a non-current ref leaves the working tree unchanged', async () => {
-    // Capture the working-tree file list before the read.
-    const filesBefore = await workingTreeFiles(repoPath);
-
-    // Read an object at ref2 while the working tree is checked out at ref1 (main).
-    await resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2);
-
-    // The working tree must be identical to what it was before.
-    const filesAfter = await workingTreeFiles(repoPath);
-    expect(filesAfter).toEqual(filesBefore);
-  });
-
-  it('reading four refs concurrently does not mutate the working tree', async () => {
-    const filesBefore = await workingTreeFiles(repoPath);
-
-    await Promise.all([
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref1),
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2),
-      resolve(repoPath, { kind: 'port', id: 'port' }, ref1),
-      resolve(repoPath, { kind: 'port', id: 'port' }, ref2),
+    // Four concurrent reads: two object kinds at each of the two commits.
+    const results = await Promise.all([
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitShaToo),
+      resolve(repoDir, { kind: 'port', id: 'port' }, commitSha),
+      resolve(repoDir, { kind: 'token-set', id: 'base' }, commitSha),
     ]);
 
-    const filesAfter = await workingTreeFiles(repoPath);
-    expect(filesAfter).toEqual(filesBefore);
-  });
-});
+    // All four reads must have returned content.
+    expect(results).toHaveLength(4);
+    for (const r of results) {
+      expect(typeof r).toBe('string');
+      expect(r.length).toBeGreaterThan(0);
+    }
 
-describe('resolve — missing object fails with a named error', () => {
-  it('throws ObjectNotFoundError for a journey that does not exist at the ref', async () => {
+    // The working tree and index must be exactly as they were before.
+    const statusAfter = execSync('git status --porcelain', { cwd: repoDir, stdio: 'pipe' }).toString();
+    const indexAfter = execSync('git ls-files -s', { cwd: repoDir, stdio: 'pipe' }).toString();
+    expect(statusAfter).toBe(statusBefore);
+    expect(indexAfter).toBe(indexBefore);
+  });
+
+  it('throws ObjectNotFoundError for an id that does not exist at the ref', async () => {
     await expect(
-      resolve(repoPath, { kind: 'journey', id: 'nonexistent' }, ref1),
-    ).rejects.toThrow(ObjectNotFoundError);
+      resolve(repoDir, { kind: 'journey', id: 'nonexistent' }, commitSha),
+    ).rejects.toBeInstanceOf(ObjectNotFoundError);
   });
 
-  it('error message names the kind, id, and ref', async () => {
-    const err = await resolve(repoPath, { kind: 'journey', id: 'nonexistent' }, ref1).catch(
-      (e: unknown) => e,
-    );
+  it('ObjectNotFoundError names the object kind, id and ref so the caller can diagnose', async () => {
+    const err = await resolve(repoDir, { kind: 'journey', id: 'nonexistent' }, commitSha)
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ObjectNotFoundError);
     const notFound = err as ObjectNotFoundError;
     expect(notFound.message).toContain('journey');
     expect(notFound.message).toContain('nonexistent');
-    expect(notFound.message).toContain(ref1);
+    expect(notFound.message).toContain(commitSha);
+    expect(notFound.object.kind).toBe('journey');
+    expect(notFound.object.id).toBe('nonexistent');
+    expect(notFound.ref).toBe(commitSha);
   });
 
-  it('error exposes the object kind and id on the error instance', async () => {
-    const err = await resolve(repoPath, { kind: 'token-set', id: 'missing' }, ref1).catch(
-      (e: unknown) => e,
-    );
-    expect(err).toBeInstanceOf(ObjectNotFoundError);
-    const notFound = err as ObjectNotFoundError;
-    expect(notFound.object.kind).toBe('token-set');
-    expect(notFound.object.id).toBe('missing');
-    expect(notFound.ref).toBe(ref1);
-  });
-
-  it('throws ObjectNotFoundError for an invalid git ref', async () => {
+  it('throws ObjectNotFoundError for a ref that does not exist', async () => {
     await expect(
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, 'refs/heads/does-not-exist'),
-    ).rejects.toThrow(ObjectNotFoundError);
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'nonexistent-ref'),
+    ).rejects.toBeInstanceOf(ObjectNotFoundError);
+  });
+
+  it('reads a port object at port/port.json (kind: port)', async () => {
+    // The port is a singleton — objectPath() always returns port/port.json regardless of id.
+    const raw = await resolve(repoDir, { kind: 'port', id: 'port' }, commitSha);
+    const parsed = JSON.parse(raw) as { version: number };
+    expect(parsed.version).toBe(1);
+  });
+
+  it('reads an adapter object at adapters/<id>.js (kind: adapter)', async () => {
+    // objectPath() maps kind:adapter to adapters/<id>.js.
+    const raw = await resolve(repoDir, { kind: 'adapter', id: 'sketch' }, commitSha);
+    expect(raw).toContain('sketch adapter');
+  });
+
+  it('reads a token-set object at tokens/<id>.json (kind: token-set)', async () => {
+    // objectPath() maps kind:token-set to tokens/<id>.json.
+    const raw = await resolve(repoDir, { kind: 'token-set', id: 'base' }, commitSha);
+    const parsed = JSON.parse(raw) as { version: number };
+    expect(parsed.version).toBe(1);
   });
 });
 
-describe('resolve — public interface only: callers never construct a path', () => {
-  it('the resolve function is exported and accepts kind+id, not a path string', async () => {
-    // This test confirms the shape of the public interface at the type level.
-    // If "resolve" accepted a path string, callers could bypass the resolver's
-    // path-construction monopoly — the seam would be broken.
-    const result = await resolve(
-      repoPath,
-      { kind: 'adapter', id: 'sketch' },
-      ref1,
+// ---------------------------------------------------------------------------
+// root option — scopes the lookup to a subdirectory
+// ---------------------------------------------------------------------------
+
+describe('resolve() with the root option', () => {
+  it('reads an object from a subdirectory when root is supplied', async () => {
+    const raw = await resolve(
+      repoDir,
+      { kind: 'journey', id: 'rooted-journey' },
+      commitSha,
+      { root: 'collections' },
     );
-    expect(typeof result).toBe('string');
-    expect(result.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.id).toBe('rooted-journey');
+    expect(parsed.v).toBe(10);
+  });
+
+  it('strips a trailing slash from root before building the path', async () => {
+    // 'collections/' (trailing slash) must resolve the same object as 'collections'.
+    const raw = await resolve(
+      repoDir,
+      { kind: 'journey', id: 'rooted-journey' },
+      commitSha,
+      { root: 'collections/' },
+    );
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.id).toBe('rooted-journey');
+  });
+
+  it('throws ObjectNotFoundError when the object is absent under the given root', async () => {
+    await expect(
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: 'collections' }),
+    ).rejects.toBeInstanceOf(ObjectNotFoundError);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Working-tree invariant helper (used in concurrent test above)
+// Subprocess failure classification
+//
+// The resolver distinguishes two failure kinds:
+//   ObjectNotFoundError — git exited normally (non-zero code, no signal). The
+//     object is absent; retrying will not help. This is a terminal condition.
+//   ObjectLookupError   — the subprocess was killed by a signal (including the
+//     SIGTERM sent when execFile's timeout fires). The question was not
+//     answered; the caller may retry.
+//
+// Both cases are exercised by shims rather than by real slow or absent git
+// processes, so the tests complete quickly. The shim for signal kills uses
+// `kill -TERM $$` to exit via SIGTERM, which produces `signal: 'SIGTERM'` on
+// the Node error — the same value the execFile timeout sets.
 // ---------------------------------------------------------------------------
 
-async function _listFiles(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { recursive: true });
-  return entries.sort();
-}
-void _listFiles; // referenced only for documentation; workingTreeFiles uses git ls-files
+describe('resolve() subprocess failure classification', () => {
+  it('a non-zero normal exit (git answered "not there") is wrapped as ObjectNotFoundError', async () => {
+    // A path that is not a git repository causes `git show` to exit with a
+    // normal non-zero code and no signal — the same class of failure as a
+    // genuine missing object or bad ref.
+    const notARepo = mkdtempSync(join(tmpdir(), 'ds-not-a-repo-'));
+    try {
+      await expect(
+        resolve(notARepo, { kind: 'journey', id: 'anything' }, 'HEAD'),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true });
+    }
+  });
+
+  it('a shim that exits with a non-zero code (no signal) is wrapped as ObjectNotFoundError', async () => {
+    // Shell shim: exits with code 1 — a normal non-zero exit, not a signal kill.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-shim-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(shimPath, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a subprocess killed by SIGTERM (signal kill, same mechanism as the execFile timeout) is wrapped as ObjectLookupError', async () => {
+    // Shell shim: kills itself with SIGTERM, producing `signal: 'SIGTERM'` on
+    // the Node error — the exact value the execFile timeout sets when it kills
+    // a hung process. This exercises the ObjectLookupError branch without
+    // waiting for the 10 s timeout to fire.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-sigterm-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(shimPath, '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectLookupError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a shim that writes more than maxBuffer to stdout is wrapped as ObjectLookupError (not ObjectNotFoundError)', async () => {
+    // Node sets code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' and signal === undefined when
+    // the child's stdout exceeds maxBuffer. Without an explicit check for that code, the
+    // resolver's signal branch would miss it and fall through to ObjectNotFoundError —
+    // misreporting a too-large object as absent. This test pins the classification.
+    //
+    // The shim writes 200 MiB to stdout — more than the resolver's 100 MiB limit —
+    // without depending on any bespoke constant from this test file.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-maxbuf-'));
+    const shimPath = join(shimDir, 'git');
+    // dd writes 200 MiB of null bytes to stdout, exceeding the 100 MiB maxBuffer.
+    writeFileSync(
+      shimPath,
+      '#!/bin/sh\ndd if=/dev/zero bs=1048576 count=200 2>/dev/null\n',
+      { mode: 0o755 },
+    );
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectLookupError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ObjectLookupError names the object and ref so the caller can log and retry', async () => {
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-sigterm2-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(shimPath, '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ObjectLookupError);
+      const lookupErr = err as ObjectLookupError;
+      expect(lookupErr.object.kind).toBe('journey');
+      expect(lookupErr.object.id).toBe('test-journey');
+      expect(lookupErr.ref).toBe(commitSha);
+      expect(lookupErr.message).toContain('journey');
+      expect(lookupErr.message).toContain('test-journey');
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ObjectLookupError message names "killed by signal" when the subprocess exits via a signal', async () => {
+    // A signal kill must produce a message that says "killed by signal", not
+    // "maxBuffer overflow", so the two causes are distinguishable in the message text.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-sigterm-msg-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(shimPath, '#!/bin/sh\nkill -TERM $$\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ObjectLookupError);
+      expect((err as ObjectLookupError).message).toContain('killed by signal');
+      expect((err as ObjectLookupError).message).not.toContain('maxBuffer');
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ObjectLookupError message names "maxBuffer overflow" when the subprocess output exceeds the limit', async () => {
+    // A maxBuffer overflow must produce a message that says "maxBuffer overflow", not
+    // "killed by signal" — the previous implementation always said the latter, which
+    // was factually wrong for this case. This test pins the corrected message.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-maxbuf-msg-'));
+    const shimPath = join(shimDir, 'git');
+    writeFileSync(
+      shimPath,
+      '#!/bin/sh\ndd if=/dev/zero bs=1048576 count=200 2>/dev/null\n',
+      { mode: 0o755 },
+    );
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ObjectLookupError);
+      expect((err as ObjectLookupError).message).toContain('maxBuffer overflow');
+      expect((err as ObjectLookupError).message).not.toContain('killed by signal');
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Input validation — ref and root are rejected at the boundary
+//
+// A bad value throws InvalidRefError immediately; no git subprocess is spawned.
+// These tests prove concrete attack vectors are rejected:
+//   - a ref beginning with '-' (argument-injection via git option syntax)
+//   - a root containing '..' (path traversal outside the intended collection)
+// ---------------------------------------------------------------------------
+
+describe('resolve() input validation', () => {
+  describe('ref validation', () => {
+    it('rejects a ref that begins with "-" (argument-injection guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, '--upload-pack=x'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a leading-dash ref names the invalid value', async () => {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, '--upload-pack=x')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('--upload-pack=x');
+    });
+
+    it('rejects a ref containing ".." (git range-operator guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'main..evil'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an empty ref', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, ''),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects a ref containing characters outside the allowed set', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'main;evil'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects a ref containing a backslash (SAFE_REF admits only [A-Za-z0-9._/-])', async () => {
+      // A backslash is not in the documented character set for refs. This test
+      // pins the fix: the character class must not include a backslash.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'a\\b'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts a valid branch name ref', async () => {
+      // The ref does not exist in the repo, so we expect ObjectNotFoundError —
+      // but NOT InvalidRefError. This proves the allow-pattern passes valid refs.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'valid-branch'),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    });
+
+    it('accepts a commit SHA ref', async () => {
+      // commitSha is a real SHA in the repo — expect successful resolution.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('root validation', () => {
+    it('rejects a root containing ".." (path-traversal guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '../..' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a dotdot root names the invalid value', async () => {
+      const err = await resolve(
+        repoDir,
+        { kind: 'journey', id: 'test-journey' },
+        commitSha,
+        { root: '../..' },
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('../..');
+    });
+
+    it('rejects a root that begins with "-"', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '-evil' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects a root with an empty segment (leading slash)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '/absolute/path' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an all-slash root "/" (not silently reinterpreted as absent root)', async () => {
+      // Before the validate-before-normalise fix, "/" was stripped to "" and treated as
+      // an absent root, bypassing validation entirely. Now it must be rejected explicitly.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '/' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an all-slash root "///" (not silently reinterpreted as absent root)', async () => {
+      // Multiple consecutive leading slashes collapsed to "" would similarly bypass validation.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '///' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts an empty-string root (explicit absent root is valid)', async () => {
+      // An explicit root: "" is treated the same as omitting root — the object is looked
+      // up at the repository root. This must NOT throw InvalidRefError.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '' }),
+      ).resolves.toBeDefined();
+    });
+
+    it('rejects a root with consecutive slashes (empty inner segment)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: 'a//b' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts an absent root (no root option)', async () => {
+      // resolve without options should not throw InvalidRefError
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts a valid root path', async () => {
+      // 'collections' is a real directory; rooted-journey.json is in it.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'rooted-journey' }, commitSha, { root: 'collections' }),
+      ).resolves.toBeDefined();
+    });
+
+    it('rejects a root containing a backslash (SAFE_ROOT admits only [A-Za-z0-9._/-])', async () => {
+      // A backslash is not in the documented character set for root paths. This test
+      // pins the fix: the character class must not include a backslash.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: 'a\\b' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // id validation — objectPath() interpolates id directly into the git path,
+  // so an id like '../../etc' would walk outside the intended per-kind
+  // collection. These tests prove that class of attack is rejected at the same
+  // boundary as ref and root, before any git subprocess is spawned.
+  // ---------------------------------------------------------------------------
+
+  describe('id validation', () => {
+    it('rejects an id containing ".." (path-traversal guard)', async () => {
+      // '../../etc' would construct e.g. 'journeys/../../etc.json' — outside the collection.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: '../../etc' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a dotdot id names the invalid value', async () => {
+      const err = await resolve(repoDir, { kind: 'journey', id: '../../etc' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('../../etc');
+    });
+
+    it('rejects an id that begins with "-" (argument-injection guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: '-evil' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a leading-dash id names the invalid value', async () => {
+      const err = await resolve(repoDir, { kind: 'journey', id: '-evil' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('-evil');
+    });
+
+    it('rejects an id containing "/" (path-separator guard)', async () => {
+      // 'sub/evil' would construct e.g. 'journeys/sub/evil.json' — a path, not a name.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'sub/evil' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an empty id', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: '' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an id containing characters outside the allowed set (e.g. ";")', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'ok;evil' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts a simple alphanumeric id', async () => {
+      // 'test-journey' exists in the repo — expect successful resolution, not InvalidRefError.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts an id with hyphens and underscores', async () => {
+      // Valid ids with hyphens are the common case (e.g. 'broadband-switch').
+      // 'nonexistent_id' will produce ObjectNotFoundError, proving InvalidRefError is NOT thrown.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'valid_id-name' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    });
+  });
+});

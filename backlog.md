@@ -13,11 +13,16 @@ the previous wave lands before the next begins. The numbering states merge order
 topology.
 
 **Width:** fans to 2 after wave 0, narrows to 1 for the steel thread, and fans to 3 after wave 2.
-**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight edges, each a genuine
-dependency rather than narrative order.
+**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight stories, so seven
+edges, each a genuine dependency rather than narrative order.
 
 This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and
 it is updated in the change that moves it — not afterwards.
+
+**Status lines do not carry test counts.** Two did, and both were wrong — one overstated by ten,
+the other understated by two thirds — which is what a number in prose does: it is a claim with a
+shelf life of one commit, and nothing checks it. Describe what the tests cover; the suite reports
+how many, and it is never out of date.
 
 The two barriers that matter are both **contracts**, and they are why the plan fans at all:
 wave 1 settles the journey schema and wave 2 settles the port, so the three stories in wave 3
@@ -75,7 +80,7 @@ from, so they cannot drift.
 
 **Status.** Done. Zod is the single source; the TypeScript types come from `z.infer` and the
 JSON Schema artefact is emitted from the same schema at build time. Structural checks cover
-dangling action targets and screens unreachable from the entry point. 23 tests.
+dangling action targets and screens unreachable from the entry point.
 
 One defect worth remembering: the emitter was wired to a package script the root build never
 invoked, so the artefact was never produced while `npm run verify` stayed green. The gate now
@@ -99,8 +104,15 @@ error naming both.
 
 **Status.** Done. Reads go through `git show` via `execFile` with argv only — no shell, no
 checkout, no working-tree mutation. The resolver owns path construction; callers name an object
-by kind and id. Tested against a real temporary git repository, with the no-checkout property
-proved by capturing working-tree state either side of a read at a non-current ref. 27 tests.
+by kind and id. Tested against a real temporary git repository; the no-checkout guarantee is
+demonstrated by reading a non-HEAD ref and confirming that neither the working-tree status nor
+the index fingerprint changes (a checkout would have mutated both). Two separate tests confirm
+that reading the same object at two different refs yields different content. Subprocess failures
+are classified: a normal non-zero exit (git answered "not there") surfaces as
+`ObjectNotFoundError`; a signal-killed subprocess (timeout or hung git) surfaces as
+`ObjectLookupError`, which a caller can retry. Input is validated at the boundary: a ref, root,
+or id that fails the allow-pattern is rejected with `InvalidRefError` before any subprocess is
+spawned.
 
 The fan was real: 1.1 and 1.2 were built concurrently in separate worktrees, which they needed
 because both run `npm install` and would otherwise have collided on the lockfile.
@@ -138,6 +150,26 @@ deploy.
 `packages/gate`; plus deployment configuration and CI.
 **Reads.** `packages/journey-model`, `packages/store`, `examples/journeys`.
 **Unblocks.** Nothing structurally — but everything after it inherits a working deployment.
+
+**Status.** In progress — code half delivered; deployment half not yet started.
+
+Delivered: `prompt` is defined in the port with a Zod prop schema, implemented by the sketch
+adapter, rendered into a standalone HTML document by the render package, and checked by the gate
+(gap vs defect vs schema-validation distinction). `prerender` reads the journey through the store
+and writes a document; the studio server serves a document handed to it.
+
+**Nothing wires those two together.** There is no runnable entry point that reads a journey and
+starts a server — each half is exercised only by its own tests. Saying the journey is "served"
+would overstate what exists; that wiring arrives with the deployment half, which is what the
+container needs anyway. `startServer()` rejects with a legible message on EADDRINUSE,
+detaches its startup error handler after the promise settles, and forwards post-startup runtime
+errors to stderr. Tests cover the render pipeline, the gap/defect/schema distinction, the security
+boundary (exception text absent from HTML), the listen-error path, and the sketch adapter's prompt
+renderer directly.
+
+Not yet delivered: the URL the **Done-when** criterion names (the service is not deployed); the
+idle cost stated as a number rather than "cheap"; the gate blocking the deploy in CI; and a
+merge-to-main redeploy without a manual step. None of these are in the repository.
 
 ---
 

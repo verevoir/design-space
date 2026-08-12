@@ -8,6 +8,8 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     { "path": "../render" },
-    { "path": "../store" }
+    { "path": "../store" },
+    { "path": "../port" },
+    { "path": "../adapter-sketch" }
   ]
 }

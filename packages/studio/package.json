@@ -13,6 +13,8 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@design-space/adapter-sketch": "*",
+    "@design-space/port": "*",
     "@design-space/render": "*",
     "@design-space/store": "*"
   }
