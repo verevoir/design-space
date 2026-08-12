@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least-privilege token: this workflow reads code and reports check status; it writes nothing.
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -17,6 +21,10 @@ jobs:
       # runs here with the repository token. The trailing comment records the human-readable
       # version so the pin stays legible and can be bumped deliberately.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # This is a public repo; PRs run untrusted code via npm ci/npm test.
+          # Drop the token from .git/config so subsequent steps cannot read it.
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           # The floor package.json declares. Running CI on the floor rather than on
@@ -24,28 +32,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      # Dependency vulnerability scan — npm audit is built in and needs no third-party action,
-      # which is deliberately consistent with the supply-chain posture above: adding an unpinned
-      # scanner action to satisfy a supply-chain finding would be self-defeating.
-      #
-      # Threshold: --audit-level=high
-      #   Critical and high severities block the build; moderate and low are reported in the
-      #   step output but do not fail it. The rationale: moderate advisories in a dev-only
-      #   transitive dependency (a common shape for a TypeScript toolchain like this one) are
-      #   almost never exploitable in context and are often unfixable by the PR author because
-      #   they live in a pinned sub-dependency of eslint, vitest, or typescript. A gate that
-      #   fires on moderate trains authors to add --audit-level=moderate to their local run to
-      #   silence it, which defeats the gate entirely. High and critical advisories are
-      #   exploitable and warrant a genuine fix or a documented exception; blocking on them is
-      #   a real signal, not noise.
-      #
-      # Block vs. report: this step BLOCKS on high/critical.
-      #   The fixability condition is met at high/critical: a package at that severity level
-      #   will have a patched version available (npm audit fix will say so), so the PR author
-      #   can act. If a high/critical CVE is in a pinned transitive with no fix available,
-      #   the correct response is an explicit override (npm audit --ignore) committed with a
-      #   rationale, not silently lowering the gate. That override is itself a reviewable
-      #   artefact, which is the right place for that decision to live.
+      # Dependency vulnerability scan — see docs/adr/0006-dependency-vulnerability-threshold.md.
       - run: npm audit --audit-level=high
       # Separate steps rather than one `npm run verify`, so a failure names itself in the
       # checks list instead of every failure reading as "verify".
