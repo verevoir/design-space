@@ -1,0 +1,3 @@
+# The review gate protects itself: a PR touching it needs a human code-owner.
+/.github/workflows/antagonistic-review.yml   @adsurg
+/.github/antagonistic-review/                @adsurg

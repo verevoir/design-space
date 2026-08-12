@@ -7,6 +7,17 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     rules: {
+      // A leading underscore is the conventional marker for a binding that is deliberately
+      // unused — a destructured field being discarded, a positional parameter being skipped.
+      // Without this the linter cannot tell that intent from an actual oversight.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
       'no-restricted-imports': [
         'error',
         {
