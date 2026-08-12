@@ -139,14 +139,20 @@ deploy.
 **Reads.** `packages/journey-model`, `packages/store`, `examples/journeys`.
 **Unblocks.** Nothing structurally — but everything after it inherits a working deployment.
 
-**Status.** Done. `prompt` is defined in the port with a Zod prop schema, implemented by the sketch
-adapter, rendered into a standalone HTML document by the render package, and checked by the gate.
-The gate distinguishes gaps (adapter missing a renderer) from defects (renderer threw); the error
-message from a thrown renderer is carried on the gap record for the gate to inspect but is never
-embedded in the shipped HTML. The server binds via `startServer()` — a promise that rejects with a
-legible message on EADDRINUSE rather than emitting an unhandled error event. Tests cover the render
-pipeline, the gap/defect distinction through a real render call, the security boundary (exception text
-absent from HTML), and the listen-error path.
+**Status.** In progress — code half delivered; deployment half not yet started.
+
+Delivered: `prompt` is defined in the port with a Zod prop schema, implemented by the sketch
+adapter, rendered into a standalone HTML document by the render package, checked by the gate (gap
+vs defect vs schema-validation distinction), and served by the studio server. The prerender path
+reads the journey through the store. `startServer()` rejects with a legible message on EADDRINUSE,
+detaches its startup error handler after the promise settles, and forwards post-startup runtime
+errors to stderr. Tests cover the render pipeline, the gap/defect/schema distinction, the security
+boundary (exception text absent from HTML), the listen-error path, and the sketch adapter's prompt
+renderer directly.
+
+Not yet delivered: the URL the **Done-when** criterion names (the service is not deployed); the
+idle cost stated as a number rather than "cheap"; the gate blocking the deploy in CI; and a
+merge-to-main redeploy without a manual step. None of these are in the repository.
 
 ---
 

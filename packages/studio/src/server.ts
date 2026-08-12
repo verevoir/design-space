@@ -64,19 +64,31 @@ export function createStudioServer(options: ServerOptions): Server {
  * Reads PORT from the environment (default 8080) and binds to 0.0.0.0.
  * Returns a promise that resolves to the listening server, or rejects with a
  * legible error if the port is unavailable (EADDRINUSE) or binding otherwise
- * fails \u2014 so callers never receive an unhandled 'error' event.
+ * fails.
+ *
+ * After the server is listening, any subsequent runtime socket errors are
+ * forwarded to stderr rather than being silently swallowed. The one-shot
+ * startup listener is detached once the promise settles so it cannot intercept
+ * a post-startup error and call `reject` on an already-settled promise.
  */
 export function startServer(options: ServerOptions): Promise<Server> {
   const port = Number(process.env['PORT'] ?? 8080);
   const server = createStudioServer(options);
   return new Promise((resolve, reject) => {
-    server.once('error', (err: NodeJS.ErrnoException) => {
+    function onStartupError(err: NodeJS.ErrnoException) {
       const detail = err.code === 'EADDRINUSE'
         ? `port ${port} is already in use`
         : err.message;
       reject(new Error(`Studio server failed to start: ${detail}`, { cause: err }));
-    });
+    }
+    server.once('error', onStartupError);
     server.listen(port, '0.0.0.0', () => {
+      // Detach the startup handler before resolving — a post-startup socket
+      // error must not silently call reject on the already-settled promise.
+      server.off('error', onStartupError);
+      server.on('error', (err: Error) => {
+        process.stderr.write(`Studio server runtime error: ${err.message}\n`);
+      });
       resolve(server);
     });
   });

@@ -14,8 +14,16 @@ export interface AdapterLike {
 export interface GapRecord {
   readonly screenId: string;
   readonly component: string;
-  /** Set when the adapter had a renderer but it threw. Carries the error message text. */
+  /**
+   * Set when the adapter had a renderer but it threw. Carries the error message text.
+   * Distinct from `schemaError` — in this case the renderer was called and failed.
+   */
   readonly error?: string;
+  /**
+   * Set when the block's props failed the component's port schema.
+   * The adapter was never called — this is a data problem, not an adapter defect.
+   */
+  readonly schemaError?: string;
 }
 
 /** The full output of a render call. */
@@ -53,15 +61,35 @@ function renderBlock(
     return renderGap(block.component);
   }
 
+  const contract = getContract(block.component);
+  if (contract !== undefined) {
+    let props: unknown;
+    try {
+      props = contract.propsSchema.parse(block.props);
+    } catch (err) {
+      // The block's props are invalid against the port schema — the adapter was
+      // never called, so this is not a renderer defect. Record it distinctly.
+      const message = err instanceof Error ? err.message : String(err);
+      gaps.push({ screenId, component: block.component, schemaError: message });
+      return renderGap(block.component);
+    }
+    try {
+      return renderer(props);
+    } catch (err) {
+      // A defect: the renderer threw. Treat as a gap so the document stays whole,
+      // but mark it differently so gate can distinguish gap from defect.
+      // The raw error message is recorded on the gap record for gate to inspect,
+      // but is NOT embedded in the HTML — internal detail must not reach the page.
+      const message = err instanceof Error ? err.message : String(err);
+      gaps.push({ screenId, component: block.component, error: message });
+      return renderGap(block.component);
+    }
+  }
+
+  // No port schema for this component — pass props through unvalidated and render.
   try {
-    const contract = getContract(block.component);
-    const props = contract ? contract.propsSchema.parse(block.props) : block.props;
-    return renderer(props);
+    return renderer(block.props);
   } catch (err) {
-    // A defect: the renderer threw. Treat as a gap so the document stays whole,
-    // but mark it differently so gate can distinguish gap from defect.
-    // The raw error message is recorded on the gap record for gate to inspect,
-    // but is NOT embedded in the HTML — internal detail must not reach the page.
     const message = err instanceof Error ? err.message : String(err);
     gaps.push({ screenId, component: block.component, error: message });
     return renderGap(block.component);

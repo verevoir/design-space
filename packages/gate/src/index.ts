@@ -2,8 +2,10 @@
  * The structural gate: checks coverage of an adapter against the port.
  *
  * Reports which port components are implemented by the adapter, which are
- * missing, and which rendered blocks fell back to a gap. Distinguishes a gap
- * (a finding about adapter completeness) from a defect (a renderer crash).
+ * missing, and which rendered blocks fell back to a gap. Distinguishes three
+ * finding kinds: a gap (adapter has no renderer), a defect (renderer threw),
+ * and a schema finding (props failed the port schema before the adapter was
+ * called \u2014 a data problem, not an adapter problem).
  */
 export const PACKAGE_NAME = '@design-space/gate';
 
@@ -11,6 +13,7 @@ export { check } from './gate.js';
 export type {
   GapFinding,
   DefectFinding,
+  SchemaFinding,
   Finding,
   CoverageReport,
 } from './gate.js';

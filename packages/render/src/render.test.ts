@@ -259,6 +259,52 @@ describe('render()', () => {
     });
   });
 
+  describe('schema validation failure: props that violate the port schema', () => {
+    // When a block's props fail the component's Zod schema, the adapter renderer
+    // is never called — the failure is a data problem, not an adapter defect.
+    // render() must record it distinctly via `schemaError`, not `error`.
+
+    const SCHEMA_INVALID_JOURNEY: JourneyDocument = {
+      id: 'schema-test',
+      title: 'Schema Test',
+      intent: 'Verifies schema validation classification.',
+      entry: 'screen-a',
+      screens: [
+        {
+          id: 'screen-a',
+          purpose: 'Schema failure screen.',
+          // heading is required (min(1)), so an empty string fails the schema
+          blocks: [{ component: 'prompt', props: { heading: '' } }],
+          actions: [],
+          annotations: [],
+        },
+      ],
+    };
+
+    it('produces a gap element for the component whose props failed the schema', () => {
+      const { html } = render(SCHEMA_INVALID_JOURNEY, PROMPT_ONLY_ADAPTER);
+      expect(html).toContain('ds-gap');
+      expect(html).toContain('prompt');
+    });
+
+    it('records a gap with schemaError set, not error, so the gate classifies it as a data problem not an adapter defect', () => {
+      const { gaps } = render(SCHEMA_INVALID_JOURNEY, PROMPT_ONLY_ADAPTER);
+      const gap = gaps.find((g) => g.component === 'prompt');
+      expect(gap).toBeDefined();
+      expect(gap?.schemaError).toBeDefined();
+      expect(gap?.error).toBeUndefined();
+    });
+
+    it('the schemaError message is not embedded in the shipped HTML', () => {
+      const { html, gaps } = render(SCHEMA_INVALID_JOURNEY, PROMPT_ONLY_ADAPTER);
+      const gap = gaps.find((g) => g.component === 'prompt');
+      // The schema error text must be present on the gap record…
+      expect(gap?.schemaError).toBeTruthy();
+      // …but must NOT appear in the document (internal Zod messages stay off the page).
+      expect(html).not.toContain(gap?.schemaError);
+    });
+  });
+
   describe('security: internal exception text never reaches shipped HTML', () => {
     // When a renderer throws, the error message must be kept out of the HTML
     // document — it may contain internal stack frames, sensitive values, or

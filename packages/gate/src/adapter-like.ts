@@ -13,4 +13,9 @@ export interface GapRecord {
   readonly component: string;
   /** Set when the adapter had a renderer but it threw. Carries the error message text. */
   readonly error?: string;
+  /**
+   * Set when the block's props failed the component's port schema.
+   * The adapter was never called — this is a data problem, not an adapter defect.
+   */
+  readonly schemaError?: string;
 }
