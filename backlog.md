@@ -12,9 +12,12 @@ the same time, and hold disjoint write-sets. An increment is a real **barrier** 
 the previous wave lands before the next begins. The numbering states merge order, not branch
 topology.
 
-**Width:** fans to 2 after wave 0, narrows to 1 for the steel thread, and fans to 3 after wave 2.
+**Width:** fans to 2 after wave 0, narrows to 1 for 2S.1, then fans to 2 again — the deployment
+chain `2S.2 → 2S.3 → 2S.4` runs alongside wave 2, because it writes `studio`, `Dockerfile` and
+`.github/` while wave 2 writes `port`. Wave 3 then fans to 3.
 **Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight stories, so seven
-edges, each a genuine dependency rather than narrative order.
+edges, each a genuine dependency rather than narrative order. The deployment chain is three
+stories long and is not on that path; it finishes well inside it.
 
 This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and
 it is updated in the change that moves it — not afterwards.
@@ -124,16 +127,25 @@ because both run `npm install` and would otherwise have collided on the lockfile
 One component, all the way through, deployed. Everything after this wave **widens** a chain that
 already works rather than discovering whether it works at all.
 
-This wave is deliberately a **barrier, not a fan**: it writes a little of `port`,
-`adapter-sketch`, `render` and `gate`, which are exactly the write-sets waves 2 and 3 own. One
-writer per target — so nothing in those waves runs alongside it.
+**2S.1 is a barrier**: it writes a little of `port`, `adapter-sketch`, `render` and `gate`, which
+are exactly the write-sets waves 2 and 3 own. One writer per target, so nothing in those waves
+runs alongside it.
 
-### 2S.1 One component travels the whole chain and is reachable at a URL
+**2S.2–2S.4 are not.** They write `studio`, `Dockerfile` and `.github/`, so once 2S.1 lands they
+run concurrently with wave 2 — they are a chain among themselves (each needs the previous one's
+URL or its smoke tests) but they block nothing else, and nothing else blocks them.
+
+### 2S.1 One component travels the whole chain
 
 **Outcome.** A single port component — `prompt`, the simplest one the reference journey uses — is
 defined as a contract, implemented by the sketch adapter, composed into a standalone document
-from a journey document read through the store, checked by the gate, and served at a URL that
-costs nothing while nobody is looking at it.
+from a journey document read through the store, and checked by the gate.
+
+**Scope corrected 2026-08-12.** This story originally carried "and is reachable at a URL" and a
+done-bar naming the deployment. That was one story doing two jobs, and it is why its status sat
+at "in progress" through eleven review rounds while the code half was finished. The deployment
+criteria moved to 2S.2–2S.4, which is a split, not a quiet narrowing — the URL is still required
+before wave 2S is done.
 
 **Why.** The waves as first drawn were layer-shaped: schema, then port, then adapters, then
 studio. That produces a chain by construction, and it leaves deployment until last — the point at
@@ -141,35 +153,80 @@ which discovering a problem with it is most expensive. Threading one component t
 layer proves the chain, the gate and the deployment while each is still cheap to change. It also
 means every later story ships to somewhere real rather than to a branch.
 
-**Done when.** The URL serves a rendered screen from `examples/journeys/broadband-switch.json`;
-the service scales to zero and its idle cost is stated as a number rather than as "cheap"; a
-merge to `main` redeploys without a manual step; the gate runs in CI and a red gate blocks the
-deploy.
+**Done when.** A journey read through the store renders to a standalone document in which
+`prompt` is real output and every unimplemented component is a visible, labelled gap; the gate
+reports coverage, gaps and defects distinctly.
 
-**Writes.** A thin slice of `packages/port`, `packages/adapter-sketch`, `packages/render` and
-`packages/gate`; plus deployment configuration and CI.
+**Writes.** A thin slice of `packages/port`, `packages/adapter-sketch`, `packages/render`,
+`packages/gate` and `packages/studio`.
 **Reads.** `packages/journey-model`, `packages/store`, `examples/journeys`.
 **Unblocks.** Nothing structurally — but everything after it inherits a working deployment.
 
-**Status.** In progress — code half delivered; deployment half not yet started.
+**Status.** Done. `prompt` is defined in the port with a Zod prop schema, implemented by the
+sketch adapter, rendered into a standalone HTML document, and checked by the gate, which
+distinguishes a gap (missing renderer) from a defect (renderer threw) from a schema-validation
+failure (the adapter was never called). `prerender` reads the journey through the store at a ref
+and writes a document; the studio server serves a document handed to it. Nothing yet wires those
+two into a runnable entry point — that is 2S.2.
 
-Delivered: `prompt` is defined in the port with a Zod prop schema, implemented by the sketch
-adapter, rendered into a standalone HTML document by the render package, and checked by the gate
-(gap vs defect vs schema-validation distinction). `prerender` reads the journey through the store
-and writes a document; the studio server serves a document handed to it.
+Eleven review rounds. What they found, recorded because the pattern is the useful part: a git
+argument-injection vector through an unvalidated `ref`, then the same hole through `root`, then
+again through `id`; a validator admitting a character its own error message said it rejected;
+three separate paths by which "could not determine" collapsed into "not there" (a timeout, a
+signal kill, a `maxBuffer` overflow); two load-bearing tests silently dropped by wholesale test
+file rewrites; and a `--ds-paper` token set to `#ffffff`, so the sketch adapter had been
+rendering on white rather than paper.
 
-**Nothing wires those two together.** There is no runnable entry point that reads a journey and
-starts a server — each half is exercised only by its own tests. Saying the journey is "served"
-would overstate what exists; that wiring arrives with the deployment half, which is what the
-container needs anyway. `startServer()` rejects with a legible message on EADDRINUSE,
-detaches its startup error handler after the promise settles, and forwards post-startup runtime
-errors to stderr. Tests cover the render pipeline, the gap/defect/schema distinction, the security
-boundary (exception text absent from HTML), the listen-error path, and the sketch adapter's prompt
-renderer directly.
+---
 
-Not yet delivered: the URL the **Done-when** criterion names (the service is not deployed); the
-idle cost stated as a number rather than "cheap"; the gate blocking the deploy in CI; and a
-merge-to-main redeploy without a manual step. None of these are in the repository.
+### 2S.2 The rendered journey is reachable at a URL that costs nothing when idle
+
+**Outcome.** A container serves the reference journey, rendered through the sketch adapter, at a
+public URL. It scales to zero, and its idle cost is stated as a number.
+
+**Why.** 2S.1 leaves `prerender` and the server unwired — each half is exercised only by its own
+tests. This is the wiring, and it is what makes the steel thread a thread rather than two
+threads.
+
+**Done when.** The URL serves the rendered document; rendering happens at build time through the
+store (ADR 0002), so the runtime image contains no git repository; the service is configured with
+`min-instances=0`; and the idle cost is recorded in the architecture's operational section as a
+figure, not as "cheap".
+
+**Writes.** `packages/studio` (entry point), `Dockerfile`, deployment configuration.
+**Unblocks.** 2S.3.
+
+### 2S.3 Every pull request gets its own deployment, and smoke tests run against it
+
+**Outcome.** Opening or updating a PR deploys a revision carrying no traffic under a `pr-<n>` tag,
+runs smoke tests against that tag's URL, and posts the URL on the PR. Closing the PR removes the
+tag.
+
+**Why.** ADR 0007. A reviewer should be able to click the change rather than imagine it, and the
+smoke tests need a real target that is not production.
+
+**Done when.** A PR shows a working URL a human can open; smoke tests run against it and a failure
+blocks; the tag is gone after the PR closes; and a fork PR degrades to "no preview" with a stated
+reason rather than a failed run — deploy credentials cannot reach a fork, by the same guard that
+protects the review panel.
+
+**Writes.** `.github/workflows/`, smoke tests.
+
+### 2S.4 A change reaches `main` only after serving production traffic
+
+**Outcome.** Promotion is: assert the branch fast-forwards onto `main`, deploy a `candidate`
+revision with no traffic, smoke it, cut traffic to it, then merge. Any failure removes the
+candidate, restores traffic to the previous revision, and records a failed deployment.
+
+**Why.** ADR 0007. `main` is what every later story branches from, so it must never be
+known-bad; reverting a merged change is worse than never merging it.
+
+**Done when.** A change reaches `main` only via that sequence; a deliberately broken candidate is
+rolled back without traffic reaching it and without merging; the image that served canary traffic
+is the image retagged onto the merged commit rather than a rebuild; and the merged tree is
+asserted equal to the canaried tree.
+
+**Writes.** `.github/workflows/`.
 
 ---
 
