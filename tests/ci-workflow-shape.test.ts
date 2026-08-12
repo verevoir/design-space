@@ -38,6 +38,136 @@ function extractAuditStepBlock(): string {
 
 const auditStep = extractAuditStepBlock();
 
+// ---------------------------------------------------------------------------
+// Trigger block
+//
+// The `on:` block is the highest-leverage property to pin: a change there silently
+// stops the gate running at all while every other assertion still passes. Each test
+// pins one property of the trigger block so a mutation is isolated to one failure.
+//
+// Extraction strategy: slice from the `\non:\n` line to the first blank line after
+// it (which separates the trigger block from the comment/concurrency blocks in the
+// current file). This bounds every assertion to the actual trigger section so an
+// occurrence of `pull_request` elsewhere in the file (e.g. in a concurrency group
+// expression or a comment) cannot accidentally satisfy the check.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the `on:` trigger block from the workflow YAML.
+ * Returns the text from the `on:` line (inclusive) up to the first blank line
+ * that follows it, which separates the trigger block from the rest of the file.
+ */
+function extractOnBlock(): string {
+  const onIdx = yml.indexOf('\non:\n');
+  if (onIdx < 0) return '';
+  // Find the blank line that ends the trigger block.
+  const blankLine = yml.indexOf('\n\n', onIdx + 1);
+  const blockEnd = blankLine >= 0 ? blankLine : yml.length;
+  return yml.slice(onIdx + 1, blockEnd); // skip the leading \n
+}
+
+const onBlock = extractOnBlock();
+
+describe('ci.yml — triggers', () => {
+  it('on: block is present', () => {
+    // Foundation guard: if the on: block is absent entirely, all scoped assertions
+    // below would vacuously pass against an empty string.
+    expect(onBlock).not.toBe('');
+  });
+
+  it('runs on pull_request events', () => {
+    // The gate must fire on every PR push, not only on pushes to main. Without this
+    // trigger a PR can land code that breaks CI undetected.
+    // Checked within the extracted on: block so an occurrence elsewhere (e.g. in a
+    // concurrency key expression or a comment) cannot accidentally satisfy the check.
+    expect(onBlock).toMatch(/pull_request/);
+  });
+
+  it('runs on push to main', () => {
+    // The gate must fire after every merge to main so the shared branch stays green.
+    // A branch filter that omitted main would let a bad merge slip through.
+    // `flat` is collapsed whitespace, so the push + branches + main chain is linear.
+    const flatOn = onBlock.replace(/\s+/g, ' ');
+    expect(flatOn).toMatch(/push:.*branches:.*main/);
+  });
+
+  it('does not restrict pull_request trigger with a paths filter', () => {
+    // A paths: filter on pull_request would let a change to an unfiltered file
+    // (e.g. a workflow itself) skip the gate entirely. No narrowing is correct.
+    // Scoped to the on: block; a paths: key on a job step cannot trip this.
+    expect(onBlock).not.toMatch(/paths:/);
+  });
+
+  it('does not restrict pull_request trigger with a branches filter', () => {
+    // A branches: filter under pull_request would exclude PRs targeting branches
+    // other than those named — letting a PR to a non-listed base branch skip the gate.
+    // NOTE: branches: under push: (for main) is intentional and correct; this test is
+    // specifically guarding that pull_request has no branches sub-key. We check that
+    // the pull_request trigger line is not followed by a branches: key before the
+    // next trigger or the end of the on: block.
+    const prIdx = onBlock.indexOf('pull_request');
+    if (prIdx < 0) return; // already caught by the 'runs on pull_request' test
+    // Find the next trigger-level entry (a line that starts with exactly two spaces
+    // of indentation at the trigger level, or the end of the block).
+    const afterPr = onBlock.slice(prIdx);
+    // A branches: key subordinate to pull_request would appear indented under it.
+    // Since pull_request has no sub-keys in the valid config, any indented `branches:`
+    // that appears before the next sibling trigger is a narrowing filter.
+    // The next sibling trigger starts at column 2 (two-space indent). Slice to it.
+    const nextSiblingMatch = afterPr.match(/\n {2}\S/);
+    const prSection = nextSiblingMatch
+      ? afterPr.slice(0, nextSiblingMatch.index!)
+      : afterPr;
+    expect(prSection).not.toMatch(/branches:/);
+  });
+
+  it('does not restrict push trigger with a paths filter', () => {
+    // A paths: filter under push would let a push to main skip the gate if no
+    // watched path changed — for example a docs-only change that also edits a script.
+    // Scoped to the on: block so a paths: elsewhere cannot trip this.
+    // The push trigger's sub-keys (branches:) appear indented under push:.
+    // A paths: key at the same indent would narrow the trigger.
+    const pushIdx = onBlock.indexOf('push:');
+    if (pushIdx < 0) return;
+    const afterPush = onBlock.slice(pushIdx);
+    // Slice to the next sibling trigger (two-space indent, non-space character).
+    const nextSiblingMatch = afterPush.match(/\n {2}\S/);
+    const pushSection = nextSiblingMatch
+      ? afterPush.slice(0, nextSiblingMatch.index!)
+      : afterPush;
+    expect(pushSection).not.toMatch(/paths:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency group
+//
+// The concurrency block cancels superseded PR runs (saving runner time) while
+// keeping each push-to-main in its own unique group (so a main run is never
+// cancelled and the head commit always gets a completed CI record).
+// ---------------------------------------------------------------------------
+
+describe('ci.yml — concurrency', () => {
+  it('declares a concurrency group', () => {
+    // Without a concurrency group every push to a PR runs to completion in parallel,
+    // wasting runner time on runs whose result is already superseded.
+    expect(yml).toContain('concurrency:');
+  });
+
+  it('sets cancel-in-progress: true', () => {
+    // cancel-in-progress: true is what actually stops the superseded run. A group
+    // declaration without it only serialises runs, it does not cancel the stale one.
+    expect(flat).toMatch(/concurrency:.*cancel-in-progress: true/);
+  });
+
+  it('keys the concurrency group on the PR number falling back to run id', () => {
+    // The PR number makes every push to the same PR share a group (so older runs are
+    // cancelled). Falling back to run_id means pushes to main each get a unique group
+    // and are never cancelled — preserving the main branch CI record.
+    expect(flat).toMatch(/group: ci-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}/);
+  });
+});
+
 describe('ci.yml — action pins', () => {
   it('pins actions/checkout to a 40-character commit SHA, not a floating tag', () => {
     // A floating tag (e.g. @v4) is mutable: the action owner can repoint it at

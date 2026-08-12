@@ -5,6 +5,18 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel superseded runs on the same PR to avoid wasted work.
+# The group key includes the PR number when one exists, so every push to a PR
+# cancels the previous run and only the latest proceeds.
+# For pushes to main, github.event.pull_request.number is empty and the key
+# falls back to github.run_id — a unique value per run — so no two main runs
+# share a group and cancel-in-progress never cancels a main run. This is the
+# correct behaviour: cancelling a superseded PR run is free; cancelling a main
+# run would leave the head commit on main with no completed CI record.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 # Least-privilege token: this workflow reads code and reports check status; it writes nothing.
 permissions:
   contents: read
