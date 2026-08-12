@@ -10,3 +10,6 @@ coverage/
 *.log
 
 .claude/settings.local.json
+
+# TypeScript incremental build state -- a build artefact, not source
+*.tsbuildinfo
