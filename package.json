@@ -10,7 +10,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run --workspaces --if-present postbuild",
     "test": "vitest run",
     "lint": "eslint .",
     "format": "prettier --check .",
