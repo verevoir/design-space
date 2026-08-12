@@ -298,16 +298,22 @@ export async function resolve(
   ref: string,
   options: ResolveOptions = {},
 ): Promise<string> {
-  // Strip only trailing slashes from root — a trailing slash on 'collections/'
-  // is unambiguous and normalising it avoids a surprising rejection. Leading
-  // slashes are NOT stripped: an absolute path supplied as root would silently
-  // become a relative one after stripping, masking a caller error. The validator
-  // below rejects a leading slash explicitly.
-  const root = options.root?.replace(/\/+$/g, '') ?? '';
-
+  // Validate root against the raw value the caller supplied — BEFORE any
+  // normalisation. Trimming trailing slashes first would collapse an all-slash
+  // root (e.g. "/" or "///") to the empty string, causing validation to treat
+  // it as an absent root and silently pass it through to git. Validating first
+  // means a caller who passed "/" gets an explicit rejection rather than silent
+  // reinterpretation as "no root".
+  //
+  // After validation, trailing slashes are stripped for convenience: a trailing
+  // slash on "collections/" is unambiguous and normalising it avoids a
+  // surprising rejection. Leading slashes are NOT stripped — the validator
+  // already rejects them, so stripping them would only mask a caller error.
   validateRef(ref);
-  validateRoot(root);
+  validateRoot(options.root ?? '');
   validateId(object.id);
+
+  const root = options.root?.replace(/\/+$/g, '') ?? '';
 
   const gitPath = root ? `${root}/${objectPath(object)}` : objectPath(object);
   const refPath = `${ref}:${gitPath}`;

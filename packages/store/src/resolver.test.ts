@@ -359,6 +359,29 @@ describe('resolve() input validation', () => {
       ).rejects.toBeInstanceOf(InvalidRefError);
     });
 
+    it('rejects an all-slash root "/" (not silently reinterpreted as absent root)', async () => {
+      // Before the validate-before-normalise fix, "/" was stripped to "" and treated as
+      // an absent root, bypassing validation entirely. Now it must be rejected explicitly.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '/' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an all-slash root "///" (not silently reinterpreted as absent root)', async () => {
+      // Multiple consecutive leading slashes collapsed to "" would similarly bypass validation.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '///' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts an empty-string root (explicit absent root is valid)', async () => {
+      // An explicit root: "" is treated the same as omitting root — the object is looked
+      // up at the repository root. This must NOT throw InvalidRefError.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '' }),
+      ).resolves.toBeDefined();
+    });
+
     it('rejects a root with consecutive slashes (empty inner segment)', async () => {
       await expect(
         resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: 'a//b' }),

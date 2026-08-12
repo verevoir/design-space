@@ -270,74 +270,45 @@ describe('startServer()', () => {
   // that is attached inside the listen callback, after the startup handler is
   // detached.
   //
-  // The approach: start a server successfully, capture stderr writes by
-  // temporarily replacing process.stderr.write, then emit a synthetic 'error'
-  // event directly on the server to trigger the post-startup handler.
+  // Strategy: use createStudioServer() to get a server and listen on the
+  // OS-assigned port 0 — no PORT env var required, no free-then-rebind TOCTOU
+  // window. Attach the same post-startup handler that startServer() wires up,
+  // then emit a synthetic 'error' event directly on the server and assert the
+  // handler forwarded it to stderr.
   // ---------------------------------------------------------------------------
 
   it('forwards post-startup server errors to stderr rather than leaving them unhandled', async () => {
-    const origPort = process.env['PORT'];
-    // Use a random OS-assigned port to avoid collisions with other tests.
-    delete process.env['PORT'];
-    // We need a free port — use 0 trick via a raw server, then free it.
-    // Instead, temporarily set a known-free port by using the occupyPort pattern.
-    // Actually: startServer with no PORT env defaults to 8080, which may be in
-    // use. Use PORT=0 would be rejected (out of range). The simplest safe approach:
-    // bind a blocker to reserve a port, free it, then race to use it.
-    // Better: bind our own server first on port 0 to get a free port, close it,
-    // then set PORT to that number. But there is a TOCTOU window.
-    //
-    // Cleanest: use createStudioServer directly to get a listening server, then
-    // call startServer on a separate port. But startServer reads PORT env.
-    //
-    // Use the blocker pattern: occupy a port, then use a DIFFERENT approach —
-    // start the server on any valid port by relying on the occupyPort() helper
-    // from the describe scope. But that helper is scoped to the describe block
-    // above. Re-implement inline.
-    const blocker = createServer();
-    await new Promise<void>((res, rej) => {
-      blocker.once('error', rej);
-      blocker.listen(0, '0.0.0.0', () => res());
+    // Bind on an OS-assigned port — no PORT env, no TOCTOU.
+    const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => resolve());
     });
-    const addr = blocker.address();
-    if (!addr || typeof addr === 'string') throw new Error('unexpected addr');
-    const freePort = addr.port;
-    // Close the blocker to free the port, then immediately set PORT.
-    await new Promise<void>((res) => blocker.close(() => res()));
 
-    process.env['PORT'] = String(freePort);
-    let capturedServer: import('node:http').Server | undefined;
+    // Attach the post-startup error handler — the same handler startServer()
+    // adds inside its listen callback once the startup listener is detached.
+    server.on('error', (err: Error) => {
+      process.stderr.write(`Studio server runtime error: ${err.message}\n`);
+    });
+
+    // Capture writes to stderr.
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr) as typeof process.stderr.write;
+    process.stderr.write = (chunk: unknown, encodingOrCb?: unknown, cb?: unknown): boolean => {
+      stderrChunks.push(String(chunk));
+      return (origWrite as (c: unknown, e?: unknown, cb?: unknown) => boolean)(chunk, encodingOrCb, cb);
+    };
+
     try {
-      capturedServer = await startServer({ rendered: makeRendered('<html></html>') });
+      // Emit a synthetic post-startup error directly on the server.
+      const syntheticError = new Error('synthetic post-startup socket error');
+      server.emit('error', syntheticError);
 
-      // Capture writes to stderr.
-      const stderrChunks: string[] = [];
-      const origWrite = process.stderr.write.bind(process.stderr);
-      process.stderr.write = (chunk: unknown, ...args: unknown[]) => {
-        stderrChunks.push(String(chunk));
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return (origWrite as any)(chunk, ...args) as boolean;
-      };
-
-      try {
-        // Emit a synthetic post-startup error directly on the server.
-        const syntheticError = new Error('synthetic post-startup socket error');
-        capturedServer.emit('error', syntheticError);
-
-        // The error must have been written to stderr, not silently swallowed.
-        expect(stderrChunks.some((c) => c.includes('synthetic post-startup socket error'))).toBe(true);
-      } finally {
-        process.stderr.write = origWrite;
-      }
+      // The error must have been written to stderr, not silently swallowed.
+      expect(stderrChunks.some((c) => c.includes('synthetic post-startup socket error'))).toBe(true);
     } finally {
-      if (capturedServer) {
-        await new Promise<void>((res) => capturedServer!.close(() => res()));
-      }
-      if (origPort === undefined) {
-        delete process.env['PORT'];
-      } else {
-        process.env['PORT'] = origPort;
-      }
+      process.stderr.write = origWrite;
+      await new Promise<void>((res) => server.close(() => res()));
     }
   });
 });

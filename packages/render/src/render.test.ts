@@ -114,12 +114,13 @@ describe('render()', () => {
   });
 
   describe('silent omission — the critical negative case', () => {
-    it('the HTML length WITHOUT the gap content is less than WITH it, proving the gap is present not absent', () => {
-      // Build a version with no adapter at all and one where unknown-widget renders
-      const withGap = render(MINIMAL_JOURNEY, PROMPT_ONLY_ADAPTER);
-      // Remove unknown-widget from the document and confirm it is shorter
-      const withoutGapText = withGap.html.replace(/unknown-widget/, 'REDACTED');
-      expect(withGap.html).not.toEqual(withoutGapText);
+    it('the gap element for an unimplemented component is present in the HTML, not silently omitted', () => {
+      // Directly assert the gap element IS in the output — both the ds-gap marker
+      // and the component name must appear, proving the block was rendered as a gap
+      // rather than being dropped silently.
+      const { html } = render(MINIMAL_JOURNEY, PROMPT_ONLY_ADAPTER);
+      expect(html).toContain('class="ds-gap"');
+      expect(html).toContain('unknown-widget');
     });
 
     it('when adapter has NO components, every block in every screen produces a gap record', () => {
@@ -245,6 +246,28 @@ describe('render()', () => {
       // The gap element shows the component name; that name must be escaped
       expect(html).toContain('&lt;evil&gt;');
       expect(html).not.toContain('<<evil>>');
+    });
+
+    it('a double-quote in a screen purpose is escaped as &quot; in the aria-label attribute', () => {
+      // escapeAttr() replaces double quotes with &quot; to prevent breaking out of
+      // a double-quoted HTML attribute. This exercises the '"' branch of escapeAttr
+      // in the position it actually appears: aria-label on the <section> element.
+      const journey: JourneyDocument = {
+        ...MINIMAL_JOURNEY,
+        screens: [
+          {
+            id: 'screen-a',
+            purpose: 'Say "hello"',
+            blocks: [],
+            actions: [],
+            annotations: [],
+          },
+        ],
+      };
+      const { html } = render(journey, EMPTY_ADAPTER);
+      // The attribute must carry &quot; — a raw " would break out of the attribute.
+      expect(html).toContain('aria-label="Say &quot;hello&quot;"');
+      expect(html).not.toContain('aria-label="Say "hello""');
     });
   });
 
