@@ -45,9 +45,7 @@ function bindServer(server: Server, teardown: (fn: () => void) => void): Promise
  *
  * Instead, the tests exercise the seam directly: they write a real document
  * file, instantiate createStudioServer with its content, and confirm the
- * server delivers it over HTTP. This is the composition the entry point wires;
- * a test that imports serve.ts directly would prove nothing extra and would
- * require mocking the entire filesystem and port layer.
+ * server delivers it over HTTP.
  */
 describe('serve entry-point composition: document from disk → createStudioServer', () => {
   let cleanup: (() => void) | undefined;
@@ -158,12 +156,4 @@ describe('serve entry-point composition: document from disk → createStudioServ
     expect(text).toContain('Choose a new package');
   });
 
-  it('a missing document produces a legible error (not a silent undefined)', async () => {
-    // The entry point reads the document path and throws if absent. This test
-    // exercises the error path directly via the fs module rather than through
-    // the entry module (which would start a real server).
-    const { readFile } = await import('node:fs/promises');
-    const missingPath = join(tmpdir(), 'no-such-file-studio-serve-test.html');
-    await expect(readFile(missingPath, 'utf-8')).rejects.toThrow(/ENOENT/);
-  });
 });

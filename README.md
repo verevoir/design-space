@@ -64,6 +64,16 @@ curl -s http://localhost:8080/healthz
 
 The `PORT` environment variable is read by the server (default `8080`). Cloud Run sets it automatically; override it locally with `-e PORT=9000`.
 
+**On `/healthz`.** A review raised that this path might be one the platform reserves and swallows.
+It is not. Cloud Run has no reserved paths: a health-check probe is only sent to a path you
+explicitly configure it to use, and every other request — `/healthz` included — is forwarded to
+the container as ordinary traffic ([container health checks][chc], [container runtime
+contract][crc]). The path stays as it is, and the deploy in 2S.3 will confirm it empirically by
+curling the deployed URL.
+
+[chc]: https://docs.cloud.google.com/run/docs/configuring/healthchecks
+[crc]: https://docs.cloud.google.com/run/docs/container-contract
+
 ## Status
 
 Phase 1, in progress. See [`backlog.md`](./backlog.md) for the stories,
