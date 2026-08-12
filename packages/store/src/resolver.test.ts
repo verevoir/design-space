@@ -357,4 +357,74 @@ describe('resolve() input validation', () => {
       ).resolves.toBeDefined();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // id validation — objectPath() interpolates id directly into the git path,
+  // so an id like '../../etc' would walk outside the intended per-kind
+  // collection. These tests prove that class of attack is rejected at the same
+  // boundary as ref and root, before any git subprocess is spawned.
+  // ---------------------------------------------------------------------------
+
+  describe('id validation', () => {
+    it('rejects an id containing ".." (path-traversal guard)', async () => {
+      // '../../etc' would construct e.g. 'journeys/../../etc.json' — outside the collection.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: '../../etc' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a dotdot id names the invalid value', async () => {
+      const err = await resolve(repoDir, { kind: 'journey', id: '../../etc' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('../../etc');
+    });
+
+    it('rejects an id that begins with "-" (argument-injection guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: '-evil' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a leading-dash id names the invalid value', async () => {
+      const err = await resolve(repoDir, { kind: 'journey', id: '-evil' }, commitSha)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('-evil');
+    });
+
+    it('rejects an id containing "/" (path-separator guard)', async () => {
+      // 'sub/evil' would construct e.g. 'journeys/sub/evil.json' — a path, not a name.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'sub/evil' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an empty id', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: '' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an id containing characters outside the allowed set (e.g. ";")', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'ok;evil' }, commitSha),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts a simple alphanumeric id', async () => {
+      // 'test-journey' exists in the repo — expect successful resolution, not InvalidRefError.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts an id with hyphens and underscores', async () => {
+      // Valid ids with hyphens are the common case (e.g. 'broadband-switch').
+      // 'nonexistent_id' will produce ObjectNotFoundError, proving InvalidRefError is NOT thrown.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'valid_id-name' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    });
+  });
 });

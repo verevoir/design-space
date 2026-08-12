@@ -12,15 +12,18 @@
  *
  * Input validation
  * ----------------
- * Both `ref` and `root` are validated at the boundary against an explicit allow-pattern
- * before they reach the git command. The validator rejects rather than sanitises — a
- * bad value fails loudly so the caller can correct it, rather than being silently
- * rewritten into something that works in an unexpected way.
+ * `ref`, `root`, and `object.id` are all validated at the boundary against explicit
+ * allow-patterns before they reach the git command. The validator rejects rather than
+ * sanitises — a bad value fails loudly so the caller can correct it, rather than being
+ * silently rewritten into something that works in an unexpected way.
  *
  * `ref`  — must match SAFE_REF (alphanumeric start, then alphanumeric / . _ / - only);
  *           must not contain `..`; must not begin with `-`.
  * `root` — must match SAFE_ROOT (same character set); must not contain `..`; must not
  *           contain an empty segment (consecutive `/` or a leading `/`).
+ * `id`   — must match SAFE_ID (alphanumeric start, then alphanumeric / _ / - only);
+ *           must not contain `..`, `/`, or any character that would alter the path;
+ *           stricter than `root` because an id is a name, not a path.
  */
 
 import { execFile } from 'node:child_process';
@@ -107,13 +110,13 @@ export class ObjectLookupError extends Error {
 }
 
 /**
- * Thrown when `ref` or `root` fails the input-validation allow-pattern.
+ * Thrown when `ref`, `root`, or `id` fails the input-validation allow-pattern.
  *
  * This is a caller error — the value supplied does not satisfy the contract.
  * Retrying with the same value will not help.
  */
 export class InvalidRefError extends Error {
-  constructor(field: 'ref' | 'root', value: string, reason: string) {
+  constructor(field: 'ref' | 'root' | 'id', value: string, reason: string) {
     super(`invalid ${field}: ${JSON.stringify(value)} — ${reason}`);
     this.name = 'InvalidRefError';
   }
@@ -133,7 +136,7 @@ export class InvalidRefError extends Error {
  * Applied together with an explicit `..` rejection: the pattern alone would
  * permit `a..b` which is a git range operator and not a valid single-object ref.
  */
-const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._\\/-]*$/;
 
 /**
  * Allow-pattern for a repository-relative root path.
@@ -141,7 +144,42 @@ const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
  * Same character set as SAFE_REF. Applied together with explicit checks for
  * `..` (path traversal) and empty segments (consecutive `/` or a leading `/`).
  */
-const SAFE_ROOT = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
+const SAFE_ROOT = /^[A-Za-z0-9][A-Za-z0-9._\\/-]*$/;
+
+/**
+ * Allow-pattern for an object id.
+ *
+ * An id is a name, not a path: it must not contain `/` (no traversal into a
+ * subdirectory), `.` (no extension tricks), or any character that would alter
+ * the path `objectPath()` constructs. Strictly alphanumeric plus `-` and `_`,
+ * must start with an alphanumeric character (no leading `-`).
+ *
+ * Deliberately stricter than SAFE_ROOT, which may legitimately contain `/`.
+ */
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/**
+ * Validate an object id at the boundary. Throws `InvalidRefError` if the value
+ * is rejected. An id is a name, not a path — it must contain no `/`, no `..`,
+ * and must not begin with `-`.
+ */
+function validateId(id: string): void {
+  if (id === '') {
+    throw new InvalidRefError('id', id, 'id must not be empty');
+  }
+  if (id.startsWith('-')) {
+    throw new InvalidRefError('id', id, 'id must not start with "-" (argument-injection guard)');
+  }
+  if (id.includes('..')) {
+    throw new InvalidRefError('id', id, 'id must not contain ".." (path-traversal guard)');
+  }
+  if (id.includes('/')) {
+    throw new InvalidRefError('id', id, 'id must not contain "/" — an id is a name, not a path');
+  }
+  if (!SAFE_ID.test(id)) {
+    throw new InvalidRefError('id', id, 'id contains characters outside the allowed set [A-Za-z0-9_-]');
+  }
+}
 
 /**
  * Validate a git ref at the boundary. Throws `InvalidRefError` if the value is
@@ -237,16 +275,17 @@ export interface ResolveOptions {
  * Uses `git show <ref>:<path>` — no checkout, no working-tree mutation. Multiple calls
  * with different refs may run concurrently without interference.
  *
- * Both `ref` and `root` (if supplied) are validated against explicit allow-patterns before
- * reaching the git command. A value that fails validation throws `InvalidRefError` immediately
- * rather than being silently rewritten.
+ * `ref`, `root` (if supplied), and `object.id` are all validated against explicit
+ * allow-patterns before reaching the git command. A value that fails validation throws
+ * `InvalidRefError` immediately rather than being silently rewritten.
  *
  * @param repoPath  Absolute path to the git repository root.
  * @param object    The object to read, identified by kind and id.
  * @param ref       The git ref (branch name, tag, or commit SHA) to read at.
  * @param options   Optional settings; `root` scopes the lookup to a subdirectory.
  * @returns         The raw UTF-8 content of the object at that ref.
- * @throws          `InvalidRefError` if `ref` or `root` fails the input-validation allow-pattern.
+ * @throws          `InvalidRefError` if `ref`, `root`, or `object.id` fails the
+ *                  input-validation allow-pattern.
  * @throws          `ObjectNotFoundError` if git confirmed the object does not exist at the
  *                  given ref (normal non-zero exit).
  * @throws          `ObjectLookupError` if the subprocess was killed by a signal (including
@@ -268,6 +307,7 @@ export async function resolve(
 
   validateRef(ref);
   validateRoot(root);
+  validateId(object.id);
 
   const gitPath = root ? `${root}/${objectPath(object)}` : objectPath(object);
   const refPath = `${ref}:${gitPath}`;

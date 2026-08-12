@@ -248,6 +248,75 @@ describe('render()', () => {
     });
   });
 
+  describe('unvalidated-component fallback: component with no port schema passes props through', () => {
+    // When an adapter implements a component that has no entry in the port
+    // (getContract returns undefined), renderBlock passes block.props directly
+    // to the renderer without schema validation. This branch is the intentional
+    // escape hatch for components that exist in an adapter but not yet in the
+    // port contract.
+
+    const CUSTOM_COMPONENT_ADAPTER: AdapterLike = {
+      name: 'custom-adapter',
+      components: {
+        // 'custom-widget' has no port contract — getContract returns undefined for it.
+        'custom-widget': (props) => {
+          const p = props as { label: string };
+          return `<div class="custom">${p.label}</div>`;
+        },
+      },
+    };
+
+    const CUSTOM_WIDGET_JOURNEY: JourneyDocument = {
+      id: 'custom-journey',
+      title: 'Custom Journey',
+      intent: 'Tests the no-port-schema fallback.',
+      entry: 'screen-a',
+      screens: [
+        {
+          id: 'screen-a',
+          purpose: 'Custom screen.',
+          blocks: [
+            { component: 'custom-widget', props: { label: 'Hello from custom' } },
+          ],
+          actions: [],
+          annotations: [],
+        },
+      ],
+    };
+
+    it('renders the component output (not a gap) when the adapter has a renderer for an out-of-port component', () => {
+      const { html } = render(CUSTOM_WIDGET_JOURNEY, CUSTOM_COMPONENT_ADAPTER);
+      // The adapter's renderer output must appear — not a gap element.
+      expect(html).toContain('Hello from custom');
+      // The gap element uses class="ds-gap" — must not be present.
+      // (The CSS in the document references .ds-gap as a rule, so we check for
+      // the element's class attribute, not the string 'ds-gap' in isolation.)
+      expect(html).not.toContain('class="ds-gap"');
+    });
+
+    it('records no gaps when the out-of-port component renders successfully', () => {
+      const { gaps } = render(CUSTOM_WIDGET_JOURNEY, CUSTOM_COMPONENT_ADAPTER);
+      expect(gaps).toHaveLength(0);
+    });
+
+    it('still produces a gap (with error) when the out-of-port renderer throws', () => {
+      const THROWING_CUSTOM_ADAPTER: AdapterLike = {
+        name: 'throwing-custom-adapter',
+        components: {
+          'custom-widget': (_props) => {
+            throw new Error('custom renderer blew up');
+          },
+        },
+      };
+      const { gaps } = render(CUSTOM_WIDGET_JOURNEY, THROWING_CUSTOM_ADAPTER);
+      const gap = gaps.find((g) => g.component === 'custom-widget');
+      expect(gap).toBeDefined();
+      // A renderer throw sets `error`, not `schemaError` — it is an adapter defect.
+      expect(gap?.error).toBe('custom renderer blew up');
+      expect(gap?.schemaError).toBeUndefined();
+    });
+  });
+
   describe('a journey with only the prompt component implemented', () => {
     it('produces exactly the right number of gap records for the broadband-switch shape', () => {
       // 5 screens, each with a prompt block, plus other blocks that are all gaps

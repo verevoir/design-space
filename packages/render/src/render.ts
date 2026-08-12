@@ -86,7 +86,10 @@ function renderBlock(
     }
   }
 
-  // No port schema for this component — pass props through unvalidated and render.
+  // No port contract for this component — the adapter has a renderer but the
+  // component is not in the port. Pass raw props through without schema
+  // validation. This is the intentional escape hatch for adapter components
+  // that are not yet in the port contract.
   try {
     return renderer(block.props);
   } catch (err) {

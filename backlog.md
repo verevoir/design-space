@@ -19,6 +19,11 @@ edges, each a genuine dependency rather than narrative order.
 This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and
 it is updated in the change that moves it — not afterwards.
 
+**Status lines do not carry test counts.** Two did, and both were wrong — one overstated by ten,
+the other understated by two thirds — which is what a number in prose does: it is a claim with a
+shelf life of one commit, and nothing checks it. Describe what the tests cover; the suite reports
+how many, and it is never out of date.
+
 The two barriers that matter are both **contracts**, and they are why the plan fans at all:
 wave 1 settles the journey schema and wave 2 settles the port, so the three stories in wave 3
 never have to guess either.
@@ -75,7 +80,7 @@ from, so they cannot drift.
 
 **Status.** Done. Zod is the single source; the TypeScript types come from `z.infer` and the
 JSON Schema artefact is emitted from the same schema at build time. Structural checks cover
-dangling action targets and screens unreachable from the entry point. 23 tests.
+dangling action targets and screens unreachable from the entry point.
 
 One defect worth remembering: the emitter was wired to a package script the root build never
 invoked, so the artefact was never produced while `npm run verify` stayed green. The gate now
@@ -104,7 +109,7 @@ demonstrated by reading the same object at two different refs concurrently and g
 content (a checkout would have changed the working tree). Subprocess failures are classified:
 a normal non-zero exit (git answered "not there") surfaces as `ObjectNotFoundError`; a
 signal-killed subprocess (timeout or hung git) surfaces as `ObjectLookupError`, which a caller
-can retry. 11 tests.
+can retry.
 
 The fan was real: 1.1 and 1.2 were built concurrently in separate worktrees, which they needed
 because both run `npm install` and would otherwise have collided on the lockfile.
