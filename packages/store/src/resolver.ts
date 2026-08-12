@@ -9,6 +9,18 @@
  * Reads use `git show <ref>:<path>` via child_process.execFile — no shell string
  * interpolation, no working-tree changes, no checkout. Concurrent reads at different refs
  * are safe because git-show is read-only and does not touch the index or the working tree.
+ *
+ * Input validation
+ * ----------------
+ * Both `ref` and `root` are validated at the boundary against an explicit allow-pattern
+ * before they reach the git command. The validator rejects rather than sanitises — a
+ * bad value fails loudly so the caller can correct it, rather than being silently
+ * rewritten into something that works in an unexpected way.
+ *
+ * `ref`  — must match SAFE_REF (alphanumeric start, then alphanumeric / . _ / - only);
+ *           must not contain `..`; must not begin with `-`.
+ * `root` — must match SAFE_ROOT (same character set); must not contain `..`; must not
+ *           contain an empty segment (consecutive `/` or a leading `/`).
  */
 
 import { execFile } from 'node:child_process';
@@ -94,6 +106,85 @@ export class ObjectLookupError extends Error {
   }
 }
 
+/**
+ * Thrown when `ref` or `root` fails the input-validation allow-pattern.
+ *
+ * This is a caller error — the value supplied does not satisfy the contract.
+ * Retrying with the same value will not help.
+ */
+export class InvalidRefError extends Error {
+  constructor(field: 'ref' | 'root', value: string, reason: string) {
+    super(`invalid ${field}: ${JSON.stringify(value)} — ${reason}`);
+    this.name = 'InvalidRefError';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Input validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Allow-pattern for a git ref (branch name, tag, or commit SHA).
+ *
+ * Must start with an alphanumeric character (guards against a leading `-` which
+ * would make the argument look like a git option). Subsequent characters may be
+ * alphanumeric, `.`, `_`, `/`, or `-`.
+ *
+ * Applied together with an explicit `..` rejection: the pattern alone would
+ * permit `a..b` which is a git range operator and not a valid single-object ref.
+ */
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
+
+/**
+ * Allow-pattern for a repository-relative root path.
+ *
+ * Same character set as SAFE_REF. Applied together with explicit checks for
+ * `..` (path traversal) and empty segments (consecutive `/` or a leading `/`).
+ */
+const SAFE_ROOT = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
+
+/**
+ * Validate a git ref at the boundary. Throws `InvalidRefError` if the value is
+ * rejected. Accepts the empty string only for the `root` field (absent root).
+ */
+function validateRef(ref: string): void {
+  if (ref === '') {
+    throw new InvalidRefError('ref', ref, 'ref must not be empty');
+  }
+  if (ref.startsWith('-')) {
+    throw new InvalidRefError('ref', ref, 'ref must not start with "-" (argument-injection guard)');
+  }
+  if (ref.includes('..')) {
+    throw new InvalidRefError('ref', ref, 'ref must not contain ".." (range operator guard)');
+  }
+  if (!SAFE_REF.test(ref)) {
+    throw new InvalidRefError('ref', ref, 'ref contains characters outside the allowed set [A-Za-z0-9._/-]');
+  }
+}
+
+/**
+ * Validate a root path segment at the boundary. An absent (empty string) root
+ * is valid — it means the collection is at the repository root. Throws
+ * `InvalidRefError` if the value is rejected.
+ */
+function validateRoot(root: string): void {
+  if (root === '') {
+    return; // absent root is valid
+  }
+  if (root.startsWith('-')) {
+    throw new InvalidRefError('root', root, 'root must not start with "-" (argument-injection guard)');
+  }
+  if (root.includes('..')) {
+    throw new InvalidRefError('root', root, 'root must not contain ".." (path-traversal guard)');
+  }
+  if (root.startsWith('/') || root.includes('//')) {
+    throw new InvalidRefError('root', root, 'root must not contain empty path segments');
+  }
+  if (!SAFE_ROOT.test(root)) {
+    throw new InvalidRefError('root', root, 'root contains characters outside the allowed set [A-Za-z0-9._/-]');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Path construction (private to this module)
 // ---------------------------------------------------------------------------
@@ -146,11 +237,16 @@ export interface ResolveOptions {
  * Uses `git show <ref>:<path>` — no checkout, no working-tree mutation. Multiple calls
  * with different refs may run concurrently without interference.
  *
+ * Both `ref` and `root` (if supplied) are validated against explicit allow-patterns before
+ * reaching the git command. A value that fails validation throws `InvalidRefError` immediately
+ * rather than being silently rewritten.
+ *
  * @param repoPath  Absolute path to the git repository root.
  * @param object    The object to read, identified by kind and id.
  * @param ref       The git ref (branch name, tag, or commit SHA) to read at.
  * @param options   Optional settings; `root` scopes the lookup to a subdirectory.
  * @returns         The raw UTF-8 content of the object at that ref.
+ * @throws          `InvalidRefError` if `ref` or `root` fails the input-validation allow-pattern.
  * @throws          `ObjectNotFoundError` if git confirmed the object does not exist at the
  *                  given ref (normal non-zero exit).
  * @throws          `ObjectLookupError` if the subprocess was killed by a signal (including
@@ -163,7 +259,16 @@ export async function resolve(
   ref: string,
   options: ResolveOptions = {},
 ): Promise<string> {
-  const root = options.root?.replace(/^\/+|\/+$/g, '') ?? '';
+  // Strip only trailing slashes from root — a trailing slash on 'collections/'
+  // is unambiguous and normalising it avoids a surprising rejection. Leading
+  // slashes are NOT stripped: an absolute path supplied as root would silently
+  // become a relative one after stripping, masking a caller error. The validator
+  // below rejects a leading slash explicitly.
+  const root = options.root?.replace(/\/+$/g, '') ?? '';
+
+  validateRef(ref);
+  validateRoot(root);
+
   const gitPath = root ? `${root}/${objectPath(object)}` : objectPath(object);
   const refPath = `${ref}:${gitPath}`;
 

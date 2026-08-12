@@ -13,8 +13,8 @@ the previous wave lands before the next begins. The numbering states merge order
 topology.
 
 **Width:** fans to 2 after wave 0, narrows to 1 for the steel thread, and fans to 3 after wave 2.
-**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight edges, each a genuine
-dependency rather than narrative order.
+**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight stories, so seven
+edges, each a genuine dependency rather than narrative order.
 
 This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and
 it is updated in the change that moves it — not afterwards.
@@ -146,9 +146,14 @@ deploy.
 **Status.** In progress — code half delivered; deployment half not yet started.
 
 Delivered: `prompt` is defined in the port with a Zod prop schema, implemented by the sketch
-adapter, rendered into a standalone HTML document by the render package, checked by the gate (gap
-vs defect vs schema-validation distinction), and served by the studio server. The prerender path
-reads the journey through the store. `startServer()` rejects with a legible message on EADDRINUSE,
+adapter, rendered into a standalone HTML document by the render package, and checked by the gate
+(gap vs defect vs schema-validation distinction). `prerender` reads the journey through the store
+and writes a document; the studio server serves a document handed to it.
+
+**Nothing wires those two together.** There is no runnable entry point that reads a journey and
+starts a server — each half is exercised only by its own tests. Saying the journey is "served"
+would overstate what exists; that wiring arrives with the deployment half, which is what the
+container needs anyway. `startServer()` rejects with a legible message on EADDRINUSE,
 detaches its startup error handler after the promise settles, and forwards post-startup runtime
 errors to stderr. Tests cover the render pipeline, the gap/defect/schema distinction, the security
 boundary (exception text absent from HTML), the listen-error path, and the sketch adapter's prompt

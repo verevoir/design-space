@@ -58,6 +58,31 @@ const THROWING_ADAPTER: AdapterLike = {
   },
 };
 
+/**
+ * A journey where the prompt block has props that are invalid against the port
+ * schema (heading is required but absent). render() will set schemaError on the
+ * gap record; gate must classify this as kind='schema', not 'gap' or 'defect'.
+ */
+const SCHEMA_INVALID_JOURNEY: JourneyDocument = {
+  id: 'gate-schema-test',
+  title: 'Schema invalid journey',
+  intent: 'Forces a schema-validation gap.',
+  entry: 'screen-1',
+  screens: [
+    {
+      id: 'screen-1',
+      purpose: 'Schema invalid screen.',
+      blocks: [
+        // heading is required by the prompt port schema; omitting it causes a
+        // schema-validation failure in render() — schemaError is set on the gap.
+        { component: 'prompt', props: {} },
+      ],
+      actions: [],
+      annotations: [],
+    },
+  ],
+};
+
 // ---------------------------------------------------------------------------
 // Tests — gaps come from a real render() call, not a hand-made fixture
 // ---------------------------------------------------------------------------
@@ -160,6 +185,49 @@ describe('check()', () => {
       expect(f?.kind).toBe('defect');
       // The error field must reflect the actual thrown message, not 'unknown error'
       expect((f as { kind: 'defect'; error: string } | undefined)?.error).toBe('renderer exploded');
+    });
+  });
+
+  describe('schema finding classification', () => {
+    // The gate classifies a GapRecord that carries schemaError as kind='schema'.
+    // This is the third finding kind (alongside gap and defect) and represents a
+    // data problem: the adapter has a renderer but the block's props are invalid
+    // against the port contract, so the renderer was never called.
+
+    it('classifies a gap with schemaError as kind=schema, not gap or defect', () => {
+      // SKETCH_LIKE_ADAPTER has a prompt renderer, but SCHEMA_INVALID_JOURNEY
+      // passes invalid props — render() will produce a gap with schemaError set.
+      const { gaps } = render(SCHEMA_INVALID_JOURNEY, SKETCH_LIKE_ADAPTER);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
+      const f = report.findings.find((x) => x.component === 'prompt');
+      expect(f?.kind).toBe('schema');
+    });
+
+    it('schema finding carries the schemaError message from the gap record', () => {
+      const { gaps } = render(SCHEMA_INVALID_JOURNEY, SKETCH_LIKE_ADAPTER);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
+      const f = report.findings.find((x) => x.component === 'prompt');
+      expect(f?.kind).toBe('schema');
+      // The schemaError field must be a non-empty string from the Zod failure.
+      const schemaFinding = f as { kind: 'schema'; schemaError: string } | undefined;
+      expect(typeof schemaFinding?.schemaError).toBe('string');
+      expect(schemaFinding?.schemaError.length).toBeGreaterThan(0);
+    });
+
+    it('schema finding carries the correct screenId', () => {
+      const { gaps } = render(SCHEMA_INVALID_JOURNEY, SKETCH_LIKE_ADAPTER);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
+      const f = report.findings.find((x) => x.component === 'prompt');
+      expect(f?.screenId).toBe('screen-1');
+    });
+
+    it('schema finding does not count prompt as missing even though it did not render', () => {
+      // prompt is implemented in SKETCH_LIKE_ADAPTER; the schema failure does not
+      // move it from implemented to missing.
+      const { gaps } = render(SCHEMA_INVALID_JOURNEY, SKETCH_LIKE_ADAPTER);
+      const report = check(SKETCH_LIKE_ADAPTER, gaps);
+      expect(report.implemented).toContain('prompt');
+      expect(report.missing).not.toContain('prompt');
     });
   });
 

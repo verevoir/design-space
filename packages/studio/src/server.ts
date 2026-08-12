@@ -63,8 +63,11 @@ export function createStudioServer(options: ServerOptions): Server {
  *
  * Reads PORT from the environment (default 8080) and binds to 0.0.0.0.
  * Returns a promise that resolves to the listening server, or rejects with a
- * legible error if the port is unavailable (EADDRINUSE) or binding otherwise
- * fails.
+ * legible error if:
+ *   - PORT is set to a non-integer or out-of-range value (1–65535) — rejected
+ *     immediately so a misconfigured container fails loudly at startup rather
+ *     than silently binding to an unexpected port.
+ *   - The port is unavailable (EADDRINUSE) or binding otherwise fails.
  *
  * After the server is listening, any subsequent runtime socket errors are
  * forwarded to stderr rather than being silently swallowed. The one-shot
@@ -72,7 +75,17 @@ export function createStudioServer(options: ServerOptions): Server {
  * a post-startup error and call `reject` on an already-settled promise.
  */
 export function startServer(options: ServerOptions): Promise<Server> {
-  const port = Number(process.env['PORT'] ?? 8080);
+  const rawPort = process.env['PORT'];
+  const port = rawPort !== undefined ? Number(rawPort) : 8080;
+
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return Promise.reject(
+      new Error(
+        `Studio server failed to start: PORT is invalid (${JSON.stringify(rawPort)}) — must be an integer between 1 and 65535`,
+      ),
+    );
+  }
+
   const server = createStudioServer(options);
   return new Promise((resolve, reject) => {
     function onStartupError(err: NodeJS.ErrnoException) {

@@ -184,4 +184,80 @@ describe('startServer()', () => {
     }
     expect(caughtMessage).toContain(String(port));
   });
+
+  // ---------------------------------------------------------------------------
+  // Malformed PORT — rejects immediately rather than silently binding a random port
+  //
+  // When PORT is set to a non-integer or out-of-range value the server must
+  // reject the returned promise with a legible error. This is a startup
+  // invariant: a container with a misconfigured PORT env var must fail loudly so
+  // the operator can see and fix it, rather than silently binding to port 0 or
+  // some other unexpected port that works until someone looks.
+  // ---------------------------------------------------------------------------
+
+  it('rejects immediately when PORT is set to a non-numeric string', async () => {
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = 'not-a-port';
+    try {
+      await expect(
+        startServer({ rendered: makeRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
+  it('error message for a malformed PORT includes the bad value', async () => {
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = 'badvalue';
+    let caughtMessage = '';
+    try {
+      await startServer({ rendered: makeRendered('<html></html>') });
+    } catch (err) {
+      caughtMessage = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+    expect(caughtMessage).toContain('badvalue');
+  });
+
+  it('rejects when PORT is set to 0 (out of valid range 1-65535)', async () => {
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = '0';
+    try {
+      await expect(
+        startServer({ rendered: makeRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
+  it('rejects when PORT is set to a decimal number', async () => {
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = '80.5';
+    try {
+      await expect(
+        startServer({ rendered: makeRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
 });

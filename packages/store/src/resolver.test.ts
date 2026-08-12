@@ -1,25 +1,27 @@
 /**
  * Tests for the (object, ref) resolver.
  *
- * Two layers:
+ * Three layers:
  *   1. Integration — exercised against a real temporary git repository so git-show, the object
  *      layout and the no-checkout guarantee are confirmed against an actual process.
  *   2. Subprocess failure classification — fake git shims that exit with a normal code or a
  *      signal confirm that the resolver distinguishes the two failure kinds correctly:
  *        - a non-zero normal exit  → ObjectNotFoundError (git answered "not there")
  *        - a signal kill           → ObjectLookupError   (question unanswered; may retry)
+ *   3. Input validation — confirms that invalid ref/root values are rejected at the boundary
+ *      with InvalidRefError before any git subprocess is spawned.
  *
  * The `timeout: 10_000` option in the resolver's execFileAsync call sends SIGTERM when a
  * subprocess runs too long; the rejection it produces sets `signal: 'SIGTERM'` on the error
  * object, which is exactly what ObjectLookupError tests for. The signal-kill test below
- * exercises that path directly, without waiting 10 s, by using a shim that signals itself.
+ * exercises that branch via a shim that sends SIGTERM to itself, without waiting 10 s.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolve, ObjectNotFoundError, ObjectLookupError } from './resolver.js';
+import { resolve, ObjectNotFoundError, ObjectLookupError, InvalidRefError } from './resolver.js';
 
 // ---------------------------------------------------------------------------
 // Real git repository fixture
@@ -40,6 +42,14 @@ beforeAll(() => {
   // Create the layout the resolver expects.
   mkdirSync(join(repoDir, 'journeys'));
   writeFileSync(join(repoDir, 'journeys', 'test-journey.json'), JSON.stringify({ id: 'test-journey', v: 1 }));
+
+  // Also create a rooted collection for the root-option tests.
+  mkdirSync(join(repoDir, 'collections'), { recursive: true });
+  mkdirSync(join(repoDir, 'collections', 'journeys'), { recursive: true });
+  writeFileSync(
+    join(repoDir, 'collections', 'journeys', 'rooted-journey.json'),
+    JSON.stringify({ id: 'rooted-journey', v: 10 }),
+  );
 
   execSync('git add .', { cwd: repoDir, stdio: 'pipe' });
   execSync('git commit -m "first"', { cwd: repoDir, stdio: 'pipe' });
@@ -108,6 +118,42 @@ describe('resolve() against a real git repository', () => {
   it('throws ObjectNotFoundError for a ref that does not exist', async () => {
     await expect(
       resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'nonexistent-ref'),
+    ).rejects.toBeInstanceOf(ObjectNotFoundError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// root option — scopes the lookup to a subdirectory
+// ---------------------------------------------------------------------------
+
+describe('resolve() with the root option', () => {
+  it('reads an object from a subdirectory when root is supplied', async () => {
+    const raw = await resolve(
+      repoDir,
+      { kind: 'journey', id: 'rooted-journey' },
+      commitSha,
+      { root: 'collections' },
+    );
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.id).toBe('rooted-journey');
+    expect(parsed.v).toBe(10);
+  });
+
+  it('strips a trailing slash from root before building the path', async () => {
+    // 'collections/' (trailing slash) must resolve the same object as 'collections'.
+    const raw = await resolve(
+      repoDir,
+      { kind: 'journey', id: 'rooted-journey' },
+      commitSha,
+      { root: 'collections/' },
+    );
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.id).toBe('rooted-journey');
+  });
+
+  it('throws ObjectNotFoundError when the object is absent under the given root', async () => {
+    await expect(
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: 'collections' }),
     ).rejects.toBeInstanceOf(ObjectNotFoundError);
   });
 });
@@ -200,5 +246,115 @@ describe('resolve() subprocess failure classification', () => {
       process.env['PATH'] = origPath;
       rmSync(shimDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Input validation — ref and root are rejected at the boundary
+//
+// A bad value throws InvalidRefError immediately; no git subprocess is spawned.
+// These tests prove concrete attack vectors are rejected:
+//   - a ref beginning with '-' (argument-injection via git option syntax)
+//   - a root containing '..' (path traversal outside the intended collection)
+// ---------------------------------------------------------------------------
+
+describe('resolve() input validation', () => {
+  describe('ref validation', () => {
+    it('rejects a ref that begins with "-" (argument-injection guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, '--upload-pack=x'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a leading-dash ref names the invalid value', async () => {
+      const err = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, '--upload-pack=x')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('--upload-pack=x');
+    });
+
+    it('rejects a ref containing ".." (git range-operator guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'main..evil'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects an empty ref', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, ''),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects a ref containing characters outside the allowed set', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'main;evil'),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts a valid branch name ref', async () => {
+      // The ref does not exist in the repo, so we expect ObjectNotFoundError —
+      // but NOT InvalidRefError. This proves the allow-pattern passes valid refs.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'valid-branch'),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    });
+
+    it('accepts a commit SHA ref', async () => {
+      // commitSha is a real SHA in the repo — expect successful resolution.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('root validation', () => {
+    it('rejects a root containing ".." (path-traversal guard)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '../..' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('InvalidRefError for a dotdot root names the invalid value', async () => {
+      const err = await resolve(
+        repoDir,
+        { kind: 'journey', id: 'test-journey' },
+        commitSha,
+        { root: '../..' },
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InvalidRefError);
+      expect((err as Error).message).toContain('../..');
+    });
+
+    it('rejects a root that begins with "-"', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '-evil' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects a root with an empty segment (leading slash)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: '/absolute/path' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('rejects a root with consecutive slashes (empty inner segment)', async () => {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha, { root: 'a//b' }),
+      ).rejects.toBeInstanceOf(InvalidRefError);
+    });
+
+    it('accepts an absent root (no root option)', async () => {
+      // resolve without options should not throw InvalidRefError
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts a valid root path', async () => {
+      // 'collections' is a real directory; rooted-journey.json is in it.
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'rooted-journey' }, commitSha, { root: 'collections' }),
+      ).resolves.toBeDefined();
+    });
   });
 });
