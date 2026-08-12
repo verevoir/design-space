@@ -11,4 +11,6 @@ export interface AdapterLike {
 export interface GapRecord {
   readonly screenId: string;
   readonly component: string;
+  /** Set when the adapter had a renderer but it threw. Carries the error message text. */
+  readonly error?: string;
 }

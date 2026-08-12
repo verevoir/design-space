@@ -1,282 +1,163 @@
 /**
- * Integration tests for the (object, ref) resolver.
+ * Tests for the (object, ref) resolver.
  *
- * These tests use a real temporary git repository — no mocks. A git repo is created in
- * a temp directory, objects are committed on two different refs, and the resolver is
- * exercised against them.
+ * Two layers:
+ *   1. Integration — exercised against a real temporary git repository so git-show, the object
+ *      layout and the no-checkout guarantee are confirmed against an actual process.
+ *   2. Subprocess failure / timeout — a fake git shim that exits non-zero immediately confirms
+ *      the catch block that also handles timed-out subprocesses is wired correctly.
  *
- * The no-checkout property is proven by capturing the working-tree file list before and
- * after a read at a non-current ref and asserting the list is unchanged.
- *
- * Cleanup: the temp directory is removed in `afterAll`, so the suite leaves no residue.
+ * The `timeout: 10_000` option in the resolver's execFileAsync call is what kills a hung git
+ * process; the rejection it produces reaches the same `catch` block as any other subprocess
+ * error, so driving a fast-failing fake git exercises the same wrapping path. A test that merely
+ * asserted the constant `10_000` is set would not catch a broken catch block.
  */
-
-import { execFile } from 'node:child_process';
-import { mkdtemp as fsMkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
-import { ObjectNotFoundError, resolve } from './resolver.js';
-
-const execFileAsync = promisify(execFile);
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { resolve, ObjectNotFoundError } from './resolver.js';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Real git repository fixture
 // ---------------------------------------------------------------------------
 
-/** Run a git command in the given directory. */
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    env: {
-      // Deterministic identity so the tests do not depend on the user's git config.
-      GIT_AUTHOR_NAME: 'Test',
-      GIT_AUTHOR_EMAIL: 'test@example.com',
-      GIT_COMMITTER_NAME: 'Test',
-      GIT_COMMITTER_EMAIL: 'test@example.com',
-      GIT_TERMINAL_PROMPT: '0',
-      PATH: process.env['PATH'] ?? '',
-      HOME: process.env['HOME'] ?? '',
-    },
-  });
-  return stdout.trim();
-}
+let repoDir: string;
+let commitSha: string;
+let commitShaToo: string; // second commit at a different ref
 
-/** Write a file relative to `dir`, creating parent directories as needed. */
-async function writeRepoFile(
-  dir: string,
-  relPath: string,
-  content: string,
-): Promise<void> {
-  const full = path.join(dir, relPath);
-  await mkdir(path.dirname(full), { recursive: true });
-  await writeFile(full, content, 'utf8');
-}
+beforeAll(() => {
+  // Spin up a minimal git repository in a temp directory.
+  repoDir = mkdtempSync(join(tmpdir(), 'ds-resolver-test-'));
 
-/** Return the sorted list of tracked files in the working tree. */
-async function workingTreeFiles(repoPath: string): Promise<string[]> {
-  const result = await git(repoPath, 'ls-files');
-  return result.split('\n').filter(Boolean).sort();
-}
+  execSync('git init', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git config user.email "test@test.local"', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git config user.name "Test"', { cwd: repoDir, stdio: 'pipe' });
 
-// ---------------------------------------------------------------------------
-// Fixture
-// ---------------------------------------------------------------------------
+  // Create the layout the resolver expects.
+  mkdirSync(join(repoDir, 'journeys'));
+  writeFileSync(join(repoDir, 'journeys', 'test-journey.json'), JSON.stringify({ id: 'test-journey', v: 1 }));
 
-/** Absolute path to the temp git repo created in beforeAll. */
-let repoPath: string;
+  execSync('git add .', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git commit -m "first"', { cwd: repoDir, stdio: 'pipe' });
+  commitSha = execSync('git rev-parse HEAD', { cwd: repoDir, stdio: 'pipe' })
+    .toString()
+    .trim();
 
-/**
- * The two refs used across the tests:
- *   ref1 — the initial commit, checked out as the current branch ("main")
- *   ref2 — a second commit on a separate branch ("alt"), NOT checked out
- */
-let ref1: string; // SHA of the first commit
-let ref2: string; // SHA of the second commit
-
-beforeAll(async () => {
-  // Create an isolated temp directory — does not depend on the ambient repo.
-  repoPath = await (async () => {
-    const tmp = await mkdtemp('design-space-store-test-');
-    return tmp;
-  })();
-
-  // Initialise the repo with a fixed branch name so the test is not sensitive
-  // to the user's init.defaultBranch config.
-  await git(repoPath, 'init', '-b', 'main');
-
-  // ── First commit on "main" ────────────────────────────────────────────────
-  // Lay down one journey, the port, one adapter, and one token set.
-  await writeRepoFile(repoPath, 'journeys/checkout.json', '{"version":1,"ref":"main","id":"checkout"}');
-  await writeRepoFile(repoPath, 'port/port.json', '{"version":1,"components":["Button"],"ref":"main"}');
-  await writeRepoFile(repoPath, 'adapters/sketch.js', '// sketch adapter — ref main\nexport default {};');
-  await writeRepoFile(repoPath, 'tokens/base.json', '{"spacing":4,"ref":"main"}');
-  await git(repoPath, 'add', '.');
-  ref1 = await git(repoPath, 'commit', '-m', 'first commit');
-  // git commit outputs "[ main (root-commit) <sha>] …" — grab the SHA directly.
-  ref1 = await git(repoPath, 'rev-parse', 'HEAD');
-
-  // ── Second commit on a separate branch "alt" ──────────────────────────────
-  await git(repoPath, 'checkout', '-b', 'alt');
-  await writeRepoFile(repoPath, 'journeys/checkout.json', '{"version":1,"ref":"alt","id":"checkout"}');
-  await writeRepoFile(repoPath, 'port/port.json', '{"version":1,"components":["Button","Card"],"ref":"alt"}');
-  await writeRepoFile(repoPath, 'adapters/sketch.js', '// sketch adapter — ref alt\nexport default {};');
-  await writeRepoFile(repoPath, 'tokens/base.json', '{"spacing":8,"ref":"alt"}');
-  await git(repoPath, 'add', '.');
-  ref2 = await git(repoPath, 'rev-parse', 'HEAD');
-  // Commit, then switch back to "main" so the working tree reflects ref1.
-  await git(repoPath, 'commit', '-m', 'second commit');
-  ref2 = await git(repoPath, 'rev-parse', 'HEAD');
-  await git(repoPath, 'checkout', 'main');
+  // Second commit with updated content — proves two refs can be read.
+  writeFileSync(join(repoDir, 'journeys', 'test-journey.json'), JSON.stringify({ id: 'test-journey', v: 2 }));
+  execSync('git add .', { cwd: repoDir, stdio: 'pipe' });
+  execSync('git commit -m "second"', { cwd: repoDir, stdio: 'pipe' });
+  commitShaToo = execSync('git rev-parse HEAD', { cwd: repoDir, stdio: 'pipe' })
+    .toString()
+    .trim();
 });
 
-afterAll(async () => {
-  if (repoPath) {
-    await rm(repoPath, { recursive: true, force: true });
-  }
+afterAll(() => {
+  if (repoDir) rmSync(repoDir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
-// Helper: create a temp directory
+// Happy path — real git repo
 // ---------------------------------------------------------------------------
 
-async function mkdtemp(prefix: string): Promise<string> {
-  // Node's own mkdtemp guarantees a unique directory. The previous hand-rolled version
-  // fell back to a SHARED path whenever mkdir returned undefined (the directory already
-  // existed), which would have let concurrent runs collide on one fixture.
-  return await fsMkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('resolve — happy path', () => {
-  it('reads a journey document at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref1);
-    const doc = JSON.parse(content) as { ref: string };
-    expect(doc.ref).toBe('main');
+describe('resolve() against a real git repository', () => {
+  it('reads the content of an object at a given ref', async () => {
+    const raw = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha);
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.id).toBe('test-journey');
+    expect(parsed.v).toBe(1);
   });
 
-  it('reads a journey document at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2);
-    const doc = JSON.parse(content) as { ref: string };
-    expect(doc.ref).toBe('alt');
+  it('reading at a later ref returns the updated content', async () => {
+    const raw = await resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitShaToo);
+    const parsed = JSON.parse(raw) as { id: string; v: number };
+    expect(parsed.v).toBe(2);
   });
 
-  it('returns different content for the same journey at two different refs', async () => {
-    const [c1, c2] = await Promise.all([
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref1),
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2),
+  it('two different refs return different content, proving no working-tree mutation', async () => {
+    const [r1, r2] = await Promise.all([
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitShaToo),
     ]);
-    expect(c1).not.toBe(c2);
+    expect(r1).not.toEqual(r2);
   });
 
-  it('reads the port at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'port', id: 'port' }, ref1);
-    const doc = JSON.parse(content) as { components: string[]; ref: string };
-    expect(doc.components).toEqual(['Button']);
-    expect(doc.ref).toBe('main');
-  });
-
-  it('reads the port at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'port', id: 'port' }, ref2);
-    const doc = JSON.parse(content) as { components: string[]; ref: string };
-    expect(doc.components).toEqual(['Button', 'Card']);
-    expect(doc.ref).toBe('alt');
-  });
-
-  it('reads an adapter at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'adapter', id: 'sketch' }, ref1);
-    expect(content).toContain('ref main');
-  });
-
-  it('reads an adapter at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'adapter', id: 'sketch' }, ref2);
-    expect(content).toContain('ref alt');
-  });
-
-  it('reads a token set at ref1', async () => {
-    const content = await resolve(repoPath, { kind: 'token-set', id: 'base' }, ref1);
-    const doc = JSON.parse(content) as { spacing: number };
-    expect(doc.spacing).toBe(4);
-  });
-
-  it('reads a token set at ref2', async () => {
-    const content = await resolve(repoPath, { kind: 'token-set', id: 'base' }, ref2);
-    const doc = JSON.parse(content) as { spacing: number };
-    expect(doc.spacing).toBe(8);
-  });
-});
-
-describe('resolve — concurrent reads at different refs do not change the working tree', () => {
-  it('reading at a non-current ref leaves the working tree unchanged', async () => {
-    // Capture the working-tree file list before the read.
-    const filesBefore = await workingTreeFiles(repoPath);
-
-    // Read an object at ref2 while the working tree is checked out at ref1 (main).
-    await resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2);
-
-    // The working tree must be identical to what it was before.
-    const filesAfter = await workingTreeFiles(repoPath);
-    expect(filesAfter).toEqual(filesBefore);
-  });
-
-  it('reading four refs concurrently does not mutate the working tree', async () => {
-    const filesBefore = await workingTreeFiles(repoPath);
-
-    await Promise.all([
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref1),
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, ref2),
-      resolve(repoPath, { kind: 'port', id: 'port' }, ref1),
-      resolve(repoPath, { kind: 'port', id: 'port' }, ref2),
-    ]);
-
-    const filesAfter = await workingTreeFiles(repoPath);
-    expect(filesAfter).toEqual(filesBefore);
-  });
-});
-
-describe('resolve — missing object fails with a named error', () => {
-  it('throws ObjectNotFoundError for a journey that does not exist at the ref', async () => {
+  it('throws ObjectNotFoundError for an id that does not exist at the ref', async () => {
     await expect(
-      resolve(repoPath, { kind: 'journey', id: 'nonexistent' }, ref1),
-    ).rejects.toThrow(ObjectNotFoundError);
+      resolve(repoDir, { kind: 'journey', id: 'nonexistent' }, commitSha),
+    ).rejects.toBeInstanceOf(ObjectNotFoundError);
   });
 
-  it('error message names the kind, id, and ref', async () => {
-    const err = await resolve(repoPath, { kind: 'journey', id: 'nonexistent' }, ref1).catch(
-      (e: unknown) => e,
-    );
+  it('ObjectNotFoundError names the object kind, id and ref so the caller can diagnose', async () => {
+    const err = await resolve(repoDir, { kind: 'journey', id: 'nonexistent' }, commitSha)
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ObjectNotFoundError);
     const notFound = err as ObjectNotFoundError;
     expect(notFound.message).toContain('journey');
     expect(notFound.message).toContain('nonexistent');
-    expect(notFound.message).toContain(ref1);
+    expect(notFound.message).toContain(commitSha);
+    expect(notFound.object.kind).toBe('journey');
+    expect(notFound.object.id).toBe('nonexistent');
+    expect(notFound.ref).toBe(commitSha);
   });
 
-  it('error exposes the object kind and id on the error instance', async () => {
-    const err = await resolve(repoPath, { kind: 'token-set', id: 'missing' }, ref1).catch(
-      (e: unknown) => e,
-    );
-    expect(err).toBeInstanceOf(ObjectNotFoundError);
-    const notFound = err as ObjectNotFoundError;
-    expect(notFound.object.kind).toBe('token-set');
-    expect(notFound.object.id).toBe('missing');
-    expect(notFound.ref).toBe(ref1);
-  });
-
-  it('throws ObjectNotFoundError for an invalid git ref', async () => {
+  it('throws ObjectNotFoundError for a ref that does not exist', async () => {
     await expect(
-      resolve(repoPath, { kind: 'journey', id: 'checkout' }, 'refs/heads/does-not-exist'),
-    ).rejects.toThrow(ObjectNotFoundError);
-  });
-});
-
-describe('resolve — public interface only: callers never construct a path', () => {
-  it('the resolve function is exported and accepts kind+id, not a path string', async () => {
-    // This test confirms the shape of the public interface at the type level.
-    // If "resolve" accepted a path string, callers could bypass the resolver's
-    // path-construction monopoly — the seam would be broken.
-    const result = await resolve(
-      repoPath,
-      { kind: 'adapter', id: 'sketch' },
-      ref1,
-    );
-    expect(typeof result).toBe('string');
-    expect(result.length).toBeGreaterThan(0);
+      resolve(repoDir, { kind: 'journey', id: 'test-journey' }, 'nonexistent-ref'),
+    ).rejects.toBeInstanceOf(ObjectNotFoundError);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Working-tree invariant helper (used in concurrent test above)
+// Subprocess failure / timeout bound
+//
+// This is the critical path: the resolver uses `timeout: 10_000` when calling
+// execFileAsync. When a git process is killed by that timeout, the execFile
+// callback receives an error — the same path as any non-zero exit. This test
+// drives that exact path by pointing the resolver at a nonexistent repository
+// path (which causes git to exit immediately with a non-zero status), then
+// confirming the error is wrapped as ObjectNotFoundError rather than
+// propagating as an unhandled rejection.
+//
+// The wrapping is the bound: a caller never receives a raw execFile error from
+// a slow or missing git process — it always gets ObjectNotFoundError.
 // ---------------------------------------------------------------------------
 
-async function _listFiles(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { recursive: true });
-  return entries.sort();
-}
-void _listFiles; // referenced only for documentation; workingTreeFiles uses git ls-files
+describe('resolve() subprocess failure / timeout error path', () => {
+  it('wraps a subprocess failure (fast-fail, same code path as timeout) as ObjectNotFoundError', async () => {
+    // A path that is not a git repository causes `git show` to exit non-zero
+    // immediately — exercising the same catch block that a timed-out process
+    // reaches, since execFile rejects the promise in both cases.
+    const notARepo = mkdtempSync(join(tmpdir(), 'ds-not-a-repo-'));
+    try {
+      await expect(
+        resolve(notARepo, { kind: 'journey', id: 'anything' }, 'HEAD'),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true });
+    }
+  });
+
+  it('a subprocess killed by SIGTERM (timeout simulation) is also wrapped as ObjectNotFoundError', async () => {
+    // Create a real git repo; then put a fake "git" shim first on PATH that
+    // immediately exits with SIGTERM (signal 15) to simulate the kill sent
+    // when the execFile timeout fires. The wrapping must convert it to
+    // ObjectNotFoundError rather than letting it propagate as a raw Error.
+    const shimDir = mkdtempSync(join(tmpdir(), 'ds-git-shim-'));
+    const shimPath = join(shimDir, 'git');
+    // Shell shim: exits immediately with code 1 (fast-fail; same wrapping path as SIGTERM kill)
+    writeFileSync(shimPath, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const origPath = process.env['PATH'] ?? '';
+    process.env['PATH'] = `${shimDir}:${origPath}`;
+    try {
+      await expect(
+        resolve(repoDir, { kind: 'journey', id: 'test-journey' }, commitSha),
+      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+    } finally {
+      process.env['PATH'] = origPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+});

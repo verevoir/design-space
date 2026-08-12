@@ -6,8 +6,11 @@
  * case. Font families are declared here; assets are not fetched from a network
  * at runtime — the browser falls back to the generic stack gracefully.
  *
- * Provisional character is carried through typography and colour (handwriting
- * face, warm paper, ink rather than black, hard shadow) not wobbly geometry.
+ * These values declare the provisional character — warm paper background,
+ * ink colour, handwriting font families, and a hard-offset shadow — but they
+ * are only applied to the page when an adapter or document explicitly includes
+ * them. The wave 2S.1 render document uses its own inline styles and does not
+ * yet consume these properties.
  */
 export const SKETCH_CSS_CUSTOM_PROPERTIES = `
   --ds-paper: #f0eee9;

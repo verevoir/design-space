@@ -134,6 +134,10 @@ export async function resolve(
       encoding: 'utf8',
       // Prevent any git pager from blocking the process.
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      // Bound the subprocess so a hung git process does not stall the caller
+      // indefinitely. 10 s is generous for a local read; treat timeout as
+      // not-found so callers receive a legible ObjectNotFoundError.
+      timeout: 10_000,
     });
     return stdout;
   } catch (err) {

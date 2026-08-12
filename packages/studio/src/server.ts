@@ -62,11 +62,22 @@ export function createStudioServer(options: ServerOptions): Server {
  * Start the studio server.
  *
  * Reads PORT from the environment (default 8080) and binds to 0.0.0.0.
- * Returns the listening server so callers can close it.
+ * Returns a promise that resolves to the listening server, or rejects with a
+ * legible error if the port is unavailable (EADDRINUSE) or binding otherwise
+ * fails \u2014 so callers never receive an unhandled 'error' event.
  */
-export function startServer(options: ServerOptions): Server {
+export function startServer(options: ServerOptions): Promise<Server> {
   const port = Number(process.env['PORT'] ?? 8080);
   const server = createStudioServer(options);
-  server.listen(port, '0.0.0.0');
-  return server;
+  return new Promise((resolve, reject) => {
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      const detail = err.code === 'EADDRINUSE'
+        ? `port ${port} is already in use`
+        : err.message;
+      reject(new Error(`Studio server failed to start: ${detail}`, { cause: err }));
+    });
+    server.listen(port, '0.0.0.0', () => {
+      resolve(server);
+    });
+  });
 }

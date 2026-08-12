@@ -64,23 +64,18 @@ export function check(
     (name) => !Object.prototype.hasOwnProperty.call(adapter.components, name),
   );
 
-  // Collect all unique (component, screenId) combinations from journey blocks
-  // to classify each gap record as a gap or defect.
-  const defectComponents = new Set<string>();
-
-  // A defect is a component that the adapter HAS but that rendered badly.
-  // We detect this by checking whether the component appears in the adapter
-  // yet also appears in the gap list.
+  // Classify each gap record: if the adapter has a renderer for the component
+  // but render() still recorded a gap for it, the renderer threw — a defect.
+  // If there is no renderer at all, it is a plain gap.
   const findings: Finding[] = renderGaps.map((gap) => {
     if (Object.prototype.hasOwnProperty.call(adapter.components, gap.component)) {
       // Renderer existed but threw — that is a defect.
-      const errorMatch = gap.component.match(/\[render error: (.+)\]$/);
-      defectComponents.add(gap.component);
+      // The error text is carried on the GapRecord.error field set by render().
       return {
         kind: 'defect' as const,
         component: gap.component,
         screenId: gap.screenId,
-        error: errorMatch ? (errorMatch[1] ?? 'unknown error') : 'unknown error',
+        error: gap.error ?? 'unknown error',
       };
     }
     return {

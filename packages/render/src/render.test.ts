@@ -211,4 +211,58 @@ describe('render()', () => {
       expect(gaps.map((g) => g.component).sort()).toEqual(['another-missing', 'unknown-widget']);
     });
   });
+
+  describe('security: internal exception text never reaches shipped HTML', () => {
+    // When a renderer throws, the error message must be kept out of the HTML
+    // document — it may contain internal stack frames, sensitive values, or
+    // library internals that callers must not receive. The gap element names
+    // the component (so the gap is visible) but carries no exception detail.
+
+    const SECRET_ERROR_TEXT = 'INTERNAL_EXCEPTION_DO_NOT_SHIP_abc123';
+
+    const THROWING_ADAPTER: AdapterLike = {
+      name: 'throwing-adapter',
+      components: {
+        prompt: (_props) => {
+          throw new Error(SECRET_ERROR_TEXT);
+        },
+      },
+    };
+
+    it('the rendered HTML does not contain the internal exception message when a renderer throws', () => {
+      const { html } = render(MINIMAL_JOURNEY, THROWING_ADAPTER);
+      expect(html).not.toContain(SECRET_ERROR_TEXT);
+    });
+
+    it('a gap element IS present for the component that threw — the gap is visible, not silently dropped', () => {
+      const { html } = render(MINIMAL_JOURNEY, THROWING_ADAPTER);
+      expect(html).toContain('ds-gap');
+      expect(html).toContain('prompt');
+    });
+
+    it('the gap record carries the exception message for gate inspection, but not the HTML', () => {
+      const { html, gaps } = render(MINIMAL_JOURNEY, THROWING_ADAPTER);
+      // The gap record DOES carry the error (for gate.ts to read).
+      const promptGap = gaps.find((g) => g.component === 'prompt');
+      expect(promptGap?.error).toBe(SECRET_ERROR_TEXT);
+      // But the shipped HTML does NOT contain it.
+      expect(html).not.toContain(SECRET_ERROR_TEXT);
+    });
+
+    it('the gap element still names the component (visible gap, not a blank box)', () => {
+      const journey: JourneyDocument = {
+        ...MINIMAL_JOURNEY,
+        screens: [{
+          id: 'screen-a',
+          purpose: 'Throwing screen.',
+          blocks: [{ component: 'prompt', props: { heading: 'Hi' } }],
+          actions: [],
+          annotations: [],
+        }],
+      };
+      const { html } = render(journey, THROWING_ADAPTER);
+      // The gap element must name the component so the developer knows which one failed.
+      expect(html).toContain('aria-label="Gap: prompt"');
+    });
+  });
 });

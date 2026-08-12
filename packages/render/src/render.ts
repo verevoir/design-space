@@ -14,6 +14,8 @@ export interface AdapterLike {
 export interface GapRecord {
   readonly screenId: string;
   readonly component: string;
+  /** Set when the adapter had a renderer but it threw. Carries the error message text. */
+  readonly error?: string;
 }
 
 /** The full output of a render call. */
@@ -58,9 +60,11 @@ function renderBlock(
   } catch (err) {
     // A defect: the renderer threw. Treat as a gap so the document stays whole,
     // but mark it differently so gate can distinguish gap from defect.
-    gaps.push({ screenId, component: block.component });
+    // The raw error message is recorded on the gap record for gate to inspect,
+    // but is NOT embedded in the HTML — internal detail must not reach the page.
     const message = err instanceof Error ? err.message : String(err);
-    return renderGap(`${block.component} [render error: ${message}]`);
+    gaps.push({ screenId, component: block.component, error: message });
+    return renderGap(block.component);
   }
 }
 

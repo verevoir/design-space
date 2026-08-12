@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import type { Server } from 'node:http';
-import { createStudioServer } from './server.js';
+import { createServer, type Server } from 'node:http';
+import { createStudioServer, startServer } from './server.js';
 import type { RenderResult } from '@design-space/render';
 import { PORT_VERSION } from '@design-space/port';
 
@@ -104,5 +104,112 @@ describe('createStudioServer()', () => {
       const res = await fetch(`${base}/not-a-real-path`);
       expect(res.status).toBe(404);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startServer() — listen error path
+//
+// The critical behaviour: if the port is already in use, startServer() must
+// reject with a legible Error rather than emitting an unhandled 'error' event
+// on the server. This is verified by:
+//   1. Binding a raw net server to a port so the OS reserves it.
+//   2. Calling startServer() with PORT set to that same port.
+//   3. Confirming the returned promise rejects and the message names the port.
+// ---------------------------------------------------------------------------
+
+describe('startServer()', () => {
+  let blocker: Server | undefined;
+
+  afterEach(async () => {
+    if (blocker) {
+      await new Promise<void>((res) => blocker!.close(() => res()));
+      blocker = undefined;
+    }
+  });
+
+  /**
+   * Bind a plain HTTP server to a random port on 0.0.0.0 and return the port number.
+   * The server stays open — it is the "port already in use" fixture.
+   * Must bind 0.0.0.0 to match what startServer() binds, so the OS sees the port as taken.
+   */
+  function occupyPort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const s = createServer();
+      s.once('error', reject);
+      s.listen(0, '0.0.0.0', () => {
+        const addr = s.address();
+        if (!addr || typeof addr === 'string') {
+          reject(new Error('unexpected address shape'));
+          return;
+        }
+        blocker = s;
+        resolve(addr.port);
+      });
+    });
+  }
+
+  it('rejects with a legible error when the port is already in use (EADDRINUSE)', async () => {
+    const port = await occupyPort();
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = String(port);
+    try {
+      await expect(
+        startServer({ rendered: makeRendered('<html></html>') }),
+      ).rejects.toThrow(/already in use/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
+  it('error message from EADDRINUSE names the port number', async () => {
+    const port = await occupyPort();
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = String(port);
+    let caughtMessage = '';
+    try {
+      await startServer({ rendered: makeRendered('<html></html>') });
+    } catch (err) {
+      caughtMessage = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+    expect(caughtMessage).toContain(String(port));
+  });
+
+  it('does not emit an unhandled error event — the promise is the only error surface', async () => {
+    const port = await occupyPort();
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = String(port);
+    // If startServer() emitted an unhandled 'error' event instead of rejecting,
+    // the process would crash. That is what this test prevents: a caught rejection
+    // here means the error was handled by the promise, not by an event nobody listened to.
+    const errors: Error[] = [];
+    process.on('unhandledRejection', (reason) => {
+      errors.push(reason instanceof Error ? reason : new Error(String(reason)));
+    });
+    try {
+      await startServer({ rendered: makeRendered('<html></html>') }).catch(() => {
+        // intentionally caught
+      });
+      // Give the event loop a tick to surface any unhandled rejection.
+      await new Promise<void>((res) => setImmediate(res));
+      expect(errors).toHaveLength(0);
+    } finally {
+      process.removeAllListeners('unhandledRejection');
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
   });
 });
