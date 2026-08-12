@@ -10,10 +10,9 @@
  * without invoking serve.ts itself).
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { writeFile, rm, mkdir, readFile } from 'node:fs/promises';
-import { join, resolve, dirname } from 'node:path';
+import { writeFile, rm, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { createServer } from 'node:net';
 
