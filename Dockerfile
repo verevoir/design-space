@@ -44,11 +44,16 @@ RUN npm run build
 # Commit the working tree so `git show HEAD:...` works in the prerender step.
 # This is the only git operation needed — the store reads the journey document
 # out of the git object store, which is why git must exist in the builder.
+#
+# Only the journey collection is committed. `npm ci` and `npm run build` have already put
+# node_modules/ and dist/ in the tree by this point, and `git add -A` would sweep them into the
+# snapshot — tens of thousands of files hashed and written for a commit whose only purpose is to
+# let `git show HEAD:examples/journeys/...` resolve one document.
 RUN git config --global user.email "build@design-space.invalid" \
  && git config --global user.name  "Build"                      \
  && git init -q                                                  \
- && git add -A                                                   \
- && git commit -qm "build snapshot"
+ && git add examples/                                            \
+ && git commit -qm "build snapshot: the journey collection the prerender step reads"
 
 # Prerender the broadband-switch journey at HEAD → packages/studio/dist/document.html.
 RUN node packages/studio/scripts/prerender-build.mjs /app

@@ -9,8 +9,9 @@
  * Paths under test:
  *   (a) readFile fails — wrapped with the specific legible message that names
  *       the document path and instructs the operator to run the prerender build
- *       step; process.exit(1) is called; the original error message is preserved.
- *   (b) readFile succeeds but startServer fails — process.exit(1) is called and
+ *       step; a non-zero exit code is set (not process.exit(), which can truncate the
+ *       stderr write); the original error message is preserved.
+ *   (b) readFile succeeds but startServer fails — a non-zero exit code is set and
  *       the error message is written to stderr.
  *   (c) both succeed — "Studio server listening on port ${port}\n" is written to
  *       stdout and the server is reachable.

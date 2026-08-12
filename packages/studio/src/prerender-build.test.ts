@@ -9,13 +9,14 @@
  * prerender fails".
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const execFileAsync = promisify(execFile);
 
@@ -88,5 +89,77 @@ describe('prerender-build.mjs — the build step the container runs', () => {
       expect(stdout).toContain('gaps (unimplemented components):');
       expect(stdout).toContain('compare-set');
     });
+  });
+});
+
+
+const HTML = '<!doctype html><html><body><h1>entry point document</h1></body></html>';
+
+/** Ask the OS for a free port by binding :0 and reading it back. */
+async function findFreePort(): Promise<number> {
+  const srv = createServer();
+  await new Promise<void>((res, rej) => {
+    srv.once('error', rej);
+    srv.listen(0, '127.0.0.1', () => res());
+  });
+  const addr = srv.address();
+  const port = addr && typeof addr === 'object' ? addr.port : 0;
+  await new Promise<void>((res) => srv.close(() => res()));
+  return port;
+}
+
+describe('serve.ts as the process entry point', () => {
+  let entryDir: string;
+
+  beforeEach(async () => {
+    entryDir = join(tmpdir(), `ds-entry-${process.pid}-${Math.abs(Number(process.hrtime.bigint() % 100000n))}`);
+    await rm(entryDir, { recursive: true, force: true });
+    await mkdir(entryDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(entryDir, { recursive: true, force: true });
+  });
+
+  it('starts and announces its port when run as the entry point, the way the container runs it', async () => {
+    // The Dockerfile's CMD is `node packages/studio/dist/serve.js`. That path — module as
+    // process entry point — is the one line of production behaviour the rest of the suite
+    // cannot reach, because every other test imports the module instead of running it.
+    // So it is spawned here exactly as the container spawns it.
+    const { execFile } = await import('node:child_process');
+    const serveJs = resolve(dirname(fileURLToPath(import.meta.url)), '../dist/serve.js');
+    const docPath = resolve(dirname(serveJs), 'document.html');
+    const hadDocument = await readFile(docPath, 'utf-8').then(
+      () => true,
+      () => false,
+    );
+    if (!hadDocument) await writeFile(docPath, HTML, 'utf-8');
+
+    const port = await findFreePort();
+    const child = execFile('node', [serveJs], {
+      env: { ...process.env, PORT: String(port) },
+    });
+
+    try {
+      const line = await new Promise<string>((res, rej) => {
+        const timer = setTimeout(() => rej(new Error('entry point did not announce a port')), 15_000);
+        child.stdout?.on('data', (d: Buffer | string) => {
+          const text = String(d);
+          if (text.includes('listening on port')) {
+            clearTimeout(timer);
+            res(text);
+          }
+        });
+        child.on('error', (e) => {
+          clearTimeout(timer);
+          rej(e);
+        });
+      });
+
+      expect(line).toContain(`listening on port ${port}`);
+    } finally {
+      child.kill();
+      if (!hadDocument) await rm(docPath, { force: true });
+    }
   });
 });
