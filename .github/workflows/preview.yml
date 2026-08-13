@@ -297,4 +297,3 @@ jobs:
             "${{ env.SERVICE }}" \
             "${{ env.REGION }}" \
             "pr-${{ github.event.pull_request.number }}"
-          fi

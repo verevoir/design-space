@@ -236,3 +236,47 @@ describe('preview.yml — token not on the command line', () => {
     expect(maskBlock).not.toMatch(/add-mask::\$\{\{/);
   });
 });
+
+describe('every run: block is valid shell', () => {
+  /**
+   * A stray `fi` shipped in the cleanup step and five review lenses caught it before any
+   * machine did — because that job had only ever been SKIPPED, so its shell was never parsed.
+   * Inline workflow shell is only executed when its trigger fires, which can be never. This
+   * parses every block at test time instead.
+   */
+  it('parses under bash -n, so a syntax error cannot wait for a trigger to be discovered', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const lines = yml.split('\n');
+    const blocks: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const m = /^(\s+)run: \|\s*$/.exec(lines[i] ?? '');
+      if (!m) continue;
+      const indent = (m[1]?.length ?? 0) + 2;
+      const body: string[] = [];
+      i++;
+      while (i < lines.length) {
+        const line = lines[i] ?? '';
+        const isBlank = line.trim() === '';
+        const deepEnough = line.length - line.trimStart().length >= indent;
+        if (!isBlank && !deepEnough) break;
+        body.push(line.length >= indent ? line.slice(indent) : line);
+        i++;
+      }
+      blocks.push(body.join('\n'));
+      i--;
+    }
+
+    expect(blocks.length).toBeGreaterThan(0);
+
+    const failures: string[] = [];
+    for (const [n, block] of blocks.entries()) {
+      // GitHub expressions are not shell; substitute a token so bash sees a valid word.
+      const cleaned = block.replace(/\$\{\{[^}]*\}\}/g, 'X');
+      const res = spawnSync('bash', ['-n'], { input: cleaned, encoding: 'utf-8' });
+      if (res.status !== 0) failures.push(`block ${n + 1}: ${res.stderr.trim().split('\n')[0]}`);
+    }
+
+    expect(failures).toEqual([]);
+  });
+});
