@@ -102,11 +102,6 @@ export async function runEntryPoint(documentPath: string): Promise<Server | unde
 }
 
 /**
- * Resolves to the running server when this module is the process entry point and startup
- * succeeded, and to `undefined` otherwise — including when the module is merely imported,
- * which must not start anything. Tests drive `runEntryPoint` directly rather than awaiting this.
- */
-/**
  * Only start when this module IS the process entry point. Importing it — which tests do, to
  * reach `serveDocument` — must not bind a port or read the baked-in document, or an import
  * becomes a side effect and a test run inherits a server nobody asked for.
@@ -114,6 +109,11 @@ export async function runEntryPoint(documentPath: string): Promise<Server | unde
 const isEntryPoint =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
+/**
+ * Resolves to the running server when this module is the process entry point and startup
+ * succeeded, and to `undefined` otherwise — including when the module is merely imported,
+ * which must not start anything. Tests drive `runEntryPoint` directly rather than awaiting this.
+ */
 export const ready: Promise<Server | undefined> = isEntryPoint
   ? runEntryPoint(DOCUMENT_PATH)
   : Promise.resolve(undefined);
