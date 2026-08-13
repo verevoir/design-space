@@ -232,17 +232,21 @@ protects the review panel.
 
 **Writes.** `.github/workflows/`, smoke tests.
 
-**Status.** Done — `.github/workflows/preview.yml` (deploy + cleanup jobs) and `scripts/smoke.sh`.
+**Status.** Mostly done — three of four done-when clauses proved, one unproven.
 
-Evidence from the first real run: the workflow deployed a no-traffic tagged revision
-(`pr-6---design-space-studio-j5xb2z56mq-nw.a.run.app`), smoke passed against it, and the
-preview-URL comment posted on the PR.  All "Done when" clauses are now met.
+Proved by the first real run: the workflow deployed a no-traffic tagged revision
+(`pr-6---design-space-studio-j5xb2z56mq-nw.a.run.app`), smoke tests passed against it, and the
+preview-URL comment posted on the PR. A fork PR's degraded path is covered by the workflow shape
+tests but has not been seen against a real fork.
 
-What has not yet been exercised: the **cleanup job** has only ever been skipped — no PR has
-closed since the workflow was added, so the `gcloud run services update-traffic --remove-tags`
-path is untested in production.  The cleanup step uses `|| true` to avoid failing on a missing
-tag, so a broken gcloud invocation would silently succeed rather than fail visibly; this is a
-known gap until a PR closes.
+**Unproved: tag removal on close.** The cleanup job has only ever been *skipped* — no PR has
+closed since the workflow existed — so the `gcloud run services update-traffic --remove-tags`
+path has never run. Merging this PR is the first time it will.
+
+That step no longer swallows failures. It previously ended `|| echo "…nothing to do"`, which
+reported success for every failure — expired credentials, a network fault, a wrong service name —
+leaving the tag routing while the job went green. It now tolerates only an absent tag, judged from
+gcloud's own output, and fails the job on anything else.
 
 ### 2S.4 A change reaches `main` only after serving production traffic
 

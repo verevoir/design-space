@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
 import { createServer, Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -287,5 +287,56 @@ describe('smoke.sh — SMOKE_ID_TOKEN env var takes precedence over positional $
       // curl sends "Authorization: Bearer <token>" — Node receives just the value.
       expect(h).toBe('Bearer env-token');
     }
+  });
+});
+
+describe('smoke.sh — /health body checks', () => {
+  let server: import('node:http').Server;
+  let port = 0;
+
+  afterEach(async () => {
+    if (server) await new Promise<void>((res) => server.close(() => res()));
+  });
+
+  /** Stand up a server whose / is fine but whose /health body is the caller's choice. */
+  async function serveHealth(body: string): Promise<number> {
+    const { createServer } = await import('node:http');
+    server = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(body);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html>Choose a new package</html>');
+    });
+    await new Promise<void>((res) => server.listen(0, '127.0.0.1', () => res()));
+    const addr = server.address();
+    return addr && typeof addr === 'object' ? addr.port : 0;
+  }
+
+  it('fails when /health omits status:ok, naming what it got', async () => {
+    port = await serveHealth('{"status":"degraded","portVersion":"0.1"}');
+    const r = await runSmoke(`http://127.0.0.1:${port}`);
+
+    // Two distinct branches guard this endpoint; this one is the status field.
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/FAIL.*\/health.*status:ok/);
+    expect(r.stderr).toContain('degraded');
+  });
+
+  it('fails when /health omits portVersion', async () => {
+    port = await serveHealth('{"status":"ok"}');
+    const r = await runSmoke(`http://127.0.0.1:${port}`);
+
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/FAIL.*\/health.*portVersion/);
+  });
+
+  it('accepts the spaced JSON form, since a server may format either way', async () => {
+    port = await serveHealth('{"status": "ok", "portVersion": "0.1"}');
+    const r = await runSmoke(`http://127.0.0.1:${port}`);
+
+    expect(r.code).toBe(0);
   });
 });

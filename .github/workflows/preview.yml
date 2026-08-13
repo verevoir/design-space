@@ -142,10 +142,12 @@ jobs:
           # Cloud Run records the tagged revision's URL in status.traffic.
           # Extract it with --format so we do not rely on parsing human-readable
           # gcloud output, which is not a stable interface.
-          TAG_URL="$(gcloud run services describe "${{ env.SERVICE }}" \
-            --region   "${{ env.REGION }}" \
-            --format   'json' \
-            | python3 -c "
+          # One describe, reused for both URLs — the previous version called gcloud twice for
+          # two fields of the same resource.
+          SVC_JSON="$(gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.REGION }}" --format json)"
+
+          TAG_URL="$(printf '%s' "$SVC_JSON" | python3 -c "
           import json, sys
           svc = json.load(sys.stdin)
           tag = '${{ env.TAG }}'
@@ -162,8 +164,10 @@ jobs:
           # the audience against the service; a token minted for the per-tag hostname is
           # rejected with a bare "Unauthorized", which is what the previous run hit. The
           # request still goes TO the tag url — only the audience differs.
-          SERVICE_URL="$(gcloud run services describe "${{ env.SERVICE }}" \
-            --region "${{ env.REGION }}" --format 'value(status.url)')"
+          SERVICE_URL="$(printf '%s' "$SVC_JSON" | python3 -c "
+          import json, sys
+          print(json.load(sys.stdin)['status']['url'])
+          ")"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
 
       # An audience-scoped ID token cannot come from `gcloud auth print-identity-token` here:
@@ -288,11 +292,26 @@ jobs:
       - name: Remove pr-${{ github.event.pull_request.number }} tag
         run: |
           TAG="pr-${{ github.event.pull_request.number }}"
-          # --remove-tags does not error if the tag is already absent, so this
-          # step is safe to re-run and safe when no image was ever deployed
-          # (e.g. a PR closed before its first push completed).
-          gcloud run services update-traffic "${{ env.SERVICE }}" \
+
+          # A blanket `|| echo "nothing to do"` would report success for EVERY failure —
+          # expired credentials, a network fault, a wrong service name — and leave the tag in
+          # place while the job went green. So the command's own output decides: an absent tag
+          # is tolerated, anything else fails the job.
+          set +e
+          OUT="$(gcloud run services update-traffic "${{ env.SERVICE }}" \
             --region      "${{ env.REGION }}" \
             --remove-tags "$TAG" \
-            --quiet \
-          || echo "Tag ${TAG} was not present or already removed — nothing to do."
+            --quiet 2>&1)"
+          RC=$?
+          set -e
+
+          echo "$OUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "Removed tag ${TAG}."
+          elif echo "$OUT" | grep -qiE "tag.*not.*found|no.*tag|does not exist"; then
+            echo "Tag ${TAG} was already absent — nothing to remove."
+          else
+            echo "::error title=Preview tag not removed::gcloud failed with status ${RC}; the ${TAG} tag may still be routing." >&2
+            exit "$RC"
+          fi
