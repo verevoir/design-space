@@ -248,10 +248,10 @@ this PR is the first time it runs for real.
 **Not proved — the fork path.** The degraded behaviour is pinned by the workflow shape tests, but
 no fork PR has ever been opened against this repository, so it has not been observed.
 
-That step no longer swallows failures. It previously ended `|| echo "…nothing to do"`, which
-reported success for every failure — expired credentials, a network fault, a wrong service name —
-leaving the tag routing while the job went green. It now tolerates only an absent tag, judged from
-gcloud's own output, and fails the job on anything else.
+**On the tag-removal step itself.** It previously ended `|| echo "…nothing to do"`, which reported
+success for every failure — expired credentials, a network fault, a wrong service name — leaving
+the tag routing while the job went green. It now tolerates only an absent tag, judged from
+gcloud's own output naming *this* tag, and fails the job on anything else.
 
 ### 2S.4 A change reaches `main` only after serving production traffic
 

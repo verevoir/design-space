@@ -180,10 +180,13 @@ describe('preview.yml — ID token audience vs request URL', () => {
   it('mints the ID token with the SERVICE_URL as audience, not the TAG url', () => {
     // Cloud Run validates the audience against the service URL, not the per-tag
     // URL.  A token minted for the tag URL would be rejected with "Unauthorized".
-    const mintIdx = yml.indexOf('Mint an ID token scoped to the preview URL');
+    // Located by the structural marker rather than the step's display name: renaming a step
+    // is not a behaviour change, and this test failed for that reason once.
+    const mintIdx = yml.indexOf('token_format: id_token');
     expect(mintIdx).toBeGreaterThanOrEqual(0);
+    const stepStart = yml.lastIndexOf('\n      - ', mintIdx);
     const nextStep = yml.indexOf('\n      - ', mintIdx + 1);
-    const mintBlock = nextStep >= 0 ? yml.slice(mintIdx, nextStep) : yml.slice(mintIdx);
+    const mintBlock = yml.slice(stepStart, nextStep >= 0 ? nextStep : undefined);
     expect(mintBlock).toMatch(/id_token_audience:.*SERVICE_URL/);
     expect(mintBlock).not.toMatch(/id_token_audience:.*TAG_URL/);
   });

@@ -161,9 +161,12 @@ jobs:
       # The supported route is to ask the auth action for the token directly, which performs the
       # impersonation and returns an ID token minted for the deployer, scoped to the audience.
       #
-      # It runs after the deploy because the audience is the tagged revision's URL, which does
-      # not exist until the revision does.
-      - name: Mint an ID token scoped to the preview URL
+      # The audience is the SERVICE url, not the tag url — Cloud Run validates an ID token's
+      # audience against the service, and one minted for the per-tag hostname is refused with a
+      # bare "Unauthorized". The request still goes TO the tag url; only the audience differs.
+      #
+      # It runs after the deploy because SERVICE_URL is read from the describe step above.
+      - name: Mint an ID token scoped to the service
         id: preview_token
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
