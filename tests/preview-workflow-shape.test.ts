@@ -449,3 +449,29 @@ describe('the fork guard is on EVERY deploy step, not a chosen few', () => {
     expect(unguarded).toEqual([]);
   });
 });
+
+describe('the smoke token is minted by an invoke-only identity', () => {
+  /**
+   * The smoke step used to authenticate as the deploy identity, which holds run.admin and
+   * artifactregistry.writer — putting administrative rights behind a curl, and a leaked token
+   * one step from redeploying or deleting the service it was meant to check.
+   * ds-invoker holds roles/run.invoker on this one service and nothing else.
+   */
+  it('mints the ID token as the invoker, never the deployer', () => {
+    const mintIdx = yml.indexOf('token_format: id_token');
+    expect(mintIdx).toBeGreaterThanOrEqual(0);
+
+    const stepStart = yml.lastIndexOf('\n      - ', mintIdx);
+    const nextStep = yml.indexOf('\n      - ', mintIdx + 1);
+    const mintBlock = yml.slice(stepStart, nextStep >= 0 ? nextStep : undefined);
+
+    expect(mintBlock).toMatch(/service_account:\s*\$\{\{ env\.INVOKER_SA \}\}/);
+    expect(mintBlock).not.toMatch(/DEPLOYER_SA/);
+  });
+
+  it('names an invoker identity distinct from the deployer', () => {
+    expect(yml).toMatch(/INVOKER_SA:\s*ds-invoker@/);
+    expect(yml).toMatch(/DEPLOYER_SA:\s*ds-deployer@/);
+    expect(yml).not.toMatch(/INVOKER_SA:\s*ds-deployer@/);
+  });
+});

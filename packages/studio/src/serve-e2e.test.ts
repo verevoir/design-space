@@ -155,6 +155,11 @@ describe('serveDocument: an unreadable gaps sidecar does not stop the document b
       return true;
     };
 
+    // Take a free port. Without this the server binds startServer's 8080 default and the test
+    // passes or fails according to what else is listening on the machine — it passed in CI and
+    // failed locally for exactly that reason.
+    process.env['PORT'] = String(await findFreePort());
+
     try {
       const { serveDocument } = await import('./serve.js');
       srv = await serveDocument(docPath);
@@ -212,6 +217,8 @@ describe('serveDocument: an absent gaps sidecar is silent', () => {
       stderrChunks.push(String(chunk));
       return true;
     };
+
+    process.env['PORT'] = String(await findFreePort());
 
     try {
       const { serveDocument } = await import('./serve.js');

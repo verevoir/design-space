@@ -287,19 +287,12 @@ identity's `run.admin`.
 
 **Why.** `no-standing-auth-bypass` asks that a non-interactive credential be least-privilege.
 Invoking a service needs no administrative right, and a leaked token should not be able to
-redeploy or delete the thing it was meant to curl. The current arrangement is recorded as an
-accepted risk in `docs/architecture.md`, not as an oversight.
+redeploy or delete the thing it was meant to curl.
 
-**Done when.** A distinct service account exists with `roles/run.invoker` on
-`design-space-studio` and no other grant; the WIF provider can mint tokens for it under the same
-repository condition; the preview and canary workflows use it for smoke; and `ds-deployer` is no
-longer used to mint invoke tokens.
-
-**Writes.** `.github/workflows/`, and IAM outside the repository.
-**Blocked on.** Operator access — the service account and its bindings are created with `gcloud`,
-not from CI.
-
----
+**Status.** Done. `ds-invoker` exists, holds `roles/run.invoker` on `design-space-studio` and
+**no project-level grant at all**, and is assumable only under the same WIF condition as the
+deployer. The preview workflow mints the smoke token as that identity; a shape test asserts the
+minting step names the invoker and never the deployer, so the arrangement cannot quietly revert.
 
 ## Wave 2 — the second contract
 

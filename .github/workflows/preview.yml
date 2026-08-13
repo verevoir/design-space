@@ -39,6 +39,9 @@ env:
   # The identity that holds run.admin + artifactregistry.writer.
   # Authenticated via WIF; no service-account key exists or is needed.
   DEPLOYER_SA:  ds-deployer@design-space-505306.iam.gserviceaccount.com
+  # Invoke-only, and only on this one service. The smoke test needs to CALL the revision, not
+  # administer it — minting its token as the deployer would put run.admin behind a curl.
+  INVOKER_SA:   ds-invoker@design-space-505306.iam.gserviceaccount.com
   WIF_PROVIDER: projects/959702328785/locations/global/workloadIdentityPools/github/providers/github
 
 jobs:
@@ -172,7 +175,7 @@ jobs:
         uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.DEPLOYER_SA }}
+          service_account: ${{ env.INVOKER_SA }}
           token_format: id_token
           id_token_audience: ${{ env.SERVICE_URL }}
           id_token_include_email: true

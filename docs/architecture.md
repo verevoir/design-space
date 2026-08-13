@@ -281,20 +281,18 @@ because **inline workflow code is only executed when its trigger fires** — and
 undetected in the cleanup step through several green runs for exactly that reason. Every `run:`
 block is now parsed with `bash -n` at test time.
 
-### Accepted risk: the smoke test authenticates as the deployer
+### Two identities, and why
 
-The smoke step mints its ID token as `ds-deployer`, which holds `run.admin` and
-`artifactregistry.writer`. Invoking a service needs neither. A dedicated `ds-invoker` principal
-holding only `roles/run.invoker` on this one service would be the least-privilege shape, and
-`no-standing-auth-bypass` asks for exactly that.
+| identity | holds | used for |
+|---|---|---|
+| `ds-deployer` | `run.admin`, `artifactregistry.writer`, `actAs` on `ds-runtime` | building, pushing, deploying, traffic |
+| `ds-invoker` | `roles/run.invoker` on `design-space-studio` **and nothing else** — no project-level grant at all | minting the smoke test's ID token |
+| `ds-runtime` | nothing | the identity the container runs as |
 
-**This is a known gap, not an oversight, and it is recorded rather than quietly carried.** The
-blast radius is bounded by the WIF provider condition — only `verevoir/design-space` can assume
-that identity at all — but a workflow change that leaked the token would leak an admin credential
-rather than an invoke-only one.
-
-Closing it needs a service account created and bound outside CI, which is operator work. Tracked
-as story 2S.5.
+The smoke test calls the service; it has no business being able to administer it. Minting its
+token as the deployer put `run.admin` behind a curl, so a workflow change that leaked the token
+would have leaked an administrative credential. All three are assumable only under the WIF
+provider condition `assertion.repository=='verevoir/design-space'`.
 
 ### The health endpoint is `/health`
 
