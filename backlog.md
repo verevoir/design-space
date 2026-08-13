@@ -232,6 +232,8 @@ protects the review panel.
 
 **Writes.** `.github/workflows/`, smoke tests.
 
+**Status.** Done — `.github/workflows/preview.yml` (deploy + cleanup jobs) and `scripts/smoke.sh`.
+
 ### 2S.4 A change reaches `main` only after serving production traffic
 
 **Outcome.** Promotion is: assert the branch fast-forwards onto `main`, deploy a `candidate`

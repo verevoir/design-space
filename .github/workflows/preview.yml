@@ -1,0 +1,261 @@
+name: PR preview
+
+# Deploy a no-traffic tagged revision for every pull request and run smoke tests against it.
+# ADR 0007: a change is deployed and exercised in production before it reaches main.
+#
+# Three triggers, one event shape each:
+#   opened / synchronize / reopened  →  build, push, deploy, smoke, comment
+#   closed                           →  remove the pr-<n> tag so tags don't accumulate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# One active run per PR at a time.  A push that supersedes a previous one cancels
+# the in-flight deploy before starting its own — the group key is the PR number so
+# the cancel does not touch other PRs or any main-branch run.
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Minimal token grant.
+# id-token:write     — Workload Identity Federation (WIF) requires this to exchange
+#                      a GitHub OIDC token for a Google credential.
+# pull-requests:write — needed to create and update the preview-URL comment.
+# contents:read      — checkout.  Listed explicitly so the job's token is not wider
+#                      than it needs to be even though read is the repo default.
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+# ---------------------------------------------------------------------------
+# Shared configuration — single source of truth for every job below.
+# ---------------------------------------------------------------------------
+env:
+  PROJECT_ID:   design-space-505306
+  REGION:       europe-west2
+  SERVICE:      design-space-studio
+  REGISTRY:     europe-west2-docker.pkg.dev
+  IMAGE_REPO:   europe-west2-docker.pkg.dev/design-space-505306/design-space/design-space-studio
+  # The identity that holds run.admin + artifactregistry.writer.
+  # Authenticated via WIF; no service-account key exists or is needed.
+  DEPLOYER_SA:  ds-deployer@design-space-505306.iam.gserviceaccount.com
+  WIF_PROVIDER: projects/959702328785/locations/global/workloadIdentityPools/github/providers/github
+
+jobs:
+  # --------------------------------------------------------------------------
+  # deploy — build the image, push to Artifact Registry, deploy with --no-traffic
+  #          --tag pr-<n>, run smoke tests, post or update the PR comment.
+  #
+  # Skipped on PR close (the cleanup job handles that).
+  # --------------------------------------------------------------------------
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs, not to floating
+      # major-version tags.  The version comment makes the pin legible so it can
+      # be bumped deliberately.  Same discipline as ci.yml.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # ------------------------------------------------------------------
+      # Fork guard — WIF cannot issue credentials to a fork because the
+      # provider's condition is:
+      #   assertion.repository == 'verevoir/design-space'
+      # A fork's head runs under a different repository name so the condition
+      # fails and no token is issued.  Attempting to authenticate would produce
+      # an error rather than a graceful skip, so we detect forks here and
+      # write a plain explanation to the job summary instead.
+      #
+      # This mirrors exactly the guard the antagonistic-review panel uses for
+      # the same reason (see .github/workflows/antagonistic-review.yml).
+      # ------------------------------------------------------------------
+      - name: Skip deploy for fork PRs
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Preview unavailable for fork pull requests
+
+          Cloud Run deployments require credentials from Workload Identity Federation.
+          The WIF provider condition is scoped to `verevoir/design-space`; a fork's
+          head runs under a different repository name so no credential can be issued.
+
+          This is the same guard that prevents the antagonistic-review panel from
+          reaching org secrets on a fork PR — the restriction is intentional, not a
+          bug.  A maintainer with write access can push the branch here to obtain a
+          preview URL.
+          EOF
+
+      # All remaining steps run only on same-repo PRs.
+
+      - name: Authenticate to Google Cloud via WIF
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account:            ${{ env.DEPLOYER_SA }}
+          # token_format: 'access_token' is the default and is sufficient for
+          # gcloud CLI and docker credential-helper usage.
+
+      - name: Set up gcloud CLI
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a # v2.1.2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker to authenticate to Artifact Registry
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and push image (linux/amd64)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          # Tag by commit SHA for immutable artefact identity.
+          # The image must be linux/amd64 — see docs/architecture.md §9a:
+          # a build on Apple Silicon produces arm64 which Cloud Run rejects at
+          # startup with "exec format error".  The ubuntu-latest runner is x86-64.
+          IMAGE="${{ env.IMAGE_REPO }}:${{ github.sha }}"
+          docker build --platform linux/amd64 --tag "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy revision with pr-${{ github.event.pull_request.number }} tag (no traffic)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          TAG="pr-${{ github.event.pull_request.number }}"
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image          "${{ env.IMAGE }}" \
+            --region         "${{ env.REGION }}" \
+            --tag            "$TAG" \
+            --no-traffic \
+            --quiet
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Retrieve the tag's URL
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          # Cloud Run records the tagged revision's URL in status.traffic.
+          # Extract it with --format so we do not rely on parsing human-readable
+          # gcloud output, which is not a stable interface.
+          TAG_URL="$(gcloud run services describe "${{ env.SERVICE }}" \
+            --region   "${{ env.REGION }}" \
+            --format   'json' \
+            | python3 -c "
+          import json, sys
+          svc = json.load(sys.stdin)
+          tag = '${{ env.TAG }}'
+          for entry in svc.get('status', {}).get('traffic', []):
+              if entry.get('tag') == tag:
+                  print(entry['url'])
+                  sys.exit(0)
+          print('URL_NOT_FOUND')
+          sys.exit(1)
+          ")"
+          echo "TAG_URL=$TAG_URL" >> "$GITHUB_ENV"
+
+      - name: Run smoke tests against the preview revision
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          # The service is authenticated-only (ingress: all, auth: required).
+          # Mint an identity token for the deploying service account — it has
+          # actAs on ds-runtime, but the token here is for the deployer's own
+          # identity, which Cloud Run accepts because it holds run.admin.
+          # --audiences is the service's base URL so the token is scoped
+          # to this service only and cannot be replayed elsewhere.
+          BASE_URL="${{ env.TAG_URL }}"
+          ID_TOKEN="$(gcloud auth print-identity-token \
+            --audiences "$BASE_URL")"
+          bash scripts/smoke.sh "$BASE_URL" "$ID_TOKEN"
+
+      - name: Post or update preview URL comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          # pull-requests:write is declared in the top-level permissions block.
+          script: |
+            const marker  = '<!-- design-space-preview -->';
+            const prNumber = context.payload.pull_request.number;
+            const tagUrl   = process.env.TAG_URL;
+            const sha      = context.sha;
+            const shortSha = sha.slice(0, 7);
+
+            const body = `${marker}
+            ## Preview deployment
+
+            | | |
+            |---|---|
+            | **URL** | ${tagUrl} |
+            | **Commit** | \`${shortSha}\` |
+            | **Tag** | \`pr-${prNumber}\` |
+            | **Traffic** | none — this revision carries no production traffic |
+
+            Smoke tests passed against this revision.
+            `;
+
+            // Find an existing comment from this workflow to update rather than posting a new one.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:       context.repo.owner,
+                repo:        context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+  # --------------------------------------------------------------------------
+  # cleanup — when a PR is closed (merged or abandoned), remove the pr-<n> tag
+  # so it does not accumulate against Cloud Run's per-service tag limits.
+  #
+  # Fork PRs never had a tag deployed so there is nothing to remove; the guard
+  # keeps the cleanup job consistent with the deploy job.
+  # --------------------------------------------------------------------------
+  cleanup:
+    if: |
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Authenticate to Google Cloud via WIF
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account:            ${{ env.DEPLOYER_SA }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a # v2.1.2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Remove pr-${{ github.event.pull_request.number }} tag
+        run: |
+          TAG="pr-${{ github.event.pull_request.number }}"
+          # --remove-tags does not error if the tag is already absent, so this
+          # step is safe to re-run and safe when no image was ever deployed
+          # (e.g. a PR closed before its first push completed).
+          gcloud run services update-traffic "${{ env.SERVICE }}" \
+            --region      "${{ env.REGION }}" \
+            --remove-tags "$TAG" \
+            --quiet \
+          || echo "Tag ${TAG} was not present or already removed — nothing to do."
