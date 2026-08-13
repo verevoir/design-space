@@ -410,3 +410,42 @@ describe('concurrency is per job, not shared', () => {
     expect(yml).toMatch(/group: preview-cleanup-/);
   });
 });
+
+describe('the fork guard is on EVERY deploy step, not a chosen few', () => {
+  /**
+   * The suite previously named three steps. The guard is on ten, and dropping it from an
+   * unnamed one — "Build and push image", say, or the comment step — would leave the whole
+   * suite green while a fork PR pushed images or commented using credentials it should never
+   * have reached. Enumerating steps by name is why that gap existed; this counts them instead.
+   */
+  it('every step in the deploy job carries the guard, except the checkout', () => {
+    const deployJob = yml.slice(yml.indexOf('\n  deploy:'), yml.indexOf('\n  cleanup:'));
+    const guard = "github.event.pull_request.head.repo.full_name == github.repository";
+
+    // Split on step boundaries: a line of exactly six spaces then "- ".
+    const steps = deployJob
+      .split(/\n      - /)
+      .slice(1)
+      .map((s) => `      - ${s}`);
+
+    expect(steps.length).toBeGreaterThan(5);
+
+    const inverseGuard =
+      "github.event.pull_request.head.repo.full_name != github.repository";
+
+    const unguarded = steps
+      .filter((s) => !s.includes(guard))
+      // The checkout must run for a fork PR too — it is how the job reaches the step that
+      // explains why no preview is available.
+      .filter((s) => !s.includes('actions/checkout@'))
+      // And the fork-notice step carries the INVERSE guard: it exists to run only on forks.
+      // A step with neither guard is the defect; a step with the opposite one is the design.
+      .filter((s) => !s.includes(inverseGuard))
+      .map((s) => {
+        const m = /name: (.+)/.exec(s);
+        return m ? m[1].trim() : s.slice(0, 60).replace(/\n/g, ' ');
+      });
+
+    expect(unguarded).toEqual([]);
+  });
+});

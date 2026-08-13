@@ -234,10 +234,15 @@ protects the review panel.
 
 **Status.** Mostly done — two of four done-when clauses proved against the real thing, two not.
 
-**Proved:** the workflow deployed a no-traffic tagged revision
-(`pr-6---design-space-studio-j5xb2z56mq-nw.a.run.app`), smoke tests passed against it, and the
-preview-URL comment posted on the PR — so "a PR shows a working URL a human can open" and "smoke
-tests run against it" both hold.
+**Proved, and here is how to check it rather than take my word:** the `PR preview` workflow on
+this branch has run to success on every push — see its runs under Actions, and the preview comment
+it posted on PR #6, which the workflow updates in place rather than reposting. Those two artefacts
+are the evidence; a URL quoted in prose is not, because a hostname in a document is
+indistinguishable from a test fixture. (One was: an earlier version of this status quoted a URL
+that the service-urls tests also used as a mock, so the "proof" traced to invented data even
+though the deploy was real. The fixtures are now obviously synthetic.)
+
+So "a PR shows a working URL a human can open" and "smoke tests run against it" both hold.
 
 **Not proved — tag removal on close.** The cleanup job has only ever been *skipped*: no PR has
 closed since the workflow existed, so the removal has never run against Cloud Run. Its decision
@@ -271,6 +276,28 @@ served canary traffic is the image retagged onto the merged commit rather than a
 merged tree is asserted equal to the canaried tree.
 
 **Writes.** `.github/workflows/`.
+
+---
+
+### 2S.5 The smoke test authenticates as an identity that can only invoke
+
+**Outcome.** Preview and canary smoke tests authenticate as a principal holding
+`roles/run.invoker` on the studio service and nothing else, instead of reusing the deploy
+identity's `run.admin`.
+
+**Why.** `no-standing-auth-bypass` asks that a non-interactive credential be least-privilege.
+Invoking a service needs no administrative right, and a leaked token should not be able to
+redeploy or delete the thing it was meant to curl. The current arrangement is recorded as an
+accepted risk in `docs/architecture.md`, not as an oversight.
+
+**Done when.** A distinct service account exists with `roles/run.invoker` on
+`design-space-studio` and no other grant; the WIF provider can mint tokens for it under the same
+repository condition; the preview and canary workflows use it for smoke; and `ds-deployer` is no
+longer used to mint invoke tokens.
+
+**Writes.** `.github/workflows/`, and IAM outside the repository.
+**Blocked on.** Operator access — the service account and its bindings are created with `gcloud`,
+not from CI.
 
 ---
 

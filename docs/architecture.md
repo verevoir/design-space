@@ -281,6 +281,21 @@ because **inline workflow code is only executed when its trigger fires** — and
 undetected in the cleanup step through several green runs for exactly that reason. Every `run:`
 block is now parsed with `bash -n` at test time.
 
+### Accepted risk: the smoke test authenticates as the deployer
+
+The smoke step mints its ID token as `ds-deployer`, which holds `run.admin` and
+`artifactregistry.writer`. Invoking a service needs neither. A dedicated `ds-invoker` principal
+holding only `roles/run.invoker` on this one service would be the least-privilege shape, and
+`no-standing-auth-bypass` asks for exactly that.
+
+**This is a known gap, not an oversight, and it is recorded rather than quietly carried.** The
+blast radius is bounded by the WIF provider condition — only `verevoir/design-space` can assume
+that identity at all — but a workflow change that leaked the token would leak an admin credential
+rather than an invoke-only one.
+
+Closing it needs a service account created and bound outside CI, which is operator work. Tracked
+as story 2S.5.
+
 ### The health endpoint is `/health`
 
 Not `/healthz`. Cloud Run's frontend intercepts `/healthz` and returns its own 404 — the request

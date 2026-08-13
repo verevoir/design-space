@@ -7,8 +7,10 @@ import { describe, expect, it } from 'vitest';
 
 import { serviceUrls } from '../scripts/service-urls.mjs';
 
-const SERVICE_URL = 'https://design-space-studio-j5xb2z56mq-nw.a.run.app';
-const TAG_URL = 'https://pr-6---design-space-studio-j5xb2z56mq-nw.a.run.app';
+// Deliberately not a real hostname: a fixture that matches production output can be
+// mistaken for evidence when quoted elsewhere, which is exactly what happened once.
+const SERVICE_URL = 'https://service.invalid.example';
+const TAG_URL = 'https://pr-6---service.invalid.example';
 
 const describeOutput = (traffic: unknown, url: unknown = SERVICE_URL): string =>
   JSON.stringify({ status: { url, traffic } });
@@ -25,8 +27,8 @@ describe('serviceUrls', () => {
 
   it('throws naming the tags that ARE present when the wanted one is absent', () => {
     const raw = describeOutput([
-      { tag: 'pr-4', url: 'https://pr-4---x.run.app' },
-      { tag: 'candidate', url: 'https://candidate---x.run.app' },
+      { tag: 'pr-4', url: 'https://pr-4---service.invalid.example' },
+      { tag: 'candidate', url: 'https://candidate---service.invalid.example' },
     ]);
 
     // The message has to say what it found, or a failed preview is a guessing game.
