@@ -14,7 +14,11 @@
  *   (b) readFile succeeds but startServer fails — a non-zero exit code is set and
  *       the error message is written to stderr.
  *   (c) both succeed — "Studio server listening on port ${port}\n" is written to
- *       stdout and the server is reachable.
+ *       stdout, and the document that was read is the one handed to startServer.
+ *       Reachability is NOT asserted here: both node:fs/promises and ./server.js
+ *       are mocked, so nothing binds a port. serve-e2e.test.ts covers reachability
+ *       against a real server, and prerender-build.test.ts covers the container's
+ *       own entry path by spawning it.
  */
 import { vi, it, describe, expect, afterEach, beforeEach } from 'vitest';
 

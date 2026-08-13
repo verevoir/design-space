@@ -162,4 +162,55 @@ describe('serve.ts as the process entry point', () => {
       if (!hadDocument) await rm(docPath, { force: true });
     }
   });
+
+  describe('no-gaps branch: a journey using only implemented components', () => {
+    let cleanRepo: string;
+
+    beforeAll(async () => {
+      // Every block here is `prompt`, the one component the sketch adapter implements, so the
+      // render reports no gaps and the `if (gaps.length > 0)` branch must NOT fire. Without
+      // this, only the true side of that branch was ever exercised.
+      cleanRepo = await mkdtemp(join(tmpdir(), 'ds-prerender-nogaps-'));
+      const git = (...args: string[]) => execFileAsync('git', args, { cwd: cleanRepo });
+      await git('init', '-q');
+      await git('config', 'user.email', 'test@example.invalid');
+      await git('config', 'user.name', 'Test');
+      await git('config', 'commit.gpgsign', 'false');
+
+      await mkdir(join(cleanRepo, 'examples', 'journeys'), { recursive: true });
+      await writeFile(
+        join(cleanRepo, 'examples', 'journeys', 'broadband-switch.json'),
+        JSON.stringify({
+          id: 'broadband-switch',
+          title: 'Only implemented components',
+          intent: 'Exercise the no-gaps path of the build step.',
+          entry: 'only',
+          screens: [
+            {
+              id: 'only',
+              purpose: 'A screen the adapter can render completely.',
+              blocks: [{ component: 'prompt', props: { heading: 'All implemented' } }],
+              actions: [{ label: 'Done', weight: 'primary', target: null }],
+              annotations: [],
+            },
+          ],
+        }),
+        'utf-8',
+      );
+      await git('add', '-A');
+      await git('commit', '-qm', 'a journey with nothing missing');
+    });
+
+    afterAll(async () => {
+      if (cleanRepo) await rm(cleanRepo, { recursive: true, force: true });
+    });
+
+    it('completes without reporting gaps when nothing is missing', async () => {
+      const { code, stdout } = await runScript(cleanRepo);
+
+      expect(code).toBe(0);
+      expect(stdout).toContain('Prerender complete.');
+      expect(stdout).not.toContain('gaps (unimplemented components):');
+    });
+  });
 });
