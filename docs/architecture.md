@@ -204,7 +204,7 @@ examples/journeys/  the reference journey the port is induced from.
 docs/               this file, and the ADRs.
 tests/              the review gate's own tests (see below).
 .github/
-  workflows/        CI, including the antagonistic-review panel.
+  workflows/        CI, the antagonistic-review panel, and the per-PR preview deploy.
   antagonistic-review/   the panel's scripts. All of them move together.
 ```
 
@@ -255,6 +255,28 @@ Registry storage for the pushed images.
 and a real billing read is the only thing that supplies one. Recorded as outstanding rather than
 estimated, because an arithmetic guess dressed as a measurement is the failure this project keeps
 finding.
+
+### Per-PR preview deployments
+
+`.github/workflows/preview.yml` gives every pull request its own deployment (ADR 0007, story
+2S.3):
+
+| trigger | what happens |
+|---|---|
+| PR opened / updated | build, push to Artifact Registry, `run deploy --no-traffic --tag pr-<n>` |
+| then | smoke tests against that tag's URL, and the URL posted as a PR comment |
+| PR closed | the `pr-<n>` tag is removed |
+| PR from a fork | deploy skipped, with the reason stated in the job summary |
+
+Auth is keyless — Workload Identity Federation, with the smoke step's ID token minted by the auth
+action and **scoped to the SERVICE url**, not the tag url: Cloud Run validates an audience against
+the service, and a token minted for a per-tag hostname is rejected with a bare `Unauthorized`.
+
+The workflow deliberately holds almost no logic. Tag-URL extraction, the preview comment's
+update-vs-create decision, the smoke checks and the tag removal all live in `scripts/` with tests,
+because **inline workflow code is only executed when its trigger fires** — and a stray `fi` sat
+undetected in the cleanup step through several green runs for exactly that reason. Every `run:`
+block is now parsed with `bash -n` at test time.
 
 ### The health endpoint is `/health`
 

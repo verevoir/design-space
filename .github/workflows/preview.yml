@@ -143,36 +143,17 @@ jobs:
       - name: Retrieve the tag's URL
         if: github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          # Cloud Run records the tagged revision's URL in status.traffic.
-          # Extract it with --format so we do not rely on parsing human-readable
-          # gcloud output, which is not a stable interface.
-          # One describe, reused for both URLs — the previous version called gcloud twice for
-          # two fields of the same resource.
-          SVC_JSON="$(gcloud run services describe "${{ env.SERVICE }}" \
-            --region "${{ env.REGION }}" --format json)"
-
-          TAG_URL="$(printf '%s' "$SVC_JSON" | python3 -c "
-          import json, sys
-          svc = json.load(sys.stdin)
-          tag = '${{ env.TAG }}'
-          for entry in svc.get('status', {}).get('traffic', []):
-              if entry.get('tag') == tag:
-                  print(entry['url'])
-                  sys.exit(0)
-          print('URL_NOT_FOUND')
-          sys.exit(1)
-          ")"
-          echo "TAG_URL=$TAG_URL" >> "$GITHUB_ENV"
-
-          # The ID token's audience is the SERVICE url, not the tag url. Cloud Run validates
-          # the audience against the service; a token minted for the per-tag hostname is
-          # rejected with a bare "Unauthorized", which is what the previous run hit. The
-          # request still goes TO the tag url — only the audience differs.
-          SERVICE_URL="$(printf '%s' "$SVC_JSON" | python3 -c "
-          import json, sys
-          print(json.load(sys.stdin)['status']['url'])
-          ")"
-          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+          # The parsing lives in scripts/service-urls.mjs so its not-found path can be tested —
+          # see tests/service-urls.test.ts. A lookup that quietly returned nothing would leave
+          # the smoke tests pointed at an empty URL, reporting success against nothing.
+          #
+          # One describe, both URLs. The ID token's audience must be the SERVICE url even though
+          # the request goes to the TAG url: Cloud Run validates the audience against the
+          # service, and a token minted for the per-tag hostname is rejected with a bare
+          # "Unauthorized".
+          gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.REGION }}" --format json \
+          | node scripts/service-urls.mjs "${{ env.TAG }}" >> "$GITHUB_ENV"
 
       # An audience-scoped ID token cannot come from `gcloud auth print-identity-token` here:
       # Workload Identity Federation yields an EXTERNAL ACCOUNT credential, and that command
@@ -223,57 +204,27 @@ jobs:
         with:
           # pull-requests:write is granted on this job only, not workflow-wide.
           script: |
-            const marker  = '<!-- design-space-preview -->';
+            // The update-vs-create branch lives in scripts/upsert-preview-comment.mjs so it can
+            // be tested — see tests/upsert-preview-comment.test.ts. A PR gathering one comment
+            // per push would bury its own review conversation.
+            const { previewCommentBody, upsertPreviewComment } =
+              await import('${{ github.workspace }}/scripts/upsert-preview-comment.mjs');
+
             const prNumber = context.payload.pull_request.number;
-            const tagUrl   = process.env.TAG_URL;
-            const sha      = context.sha;
-            const shortSha = sha.slice(0, 7);
-
-            const body = `${marker}
-            ## Preview deployment
-
-            | | |
-            |---|---|
-            | **URL** | ${tagUrl} |
-            | **Commit** | \`${shortSha}\` |
-            | **Tag** | \`pr-${prNumber}\` |
-            | **Traffic** | none — this revision carries no production traffic |
-
-            Smoke tests passed against this revision.
-            `;
-
-            // Find an existing comment from this workflow to update rather than posting a new one.
-            const { data: comments } = await github.rest.issues.listComments({
-              owner:      context.repo.owner,
-              repo:       context.repo.repo,
-              issue_number: prNumber,
+            const body = previewCommentBody({
+              tagUrl:   process.env.TAG_URL,
+              prNumber,
+              sha:      context.sha,
             });
 
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner:      context.repo.owner,
-                repo:       context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner:       context.repo.owner,
-                repo:        context.repo.repo,
-                issue_number: prNumber,
-                body,
-              });
-            }
-
-  # --------------------------------------------------------------------------
-  # cleanup — when a PR is closed (merged or abandoned), remove the pr-<n> tag
-  # so it does not accumulate against Cloud Run's per-service tag limits.
-  #
-  # Fork PRs never had a tag deployed so there is nothing to remove; the guard
-  # keeps the cleanup job consistent with the deploy job.
-  # --------------------------------------------------------------------------
+            const { action } = await upsertPreviewComment({
+              github,
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              prNumber,
+              body,
+            });
+            core.info(`preview comment ${action}`);
   cleanup:
     if: |
       github.event.action == 'closed' &&
