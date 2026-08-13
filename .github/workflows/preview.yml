@@ -147,10 +147,8 @@ jobs:
           # see tests/service-urls.test.ts. A lookup that quietly returned nothing would leave
           # the smoke tests pointed at an empty URL, reporting success against nothing.
           #
-          # One describe, both URLs. The ID token's audience must be the SERVICE url even though
-          # the request goes to the TAG url: Cloud Run validates the audience against the
-          # service, and a token minted for the per-tag hostname is rejected with a bare
-          # "Unauthorized".
+          # One describe, both URLs. Why the audience is the service and not the tag is
+          # explained at the minting step below.
           gcloud run services describe "${{ env.SERVICE }}" \
             --region "${{ env.REGION }}" --format json \
           | node scripts/service-urls.mjs "${{ env.TAG }}" >> "$GITHUB_ENV"
@@ -244,6 +242,10 @@ jobs:
       # `bash` against a file that is not on the runner. It was inline shell before the logic was
       # extracted for testing, which is why the checkout was not needed until now.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Matches the deploy job: the repository token is not needed after checkout, and
+          # leaving it in .git/config would hand it to every step that follows.
+          persist-credentials: false
 
       - name: Authenticate to Google Cloud via WIF
         uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7

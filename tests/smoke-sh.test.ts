@@ -340,3 +340,14 @@ describe('smoke.sh — /health body checks', () => {
     expect(r.exitCode).toBe(0);
   });
 });
+
+describe('smoke.sh — invoked without a base URL', () => {
+  it('exits non-zero with a usage line rather than curling an empty URL', async () => {
+    // Without this guard the script would build "curl ''" and report a connection failure,
+    // which reads as "the service is down" rather than "you called this wrong".
+    const r = await runSmoke('');
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('usage:');
+  });
+});
