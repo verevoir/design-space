@@ -234,6 +234,16 @@ protects the review panel.
 
 **Status.** Done — `.github/workflows/preview.yml` (deploy + cleanup jobs) and `scripts/smoke.sh`.
 
+Evidence from the first real run: the workflow deployed a no-traffic tagged revision
+(`pr-6---design-space-studio-j5xb2z56mq-nw.a.run.app`), smoke passed against it, and the
+preview-URL comment posted on the PR.  All "Done when" clauses are now met.
+
+What has not yet been exercised: the **cleanup job** has only ever been skipped — no PR has
+closed since the workflow was added, so the `gcloud run services update-traffic --remove-tags`
+path is untested in production.  The cleanup step uses `|| true` to avoid failing on a missing
+tag, so a broken gcloud invocation would silently succeed rather than fail visibly; this is a
+known gap until a PR closes.
+
 ### 2S.4 A change reaches `main` only after serving production traffic
 
 **Outcome.** Promotion is: assert the branch fast-forwards onto `main`, deploy a `candidate`

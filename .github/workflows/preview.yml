@@ -185,12 +185,29 @@ jobs:
           id_token_audience: ${{ env.SERVICE_URL }}
           id_token_include_email: true
 
+      # Register the token for masking before it can reach any log line.  The env: block
+      # supplies the value so ${{ }} interpolation never appears in the echoed command.
+      # Residual exposure: the token was already written to the step output store by the
+      # auth action before this mask runs.  That store is encrypted at rest and not echoed
+      # to the public log, but it is readable by subsequent steps and by anyone with
+      # admin access to the run.  The mask prevents the value appearing in log text; it
+      # does not erase it from the output store.
+      - name: Mask the preview token so it cannot appear in log output
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          TOKEN: ${{ steps.preview_token.outputs.id_token }}
+        run: echo "::add-mask::$TOKEN"
+
       - name: Run smoke tests against the preview revision
         if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          # Pass the token through the environment, not on the command line, so it
+          # is never echoed in the step's command log.
+          SMOKE_ID_TOKEN: ${{ steps.preview_token.outputs.id_token }}
         run: |
           # Smoke runs against the TAGGED revision, which carries no traffic — production is
           # untouched whether these pass or fail. That ordering is the point of ADR 0007.
-          bash scripts/smoke.sh "${{ env.TAG_URL }}" "${{ steps.preview_token.outputs.id_token }}"
+          bash scripts/smoke.sh "${{ env.TAG_URL }}"
 
       - name: Post or update preview URL comment
         if: github.event.pull_request.head.repo.full_name == github.repository
