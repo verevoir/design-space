@@ -158,19 +158,31 @@ jobs:
           ")"
           echo "TAG_URL=$TAG_URL" >> "$GITHUB_ENV"
 
+      # An audience-scoped ID token cannot come from `gcloud auth print-identity-token` here:
+      # Workload Identity Federation yields an EXTERNAL ACCOUNT credential, and that command
+      # rejects it with "Invalid account type for --audiences. Requires valid service account."
+      # The supported route is to ask the auth action for the token directly, which performs the
+      # impersonation and returns an ID token minted for the deployer, scoped to the audience.
+      #
+      # It runs after the deploy because the audience is the tagged revision's URL, which does
+      # not exist until the revision does.
+      - name: Mint an ID token scoped to the preview URL
+        id: preview_token
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ env.TAG_URL }}
+          id_token_include_email: true
+
       - name: Run smoke tests against the preview revision
         if: github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          # The service is authenticated-only (ingress: all, auth: required).
-          # Mint an identity token for the deploying service account — it has
-          # actAs on ds-runtime, but the token here is for the deployer's own
-          # identity, which Cloud Run accepts because it holds run.admin.
-          # --audiences is the service's base URL so the token is scoped
-          # to this service only and cannot be replayed elsewhere.
-          BASE_URL="${{ env.TAG_URL }}"
-          ID_TOKEN="$(gcloud auth print-identity-token \
-            --audiences "$BASE_URL")"
-          bash scripts/smoke.sh "$BASE_URL" "$ID_TOKEN"
+          # Smoke runs against the TAGGED revision, which carries no traffic — production is
+          # untouched whether these pass or fail. That ordering is the point of ADR 0007.
+          bash scripts/smoke.sh "${{ env.TAG_URL }}" "${{ steps.preview_token.outputs.id_token }}"
 
       - name: Post or update preview URL comment
         if: github.event.pull_request.head.repo.full_name == github.repository
