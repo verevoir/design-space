@@ -158,6 +158,14 @@ jobs:
           ")"
           echo "TAG_URL=$TAG_URL" >> "$GITHUB_ENV"
 
+          # The ID token's audience is the SERVICE url, not the tag url. Cloud Run validates
+          # the audience against the service; a token minted for the per-tag hostname is
+          # rejected with a bare "Unauthorized", which is what the previous run hit. The
+          # request still goes TO the tag url — only the audience differs.
+          SERVICE_URL="$(gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.REGION }}" --format 'value(status.url)')"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+
       # An audience-scoped ID token cannot come from `gcloud auth print-identity-token` here:
       # Workload Identity Federation yields an EXTERNAL ACCOUNT credential, and that command
       # rejects it with "Invalid account type for --audiences. Requires valid service account."
@@ -174,7 +182,7 @@ jobs:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER_SA }}
           token_format: id_token
-          id_token_audience: ${{ env.TAG_URL }}
+          id_token_audience: ${{ env.SERVICE_URL }}
           id_token_include_email: true
 
       - name: Run smoke tests against the preview revision
