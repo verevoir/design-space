@@ -77,9 +77,14 @@ type RunResult = { exitCode: number; stdout: string; stderr: string };
  * spawnSync would block the event loop and cause every local HTTP server to
  * appear unreachable (curl-error-28 / timeout).
  */
-function runSmoke(baseUrl: string, env?: NodeJS.ProcessEnv): Promise<RunResult> {
+function runSmoke(
+  baseUrl: string,
+  env?: NodeJS.ProcessEnv,
+  positionalToken?: string,
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('bash', [SMOKE_SH, baseUrl], {
+    const argv = positionalToken === undefined ? [SMOKE_SH, baseUrl] : [SMOKE_SH, baseUrl, positionalToken];
+    const proc = spawn('bash', argv, {
       env: {
         ...process.env,
         // Use a 3-second curl timeout so connection failures are reported quickly
@@ -349,5 +354,86 @@ describe('smoke.sh — invoked without a base URL', () => {
 
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toContain('usage:');
+  });
+});
+
+describe('smoke.sh — env token actually beats the positional one', () => {
+  const seen: string[] = [];
+  let srv: Server;
+
+  afterEach(async () => {
+    seen.length = 0;
+    if (srv) await new Promise<void>((r) => srv.close(() => r()));
+  });
+
+  async function serve(): Promise<number> {
+    srv = createServer((req, res) => {
+      const auth = req.headers['authorization'];
+      if (typeof auth === 'string') seen.push(auth);
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(GOOD_HEALTH_BODY);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(GOOD_BODY_ROOT);
+      }
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const a = srv.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('sends the env token when BOTH are supplied', async () => {
+    // The existing precedence test supplies only the env var, so it shows the env var is used
+    // — not that it wins. Both are set here, which is the claim the script's doc makes.
+    const port = await serve();
+    const r = await runSmoke(`http://127.0.0.1:${port}`, { SMOKE_ID_TOKEN: 'from-env' }, 'from-argv');
+
+    expect(r.exitCode).toBe(0);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((v) => v === 'Bearer from-env')).toBe(true);
+    expect(seen.some((v) => v.includes('from-argv'))).toBe(false);
+  });
+
+  it('falls back to the positional token when the env var is absent', async () => {
+    const port = await serve();
+    const r = await runSmoke(`http://127.0.0.1:${port}`, {}, 'from-argv');
+
+    expect(r.exitCode).toBe(0);
+    expect(seen.every((v) => v === 'Bearer from-argv')).toBe(true);
+  });
+});
+
+describe('smoke.sh — a base URL with a trailing slash', () => {
+  let srv2: Server;
+  const paths: string[] = [];
+
+  afterEach(async () => {
+    paths.length = 0;
+    if (srv2) await new Promise<void>((r) => srv2.close(() => r()));
+  });
+
+  it('does not produce doubled slashes in the paths it requests', async () => {
+    srv2 = createServer((req, res) => {
+      paths.push(req.url ?? '');
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(GOOD_HEALTH_BODY);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(GOOD_BODY_ROOT);
+      }
+    });
+    await new Promise<void>((r) => srv2.listen(0, '127.0.0.1', () => r()));
+    const a = srv2.address();
+    const port = a && typeof a === 'object' ? a.port : 0;
+
+    // Cloud Run URLs are often pasted with a trailing slash; without stripping it the script
+    // would request "//health", which is a different path.
+    const r = await runSmoke(`http://127.0.0.1:${port}/`);
+
+    expect(r.exitCode).toBe(0);
+    expect(paths).toContain('/health');
+    expect(paths.some((p) => p.startsWith('//'))).toBe(false);
   });
 });

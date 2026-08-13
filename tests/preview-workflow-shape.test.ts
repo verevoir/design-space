@@ -249,13 +249,25 @@ describe('every run: block is valid shell', () => {
    */
   it('parses under bash -n, so a syntax error cannot wait for a trigger to be discovered', async () => {
     const { spawnSync } = await import('node:child_process');
-    const lines = yml.split('\n');
+    const { readdirSync } = await import('node:fs');
+
+    // EVERY workflow, not just this one — architecture.md claims that, and a claim about all
+    // of them that only checked one is the failure this repository keeps producing.
+    const dir = new URL('../.github/workflows/', import.meta.url).pathname;
+    const all = readdirSync(dir)
+      .filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+      .map((f) => readFileSync(`${dir}${f}`, 'utf-8'))
+      .join('\n');
+    const lines = all.split('\n');
     const blocks: string[] = [];
 
     for (let i = 0; i < lines.length; i++) {
-      const m = /^(\s+)run: \|\s*$/.exec(lines[i] ?? '');
+      // Both spellings: `run: |` as a later key, and `- run: |` as a step's first key. Missing
+      // the second form would let an entire style of step go unchecked while the test claimed
+      // to cover every block — which it did, until a mutation failed to trip it.
+      const m = /^(\s*)(- )?run: \|\s*$/.exec(lines[i] ?? '');
       if (!m) continue;
-      const indent = (m[1]?.length ?? 0) + 2;
+      const indent = (m[1]?.length ?? 0) + (m[2] ? m[2].length : 0) + 2;
       const body: string[] = [];
       i++;
       while (i < lines.length) {
