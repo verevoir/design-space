@@ -40,10 +40,15 @@ Smoke tests passed against this revision.
  * @returns {Promise<{action: 'updated'|'created', commentId?: number}>}
  */
 export async function upsertPreviewComment({ github, owner, repo, prNumber, body }) {
-  const { data: comments } = await github.rest.issues.listComments({
+  // Paginate. listComments returns 30 per page, oldest first, so on a PR with more than 30
+  // comments this workflow's own comment — always among the newest — falls on a later page. An
+  // unpaginated search would never find it and would post a fresh comment on every push, which
+  // is exactly what this function exists to prevent.
+  const comments = await github.paginate(github.rest.issues.listComments, {
     owner,
     repo,
     issue_number: prNumber,
+    per_page: 100,
   });
 
   const existing = comments.find((c) => c && typeof c.body === 'string' && c.body.includes(MARKER));
