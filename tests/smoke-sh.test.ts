@@ -320,7 +320,7 @@ describe('smoke.sh — /health body checks', () => {
     const r = await runSmoke(`http://127.0.0.1:${port}`);
 
     // Two distinct branches guard this endpoint; this one is the status field.
-    expect(r.code).not.toBe(0);
+    expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toMatch(/FAIL.*\/health.*status:ok/);
     expect(r.stderr).toContain('degraded');
   });
@@ -329,7 +329,7 @@ describe('smoke.sh — /health body checks', () => {
     port = await serveHealth('{"status":"ok"}');
     const r = await runSmoke(`http://127.0.0.1:${port}`);
 
-    expect(r.code).not.toBe(0);
+    expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toMatch(/FAIL.*\/health.*portVersion/);
   });
 
@@ -337,6 +337,6 @@ describe('smoke.sh — /health body checks', () => {
     port = await serveHealth('{"status": "ok", "portVersion": "0.1"}');
     const r = await runSmoke(`http://127.0.0.1:${port}`);
 
-    expect(r.code).toBe(0);
+    expect(r.exitCode).toBe(0);
   });
 });
