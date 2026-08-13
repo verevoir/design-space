@@ -24,10 +24,10 @@ concurrency:
 # pull-requests:write — needed to create and update the preview-URL comment.
 # contents:read      — checkout.  Listed explicitly so the job's token is not wider
 #                      than it needs to be even though read is the repo default.
-permissions:
-  contents: read
-  id-token: write
-  pull-requests: write
+# Declared per job below rather than here: the cleanup job posts no comment, so granting it
+# pull-requests:write would hand a token wider than the job needs — which is the thing the
+# comment above claims to avoid.
+permissions: {}
 
 # ---------------------------------------------------------------------------
 # Shared configuration — single source of truth for every job below.
@@ -54,6 +54,10 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read        # checkout
+      id-token: write       # Workload Identity Federation
+      pull-requests: write  # post or update the preview comment
 
     steps:
       # Third-party actions are pinned to immutable commit SHAs, not to floating
@@ -217,7 +221,7 @@ jobs:
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
-          # pull-requests:write is declared in the top-level permissions block.
+          # pull-requests:write is granted on this job only, not workflow-wide.
           script: |
             const marker  = '<!-- design-space-preview -->';
             const prNumber = context.payload.pull_request.number;
@@ -276,6 +280,10 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read   # checkout
+      id-token: write  # Workload Identity Federation
+      # deliberately NO pull-requests: write — this job comments on nothing
 
     steps:
       - name: Authenticate to Google Cloud via WIF

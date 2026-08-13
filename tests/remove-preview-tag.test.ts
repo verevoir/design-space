@@ -94,3 +94,19 @@ describe('remove-preview-tag.sh', () => {
     expect(r.stdout + r.stderr).toContain('network is unreachable');
   });
 });
+
+describe('remove-preview-tag.sh — a not-found that is not the tag', () => {
+  it('FAILS when the SERVICE is not found, rather than reporting the tag already absent', async () => {
+    // The first version of the tolerance pattern accepted a bare "not found", so a wrong
+    // service name — the exact misconfiguration this script exists to surface — was reported
+    // as "nothing to remove" while the tag kept routing.
+    const dir = await withStubGcloud(
+      'ERROR: (gcloud.run.services.update-traffic) Service not found: design-space-studio',
+      1,
+    );
+    const r = await run(dir);
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('may still be routing');
+  });
+});

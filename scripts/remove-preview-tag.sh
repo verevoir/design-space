@@ -37,7 +37,15 @@ fi
 
 # An absent tag is the one tolerable failure: the PR may have closed before its first deploy
 # finished, or the job may be re-running. Anything else is a real fault and must be visible.
-if echo "$OUT" | grep -qiE "tag.*not.*found|no.*tag.*found|does not exist|not found"; then
+# Three conditions, all required, because a single loose pattern got this wrong twice. A bare
+# "not found" also matches "Service not found" — a wrong service name, which is the exact
+# misconfiguration this script exists to surface — and a pattern demanding "tag <name>" adjacent
+# misses gcloud's actual phrasing, "Tag not found: pr-99".
+#
+# So: the message must mention a not-found condition, AND the word tag, AND this tag's name.
+if echo "$OUT" | grep -qiE "not found|does not exist" \
+  && echo "$OUT" | grep -qi "tag" \
+  && echo "$OUT" | grep -qF "$TAG"; then
   echo "Tag ${TAG} was already absent — nothing to remove."
   exit 0
 fi
