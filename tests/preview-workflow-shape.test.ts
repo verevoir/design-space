@@ -262,20 +262,32 @@ describe('every run: block is valid shell', () => {
     const blocks: string[] = [];
 
     for (let i = 0; i < lines.length; i++) {
-      // Both spellings: `run: |` as a later key, and `- run: |` as a step's first key. Missing
-      // the second form would let an entire style of step go unchecked while the test claimed
-      // to cover every block — which it did, until a mutation failed to trip it.
-      const m = /^(\s*)(- )?run: \|\s*$/.exec(lines[i] ?? '');
-      if (!m) continue;
-      const indent = (m[1]?.length ?? 0) + (m[2] ? m[2].length : 0) + 2;
+      // Three spellings, because two were not enough twice running:
+      //   run: |            block scalar as a later key
+      //   - run: |          block scalar as a step's first key
+      //   run: <command>    a single-line command, either form
+      // The first widening missed `- run: |`; the second still missed the single-line form,
+      // which this file's own workflows use nine times. Each time the comment claimed
+      // completeness the code did not deliver.
+      const line = lines[i] ?? '';
+      const scalar = /^(\s*)(- )?run: \|\s*$/.exec(line);
+      const single = /^(\s*)(- )?run: (?!\|)(\S.*)$/.exec(line);
+
+      if (single) {
+        blocks.push(single[3] ?? '');
+        continue;
+      }
+      if (!scalar) continue;
+
+      const indent = (scalar[1]?.length ?? 0) + (scalar[2] ? scalar[2].length : 0) + 2;
       const body: string[] = [];
       i++;
       while (i < lines.length) {
-        const line = lines[i] ?? '';
-        const isBlank = line.trim() === '';
-        const deepEnough = line.length - line.trimStart().length >= indent;
+        const l = lines[i] ?? '';
+        const isBlank = l.trim() === '';
+        const deepEnough = l.length - l.trimStart().length >= indent;
         if (!isBlank && !deepEnough) break;
-        body.push(line.length >= indent ? line.slice(indent) : line);
+        body.push(l.length >= indent ? l.slice(indent) : l);
         i++;
       }
       blocks.push(body.join('\n'));
@@ -312,5 +324,62 @@ describe('every job that runs a repo script checks the repo out', () => {
     expect(cleanup.indexOf('actions/checkout@')).toBeLessThan(
       cleanup.indexOf('scripts/remove-preview-tag.sh'),
     );
+  });
+});
+
+describe('the event shapes the workflow header describes', () => {
+  /**
+   * The header states the whole design: opened / synchronize / reopened do the deploy,
+   * closed removes the tag. Nothing pinned that, so a trigger edit could silently make the
+   * deploy job run on close (deploying a merged branch) or stop the cleanup running at all.
+   */
+  it('deploys on opened, synchronize and reopened, and not on closed', () => {
+    expect(yml).toMatch(/types:\s*\[[^\]]*opened[^\]]*\]/);
+    expect(yml).toMatch(/types:\s*\[[^\]]*synchronize[^\]]*\]/);
+    expect(yml).toMatch(/types:\s*\[[^\]]*reopened[^\]]*\]/);
+    expect(yml).toMatch(/types:\s*\[[^\]]*closed[^\]]*\]/);
+
+    const deployJob = yml.slice(yml.indexOf('\n  deploy:'), yml.indexOf('\n  cleanup:'));
+    expect(deployJob).toMatch(/if:\s*github\.event\.action != 'closed'/);
+  });
+
+  it('cleans up only on closed, and only for same-repo PRs', () => {
+    const cleanup = yml.slice(yml.indexOf('\n  cleanup:'));
+
+    expect(cleanup).toMatch(/github\.event\.action == 'closed'/);
+    // A fork PR never deployed, so there is nothing to remove — and no credential to do it with.
+    expect(cleanup).toMatch(/head\.repo\.full_name == github\.repository/);
+  });
+});
+
+describe('per-job permission scoping', () => {
+  /**
+   * The file documents this as a deliberate security decision: an empty top-level grant, with
+   * each job asking for what it uses. Unpinned, a later edit could restore a workflow-wide
+   * grant and the comment would still claim least privilege.
+   */
+  it('grants nothing at the top level', () => {
+    expect(yml).toMatch(/^permissions: \{\}/m);
+  });
+
+  it('gives the deploy job pull-requests: write and the cleanup job none', () => {
+    // Strip comments first. The cleanup job's own comment reads "deliberately NO
+    // pull-requests: write", so a naive text search finds the phrase it exists to deny —
+    // the test would have been asserting against prose rather than against the grant.
+    const withoutComments = (s: string) =>
+      s
+        .split('\n')
+        .filter((l) => !l.trimStart().startsWith('#'))
+        .join('\n');
+
+    const deployJob = withoutComments(
+      yml.slice(yml.indexOf('\n  deploy:'), yml.indexOf('\n  cleanup:')),
+    );
+    const cleanup = withoutComments(yml.slice(yml.indexOf('\n  cleanup:')));
+
+    expect(deployJob).toMatch(/pull-requests: write/);
+    // The cleanup job comments on nothing; a write grant there would be unused authority.
+    expect(cleanup).not.toMatch(/pull-requests: write/);
+    expect(cleanup).toMatch(/id-token: write/);
   });
 });
