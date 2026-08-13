@@ -291,27 +291,10 @@ jobs:
 
       - name: Remove pr-${{ github.event.pull_request.number }} tag
         run: |
-          TAG="pr-${{ github.event.pull_request.number }}"
-
-          # A blanket `|| echo "nothing to do"` would report success for EVERY failure —
-          # expired credentials, a network fault, a wrong service name — and leave the tag in
-          # place while the job went green. So the command's own output decides: an absent tag
-          # is tolerated, anything else fails the job.
-          set +e
-          OUT="$(gcloud run services update-traffic "${{ env.SERVICE }}" \
-            --region      "${{ env.REGION }}" \
-            --remove-tags "$TAG" \
-            --quiet 2>&1)"
-          RC=$?
-          set -e
-
-          echo "$OUT"
-
-          if [ "$RC" -eq 0 ]; then
-            echo "Removed tag ${TAG}."
-          elif echo "$OUT" | grep -qiE "tag.*not.*found|no.*tag|does not exist"; then
-            echo "Tag ${TAG} was already absent — nothing to remove."
-          else
-            echo "::error title=Preview tag not removed::gcloud failed with status ${RC}; the ${TAG} tag may still be routing." >&2
-            exit "$RC"
+          # The three-way logic lives in the script so it can be tested — see
+          # tests/remove-preview-tag.test.ts. Inline shell in a workflow cannot be.
+          bash scripts/remove-preview-tag.sh \
+            "${{ env.SERVICE }}" \
+            "${{ env.REGION }}" \
+            "pr-${{ github.event.pull_request.number }}"
           fi

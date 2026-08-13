@@ -232,16 +232,21 @@ protects the review panel.
 
 **Writes.** `.github/workflows/`, smoke tests.
 
-**Status.** Mostly done — three of four done-when clauses proved, one unproven.
+**Status.** Mostly done — two of four done-when clauses proved against the real thing, two not.
 
-Proved by the first real run: the workflow deployed a no-traffic tagged revision
+**Proved:** the workflow deployed a no-traffic tagged revision
 (`pr-6---design-space-studio-j5xb2z56mq-nw.a.run.app`), smoke tests passed against it, and the
-preview-URL comment posted on the PR. A fork PR's degraded path is covered by the workflow shape
-tests but has not been seen against a real fork.
+preview-URL comment posted on the PR — so "a PR shows a working URL a human can open" and "smoke
+tests run against it" both hold.
 
-**Unproved: tag removal on close.** The cleanup job has only ever been *skipped* — no PR has
-closed since the workflow existed — so the `gcloud run services update-traffic --remove-tags`
-path has never run. Merging this PR is the first time it will.
+**Not proved — tag removal on close.** The cleanup job has only ever been *skipped*: no PR has
+closed since the workflow existed, so the removal has never run against Cloud Run. Its decision
+logic is now a tested script (`scripts/remove-preview-tag.sh`) covering removed / already-absent /
+real-failure, but a test with a stubbed `gcloud` is not the same claim as having done it. Merging
+this PR is the first time it runs for real.
+
+**Not proved — the fork path.** The degraded behaviour is pinned by the workflow shape tests, but
+no fork PR has ever been opened against this repository, so it has not been observed.
 
 That step no longer swallows failures. It previously ended `|| echo "…nothing to do"`, which
 reported success for every failure — expired credentials, a network fault, a wrong service name —
