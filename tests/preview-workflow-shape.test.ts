@@ -59,10 +59,11 @@ describe('preview.yml — concurrency', () => {
     expect(yml).toContain('concurrency:');
   });
 
-  it('keys the concurrency group on the PR number', () => {
-    // The PR number gives each PR its own group so older runs are cancelled when
-    // a new push supersedes them.
-    expect(flat).toMatch(/concurrency:.*group: preview-\$\{\{ github\.event\.pull_request\.number \}\}/);
+  it('keys each concurrency group on the PR number', () => {
+    // The PR number gives each PR its own groups, so a cancel never reaches another PR or a
+    // main-branch run. The groups are per job — see 'concurrency is per job, not shared'.
+    expect(flat).toMatch(/group: preview-deploy-\$\{\{ github\.event\.pull_request\.number \}\}/);
+    expect(flat).toMatch(/group: preview-cleanup-\$\{\{ github\.event\.pull_request\.number \}\}/);
   });
 
   it('sets cancel-in-progress: true', () => {
@@ -381,5 +382,31 @@ describe('per-job permission scoping', () => {
     // The cleanup job comments on nothing; a write grant there would be unused authority.
     expect(cleanup).not.toMatch(/pull-requests: write/);
     expect(cleanup).toMatch(/id-token: write/);
+  });
+});
+
+describe('concurrency is per job, not shared', () => {
+  /**
+   * A single workflow-level group covers both jobs, so a deploy-triggering event can cancel an
+   * in-flight cleanup: close a PR, then push or reopen, and the tag removal aborts partway with
+   * nothing scheduled to finish it. Deploys are safe to supersede; cleanups are not.
+   */
+  it('has no workflow-level concurrency group', () => {
+    const beforeJobs = yml.slice(0, yml.indexOf('\njobs:'));
+
+    expect(beforeJobs).not.toMatch(/^concurrency:/m);
+  });
+
+  it('cancels superseded deploys but never a cleanup', () => {
+    const deployJob = yml.slice(yml.indexOf('\n  deploy:'), yml.indexOf('\n  cleanup:'));
+    const cleanup = yml.slice(yml.indexOf('\n  cleanup:'));
+
+    expect(deployJob).toMatch(/concurrency:[\s\S]{0,200}cancel-in-progress: true/);
+    expect(cleanup).toMatch(/concurrency:[\s\S]{0,200}cancel-in-progress: false/);
+  });
+
+  it('keys the two groups separately so they cannot cancel each other', () => {
+    expect(yml).toMatch(/group: preview-deploy-/);
+    expect(yml).toMatch(/group: preview-cleanup-/);
   });
 });

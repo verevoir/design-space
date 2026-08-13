@@ -11,12 +11,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
 
-# One active run per PR at a time.  A push that supersedes a previous one cancels
-# the in-flight deploy before starting its own — the group key is the PR number so
-# the cancel does not touch other PRs or any main-branch run.
-concurrency:
-  group: preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# Concurrency is declared PER JOB, not here. A single workflow-level group covers deploy and
+# cleanup alike, so a deploy-triggering event could cancel an in-flight cleanup — closing a PR,
+# then pushing or reopening, would abort the tag removal partway and leave the tag routing with
+# nothing scheduled to remove it. Deploys are safe to supersede; cleanups are not.
 
 # Minimal token grant.
 # id-token:write     — Workload Identity Federation (WIF) requires this to exchange
@@ -53,6 +51,10 @@ jobs:
   deploy:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    # Superseding a deploy is the point: a newer push should replace an older one's preview.
+    concurrency:
+      group: preview-deploy-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     timeout-minutes: 20
     permissions:
       contents: read        # checkout
@@ -227,6 +229,11 @@ jobs:
             });
             core.info(`preview comment ${action}`);
   cleanup:
+    # NOT cancel-in-progress: a half-finished tag removal leaves the tag routing, and nothing
+    # else will come along to finish it. Queue behind any in-flight cleanup instead.
+    concurrency:
+      group: preview-cleanup-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     if: |
       github.event.action == 'closed' &&
       github.event.pull_request.head.repo.full_name == github.repository
