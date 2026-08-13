@@ -197,6 +197,25 @@ figure, not as "cheap".
 **Writes.** `packages/studio` (entry point), `Dockerfile`, deployment configuration.
 **Unblocks.** 2S.3.
 
+**Status.** Mostly done, one clause outstanding.
+
+Delivered: `serve.ts` wires `prerender`'s output to the server and is what the container runs;
+a two-stage `Dockerfile` pinned by digest, non-root, carrying no git, no devDependencies and no
+source; the service deployed to Cloud Run in `europe-west2` at `min-instances=0`, authenticated
+only, running as an identity with no permissions. The deployed URL serves the journey — the
+`prompt` block rendered, five labelled gaps, 5689 bytes.
+
+**Outstanding: the idle cost as a number.** The done-bar asks for a figure rather than the word
+"cheap", and only a billing read supplies one. Not estimated on purpose.
+
+Two things the deployment caught that nothing else had. The image built on Apple Silicon is
+`arm64` and Cloud Run rejects it with `exec format error` at the startup probe — a passing suite
+and a container that ran locally said nothing about it. And **Cloud Run intercepts `/healthz`**:
+it returns a Google frontend 404 that never reaches the container, while `/health`, `/readyz`,
+`/-/health` and arbitrary paths all arrive. A review lens raised exactly this; it was checked
+against Google's documentation, found unsupported, and pushed back on. The deployment settled it
+the other way, and the endpoint is now `/health`.
+
 ### 2S.3 Every pull request gets its own deployment, and smoke tests run against it
 
 **Outcome.** Opening or updating a PR deploys a revision carrying no traffic under a `pr-<n>` tag,
@@ -263,6 +282,17 @@ against any particular adapter, which is what keeps it a sibling of 3.1 rather t
 
 ### 3.1 The sketch adapter renders every component in the port
 
+**Known gap, found 2026-08-12 by running the container rather than the suite.** `render.ts` owns the
+`<style>` block through a module constant, and the `Adapter` interface has **no way to contribute
+CSS at all**. So every adapter currently renders with identical styling, and
+`SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — defined, exported, pinned by a test file that
+asserts every one of its token values, and referenced by nothing outside that test. The served
+page contains no `--ds-*` properties.
+
+That is ADR 0001's central claim unimplemented: an adapter is supposed to decide what a component
+looks like. **This story must widen the `Adapter` contract to carry presentation**, not only
+markup, or the sketch style cannot exist and 4.1 cannot work.
+
 **Outcome.** A hand-drawn adapter implements the whole port. The rendering reads as provisional
 through typography and colour — handwriting face, warm paper, ink rather than black, one hard
 offset shadow, straight geometry — and stays legible with content of arbitrary length.
@@ -317,6 +347,10 @@ design system) from a *defect* (a finding about the adapter).
 ## Wave 4 — the cheap axis, and the view
 
 ### 4.1 Token-variant adapters carry the airy-versus-dense conversation
+
+**Blocked on 3.1's adapter-contract widening.** A token-variant adapter changes values over shared
+markup (ADR 0001's degenerate case) — which is only meaningful once an adapter can supply those
+values. Today it cannot, so swapping a token set would change nothing on screen.
 
 **Outcome.** At least two adapters that reuse the sketch adapter's markup and change only token
 values, so that "it is a bit crowded, can we try something lighter" is answerable by swapping a

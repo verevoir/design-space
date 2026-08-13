@@ -1,0 +1,264 @@
+/**
+ * Unit tests for serve.ts module-level behaviour.
+ *
+ * serve.ts exports `runEntryPoint`, which these tests call directly — with node:fs/promises
+ * and ./server.js mocked — so each path is exercised without touching the real filesystem or
+ * binding a real port. Importing the module does NOT start anything: it self-starts only when
+ * it is the process entry point.
+ *
+ * Paths under test:
+ *   (a) readFile fails — wrapped with the specific legible message that names
+ *       the document path and instructs the operator to run the prerender build
+ *       step; a non-zero exit code is set (not process.exit(), which can truncate the
+ *       stderr write); the original error message is preserved.
+ *   (b) readFile succeeds but startServer fails — a non-zero exit code is set and
+ *       the error message is written to stderr.
+ *   (c) both succeed — "Studio server listening on port ${port}\n" is written to
+ *       stdout, and the document that was read is the one handed to startServer.
+ *       Reachability is NOT asserted here: both node:fs/promises and ./server.js
+ *       are mocked, so nothing binds a port. serve-e2e.test.ts covers reachability
+ *       against a real server, and prerender-build.test.ts covers the container's
+ *       own entry path by spawning it.
+ */
+import { vi, it, describe, expect, afterEach, beforeEach } from 'vitest';
+
+// vi.mock calls are hoisted before any import. They intercept the named
+// modules wherever they are imported — including inside serve.ts itself.
+vi.mock('node:fs/promises');
+vi.mock('./server.js');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Capture exit code and stderr from a fresh execution of the serve.ts module.
+ * The module is reset before each call so runEntryPoint runs against fresh mocks.
+ */
+async function loadServeWithReadFileError(cause: Error): Promise<{
+  exitCode: number | undefined;
+  stderrOutput: string;
+}> {
+  // Wire the readFile mock to reject with the supplied cause.
+  const fsMod = await import('node:fs/promises');
+  vi.mocked(fsMod.readFile).mockRejectedValueOnce(cause);
+
+  // Wire startServer so it would not bind a port if readFile somehow succeeded.
+  const serverMod = await import('./server.js');
+  vi.mocked(serverMod.startServer).mockResolvedValue({
+    address: () => ({ port: 8080 }),
+  } as ReturnType<typeof serverMod.startServer> extends Promise<infer S> ? S : never);
+
+  // Spy on process.exit before the module runs so the process is not killed.
+  // The entry point sets process.exitCode rather than calling process.exit(), so that an
+  // unflushed stderr write is not truncated. Capture and restore it.
+  const origExitCode = process.exitCode;
+  process.exitCode = undefined;
+
+  // Capture stderr writes.
+  const stderrChunks: string[] = [];
+  const origStderrWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (
+    chunk: Uint8Array | string,
+    _encodingOrCb?: unknown,
+    _cb?: unknown,
+  ): boolean => {
+    stderrChunks.push(String(chunk));
+    return true;
+  };
+
+  try {
+    // Drive the entry point's behaviour directly. Importing the module no longer starts a
+    // server — it self-starts only when it IS the process entry point — so the test calls the
+    // exported startup path rather than relying on an import side effect.
+    const { runEntryPoint } = await import('./serve.js');
+    await runEntryPoint('/document.html');
+  } finally {
+    process.stderr.write = origStderrWrite;
+  }
+
+  const capturedExitCode = typeof process.exitCode === 'number' ? process.exitCode : undefined;
+  process.exitCode = origExitCode;
+  return { exitCode: capturedExitCode, stderrOutput: stderrChunks.join('') };
+}
+
+
+/**
+ * Capture exit code, stdout and stderr from a fresh execution of serve.ts where the document
+ * READS SUCCESSFULLY. `startServerBehaviour` decides whether the server starts or fails, which
+ * is what separates path (b) from path (c).
+ */
+async function loadServeWithDocument(
+  html: string,
+  startServerBehaviour: { ok: true; port: number } | { ok: false; error: Error },
+): Promise<{ exitCode: number | undefined; stdoutOutput: string; stderrOutput: string }> {
+  const fsMod = await import('node:fs/promises');
+  vi.mocked(fsMod.readFile).mockResolvedValueOnce(html);
+  // serve.ts makes a second readFile call for the gaps sidecar (.catch(() => []) handles any
+  // error, but the auto-mock returns undefined which is not a promise — supply an explicit value).
+  vi.mocked(fsMod.readFile).mockResolvedValueOnce('[]');
+
+  const serverMod = await import('./server.js');
+  if (startServerBehaviour.ok) {
+    vi.mocked(serverMod.startServer).mockResolvedValue({
+      address: () => ({ port: startServerBehaviour.port }),
+    } as ReturnType<typeof serverMod.startServer> extends Promise<infer S> ? S : never);
+  } else {
+    vi.mocked(serverMod.startServer).mockRejectedValueOnce(startServerBehaviour.error);
+  }
+
+  // The entry point sets process.exitCode rather than calling process.exit(), so that an
+  // unflushed stderr write is not truncated. Capture and restore it.
+  const origExitCode = process.exitCode;
+  process.exitCode = undefined;
+
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const origStdoutWrite = process.stdout.write.bind(process.stdout);
+  const origStderrWrite = process.stderr.write.bind(process.stderr);
+  process.stdout.write = (chunk: Uint8Array | string): boolean => {
+    stdoutChunks.push(String(chunk));
+    return true;
+  };
+  process.stderr.write = (chunk: Uint8Array | string): boolean => {
+    stderrChunks.push(String(chunk));
+    return true;
+  };
+
+  try {
+    const { runEntryPoint } = await import('./serve.js');
+    await runEntryPoint('/document.html');
+  } finally {
+    process.stdout.write = origStdoutWrite;
+    process.stderr.write = origStderrWrite;
+  }
+
+  const capturedExitCode = typeof process.exitCode === 'number' ? process.exitCode : undefined;
+  process.exitCode = origExitCode;
+  return {
+    exitCode: capturedExitCode,
+    stdoutOutput: stdoutChunks.join(''),
+    stderrOutput: stderrChunks.join(''),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('serve.ts: readFile failure path', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sets a non-zero exit code when the pre-rendered document cannot be read', async () => {
+    const cause = Object.assign(
+      new Error('no such file or directory'),
+      { code: 'ENOENT' } as NodeJS.ErrnoException,
+    );
+    const { exitCode } = await loadServeWithReadFileError(cause);
+    expect(exitCode).toBe(1);
+  });
+
+  it('writes to stderr a message that names the pre-rendered document path', async () => {
+    const cause = Object.assign(
+      new Error('no such file or directory'),
+      { code: 'ENOENT' } as NodeJS.ErrnoException,
+    );
+    const { stderrOutput } = await loadServeWithReadFileError(cause);
+    // runEntryPoint's catch writes:
+    //   "Studio server startup failed: Studio server failed to read the
+    //    pre-rendered document at <path>: <msg>. Run the prerender build step..."
+    expect(stderrOutput).toMatch(
+      /Studio server failed to read the pre-rendered document at/,
+    );
+  });
+
+  it('includes the instruction to run the prerender build step in the stderr message', async () => {
+    const cause = Object.assign(
+      new Error('no such file or directory'),
+      { code: 'ENOENT' } as NodeJS.ErrnoException,
+    );
+    const { stderrOutput } = await loadServeWithReadFileError(cause);
+    expect(stderrOutput).toMatch(/Run the prerender build step before starting the server/);
+  });
+
+  it('preserves the original error message inside the wrapped message', async () => {
+    const originalMessage = 'ENOENT: no such file or directory, open \'/app/dist/document.html\'';
+    const cause = Object.assign(
+      new Error(originalMessage),
+      { code: 'ENOENT' } as NodeJS.ErrnoException,
+    );
+    const { stderrOutput } = await loadServeWithReadFileError(cause);
+    // The wrapped Error is constructed as:
+    //   new Error(`...${err.message}...`, { cause: err })
+    // So the original message must appear verbatim in the stderr output.
+    expect(stderrOutput).toContain(originalMessage);
+  });
+});
+
+describe('serve.ts: startServer failure path (document read, server did not start)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('exits non-zero when the server cannot start, rather than sitting there serving nothing', async () => {
+    const { exitCode } = await loadServeWithDocument('<html>ok</html>', {
+      ok: false,
+      error: new Error('EADDRINUSE: port 8080 is already in use'),
+    });
+
+    expect(exitCode).toBe(1);
+  });
+
+  it('names the underlying startup failure on stderr', async () => {
+    const { stderrOutput } = await loadServeWithDocument('<html>ok</html>', {
+      ok: false,
+      error: new Error('EADDRINUSE: port 8080 is already in use'),
+    });
+
+    expect(stderrOutput).toContain('Studio server startup failed:');
+    expect(stderrOutput).toContain('EADDRINUSE');
+  });
+});
+
+describe('serve.ts: success path', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('announces the port it is listening on', async () => {
+    const { stdoutOutput } = await loadServeWithDocument('<html>ok</html>', {
+      ok: true,
+      port: 8080,
+    });
+
+    // The message is deliberate behaviour: it is the only signal in the container log that
+    // startup completed, so it is asserted rather than assumed.
+    expect(stdoutOutput).toContain('Studio server listening on port 8080');
+  });
+
+  it('does not exit when startup succeeds', async () => {
+    const { exitCode } = await loadServeWithDocument('<html>ok</html>', {
+      ok: true,
+      port: 8080,
+    });
+
+    expect(exitCode).toBeUndefined();
+  });
+
+  it('passes the document it read to the server rather than an empty page', async () => {
+    await loadServeWithDocument('<html>the real document</html>', { ok: true, port: 8080 });
+
+    const serverMod = await import('./server.js');
+    expect(vi.mocked(serverMod.startServer)).toHaveBeenCalledWith(
+      expect.objectContaining({ rendered: expect.objectContaining({ html: '<html>the real document</html>' }) }),
+    );
+  });
+});

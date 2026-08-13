@@ -75,18 +75,18 @@ describe('createStudioServer()', () => {
     cleanup = fn;
   }
 
-  describe('/healthz endpoint', () => {
+  describe('/health endpoint', () => {
     it('returns HTTP 200', async () => {
       const server = createStudioServer({ rendered: makeRendered('<html></html>') });
       const base = await bindServer(server, register);
-      const res = await fetch(`${base}/healthz`);
+      const res = await fetch(`${base}/health`);
       expect(res.status).toBe(200);
     });
 
     it('returns JSON with status=ok', async () => {
       const server = createStudioServer({ rendered: makeRendered('<html></html>') });
       const base = await bindServer(server, register);
-      const res = await fetch(`${base}/healthz`);
+      const res = await fetch(`${base}/health`);
       const body = await res.json() as Record<string, unknown>;
       expect(body['status']).toBe('ok');
     });
@@ -97,7 +97,7 @@ describe('createStudioServer()', () => {
       // "0.1.0" (three segments) would fail, proving the doc-comment is honoured.
       const server = createStudioServer({ rendered: makeRendered('<html></html>') });
       const base = await bindServer(server, register);
-      const res = await fetch(`${base}/healthz`);
+      const res = await fetch(`${base}/health`);
       const body = await res.json() as Record<string, unknown>;
       expect(body['portVersion']).toMatch(/^\d+\.\d+$/);
       // Also confirm it matches what the package exports, so a version bump
@@ -206,7 +206,7 @@ describe('startServer()', () => {
         expect(addr.port).toBe(port);
       }
       // Confirm it is actually serving HTTP.
-      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      const res = await fetch(`http://127.0.0.1:${port}/health`);
       expect(res.status).toBe(200);
     } finally {
       if (origPort === undefined) {

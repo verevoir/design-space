@@ -12,7 +12,7 @@
  * conversation overlay, and the seam it goes through is already this one.
  */
 import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join, basename, extname } from 'node:path';
 
 import { sketchAdapter } from '@design-space/adapter-sketch';
 import { validateJourney } from '@design-space/journey-model';
@@ -33,9 +33,23 @@ export interface PrerenderOptions {
 }
 
 /**
+ * Derives the gaps-sidecar path for a given HTML document path.
+ * For `dist/document.html` this returns `dist/document.gaps.json`.
+ */
+export function gapsPathFor(outPath: string): string {
+  const ext = extname(outPath);
+  const stem = basename(outPath, ext);
+  return join(dirname(outPath), `${stem}.gaps.json`);
+}
+
+/**
  * Reads the journey at `(journeyId, ref)`, renders it through the sketch adapter, and writes
- * the document. Returns the gaps the render reported, so a caller can surface them rather
- * than discovering them by looking at the page.
+ * the HTML document together with a companion gaps sidecar (`<outPath stem>.gaps.json`).
+ * Returns the gaps the render reported, so a caller can surface them rather than discovering
+ * them by looking at the page.
+ *
+ * The gaps sidecar contains the full GapRecord array as JSON. `serve.ts` reads it at startup
+ * so the runtime carries the real gap list rather than a hardcoded empty one.
  */
 export async function prerender(options: PrerenderOptions): Promise<{ gaps: readonly string[] }> {
   const raw = await resolveObject(
@@ -58,7 +72,14 @@ export async function prerender(options: PrerenderOptions): Promise<{ gaps: read
   const rendered = render(result.document, sketchAdapter);
 
   await mkdir(dirname(options.outPath), { recursive: true });
-  await writeFile(options.outPath, rendered.html, 'utf-8');
+  // Write the HTML document and its gaps sidecar atomically enough for a build step.
+  // The sidecar carries the full GapRecord array so serve.ts can pass real gaps to the
+  // server rather than an empty list.
+  const gapsPath = gapsPathFor(options.outPath);
+  await Promise.all([
+    writeFile(options.outPath, rendered.html, 'utf-8'),
+    writeFile(gapsPath, JSON.stringify(rendered.gaps), 'utf-8'),
+  ]);
 
   return { gaps: rendered.gaps.map((g) => g.component) };
 }

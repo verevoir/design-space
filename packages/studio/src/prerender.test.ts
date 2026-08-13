@@ -130,3 +130,23 @@ describe('prerender', () => {
     }
   });
 });
+
+describe('prerender writes a gaps sidecar alongside the document', () => {
+  it('names the sidecar from the document path', async () => {
+    const { gapsPathFor } = await import('./prerender.js');
+
+    expect(gapsPathFor('/a/b/document.html')).toBe('/a/b/document.gaps.json');
+  });
+
+  it('writes the gaps it reported, so the served document and its gaps agree', async () => {
+    const out = join(repoPath, 'out', 'index.html');
+    const { gaps } = await prerender({ repoPath, journeyId: 'demo', ref: 'HEAD', outPath: out });
+
+    const { gapsPathFor } = await import('./prerender.js');
+    const written = JSON.parse(await readFile(gapsPathFor(out), 'utf-8')) as { component: string }[];
+
+    // The sidecar is the only channel by which the build's findings reach the runtime, so it
+    // must carry what prerender actually reported rather than an empty placeholder.
+    expect(written.map((g) => g.component)).toEqual(expect.arrayContaining(gaps));
+  });
+});
