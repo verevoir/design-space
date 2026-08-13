@@ -120,9 +120,11 @@ else
   echo "OK    GET /health  body contains status:ok"
 fi
 
-# Confirm the portVersion field is present (MAJOR.MINOR format).
-if [[ "$FETCH_BODY" != *'"portVersion"'* ]]; then
-  echo "FAIL  GET /health  body does not contain portVersion field — got: ${FETCH_BODY}" >&2
+# Confirm portVersion is present AND in MAJOR.MINOR form. Checking only that the field name
+# appears would pass for "portVersion": null or an empty string — and the port version is what
+# adapter output is content-addressed on, so a malformed one is worth failing a deploy over.
+if [[ ! "$FETCH_BODY" =~ \"portVersion\"[[:space:]]*:[[:space:]]*\"[0-9]+\.[0-9]+\" ]]; then
+  echo "FAIL  GET /health  portVersion missing or not MAJOR.MINOR — got: ${FETCH_BODY}" >&2
   fail=1
 else
   echo "OK    GET /health  body contains portVersion"

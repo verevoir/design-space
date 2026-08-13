@@ -437,3 +437,74 @@ describe('smoke.sh — a base URL with a trailing slash', () => {
     expect(paths.some((p) => p.startsWith('//'))).toBe(false);
   });
 });
+
+describe('smoke.sh — the curl timeout actually fires', () => {
+  let hung: Server;
+
+  afterEach(async () => {
+    if (hung) await new Promise<void>((r) => hung.close(() => r()));
+  });
+
+  it('gives up on a server that never responds, rather than hanging', async () => {
+    // Fault injection: accept the connection and never answer. Without --max-time the script
+    // would wait on curl's default (no timeout on the response body), and a wedged preview
+    // would hold the workflow open until the job's own 20-minute ceiling.
+    hung = createServer(() => {
+      /* deliberately never responds */
+    });
+    await new Promise<void>((r) => hung.listen(0, '127.0.0.1', () => r()));
+    const a = hung.address();
+    const port = a && typeof a === 'object' ? a.port : 0;
+
+    const started = Date.now();
+    const r = await runSmoke(`http://127.0.0.1:${port}`, { SMOKE_CURL_MAX_TIME: '1' });
+    const elapsed = Date.now() - started;
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/FAIL/);
+    // Two checks at ~1s each; anything near the default 30s means the bound was ignored.
+    expect(elapsed).toBeLessThan(10_000);
+  }, 30_000);
+});
+
+describe('smoke.sh — portVersion must be MAJOR.MINOR, not merely present', () => {
+  let srv3: Server;
+
+  afterEach(async () => {
+    if (srv3) await new Promise<void>((r) => srv3.close(() => r()));
+  });
+
+  async function serveHealthBody(body: string): Promise<number> {
+    srv3 = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(body);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(GOOD_BODY_ROOT);
+      }
+    });
+    await new Promise<void>((r) => srv3.listen(0, '127.0.0.1', () => r()));
+    const a = srv3.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('accepts a well-formed version', async () => {
+    const port = await serveHealthBody('{"status":"ok","portVersion":"0.1"}');
+    expect((await runSmoke(`http://127.0.0.1:${port}`)).exitCode).toBe(0);
+  });
+
+  it('rejects a three-segment version, which the port does not use', async () => {
+    const port = await serveHealthBody('{"status":"ok","portVersion":"0.1.0"}');
+    const r = await runSmoke(`http://127.0.0.1:${port}`);
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/portVersion missing or not MAJOR\.MINOR/);
+  });
+
+  it('rejects an empty version, which a name-only check would have passed', async () => {
+    const port = await serveHealthBody('{"status":"ok","portVersion":""}');
+
+    expect((await runSmoke(`http://127.0.0.1:${port}`)).exitCode).not.toBe(0);
+  });
+});

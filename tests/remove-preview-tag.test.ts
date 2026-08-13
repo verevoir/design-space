@@ -110,3 +110,22 @@ describe('remove-preview-tag.sh — a not-found that is not the tag', () => {
     expect(r.stderr).toContain('may still be routing');
   });
 });
+
+describe('remove-preview-tag.sh — each part of the three-part condition is load-bearing', () => {
+  it('FAILS when the message names the tag but says nothing about not-found', async () => {
+    // e.g. a quota or permission error that happens to echo the tag back.
+    const dir = await withStubGcloud('ERROR: quota exceeded while updating traffic for pr-99', 1);
+    const r = await run(dir);
+
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  it('FAILS when the message says not-found and mentions a tag, but not THIS tag', async () => {
+    // The dangerous near-miss: right words, wrong subject.
+    const dir = await withStubGcloud('ERROR: tag not found: pr-12345', 1);
+    const r = await run(dir);
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('may still be routing');
+  });
+});
