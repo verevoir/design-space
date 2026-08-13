@@ -12,8 +12,14 @@
 
 export const MARKER = '<!-- design-space-preview -->';
 
-/** @param {{tagUrl: string, prNumber: number, sha: string, smokePassed?: boolean}} opts */
-export function previewCommentBody({ tagUrl, prNumber, sha, smokePassed = true }) {
+/**
+ * The comment is only ever written after smoke has passed — a failing smoke run fails the job
+ * before this step is reached — so there is no "smoke failed" variant. Adding one would be a
+ * branch nothing can execute.
+ *
+ * @param {{tagUrl: string, prNumber: number, sha: string}} opts
+ */
+export function previewCommentBody({ tagUrl, prNumber, sha }) {
   const shortSha = sha.slice(0, 7);
   return `${MARKER}
 ## Preview deployment
@@ -25,7 +31,7 @@ export function previewCommentBody({ tagUrl, prNumber, sha, smokePassed = true }
 | **Tag** | \`pr-${prNumber}\` |
 | **Traffic** | none — this revision carries no production traffic |
 
-${smokePassed ? 'Smoke tests passed against this revision.' : 'Smoke tests did NOT pass against this revision.'}
+Smoke tests passed against this revision.
 `;
 }
 

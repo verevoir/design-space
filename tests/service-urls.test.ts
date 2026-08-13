@@ -58,3 +58,50 @@ describe('serviceUrls', () => {
     );
   });
 });
+
+describe('service-urls.mjs as a command', () => {
+  const SCRIPT = new URL('../scripts/service-urls.mjs', import.meta.url).pathname;
+
+  /** Run the script as the container/workflow does: JSON on stdin, tag as argv. */
+  async function runCli(stdin: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
+    const { spawn } = await import('node:child_process');
+    return new Promise((res, rej) => {
+      const p = spawn('node', [SCRIPT, ...args]);
+      let out = '';
+      let err = '';
+      p.stdout.on('data', (c: Buffer) => (out += c.toString()));
+      p.stderr.on('data', (c: Buffer) => (err += c.toString()));
+      p.on('close', (code) => res({ code: code ?? 1, out, err }));
+      p.on('error', rej);
+      p.stdin.end(stdin);
+    });
+  }
+
+  const good = JSON.stringify({
+    status: { url: SERVICE_URL, traffic: [{ tag: 'pr-6', url: TAG_URL }] },
+  });
+
+  it('prints both env assignments the workflow appends to $GITHUB_ENV', async () => {
+    const r = await runCli(good, ['pr-6']);
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`TAG_URL=${TAG_URL}`);
+    expect(r.out).toContain(`SERVICE_URL=${SERVICE_URL}`);
+  });
+
+  it('exits 2 with a usage line when no tag is given', async () => {
+    const r = await runCli(good, []);
+
+    // Distinct from exit 1 so a wiring mistake is not read as a missing tag.
+    expect(r.code).toBe(2);
+    expect(r.err).toContain('usage:');
+  });
+
+  it('exits 1 and names the problem when the tag is absent', async () => {
+    const r = await runCli(good, ['pr-999']);
+
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('no traffic entry tagged "pr-999"');
+    expect(r.out).toBe('');
+  });
+});
