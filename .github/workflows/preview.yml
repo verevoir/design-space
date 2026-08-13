@@ -237,6 +237,11 @@ jobs:
       # deliberately NO pull-requests: write — this job comments on nothing
 
     steps:
+      # Required: the tag-removal logic lives in scripts/, so without a checkout this job runs
+      # `bash` against a file that is not on the runner. It was inline shell before the logic was
+      # extracted for testing, which is why the checkout was not needed until now.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Authenticate to Google Cloud via WIF
         uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
         with:

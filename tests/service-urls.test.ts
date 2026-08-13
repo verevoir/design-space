@@ -105,3 +105,18 @@ describe('service-urls.mjs as a command', () => {
     expect(r.out).toBe('');
   });
 });
+
+describe('serviceUrls — malformed traffic', () => {
+  it('throws when status.traffic is missing entirely', () => {
+    const raw = JSON.stringify({ status: { url: SERVICE_URL } });
+
+    expect(() => serviceUrls(raw, 'pr-6')).toThrow(/no status\.traffic array/);
+  });
+
+  it('throws when status.traffic is present but not an array', () => {
+    // Guards against a shape change in gcloud output being read as "no tags".
+    const raw = JSON.stringify({ status: { url: SERVICE_URL, traffic: { tag: 'pr-6' } } });
+
+    expect(() => serviceUrls(raw, 'pr-6')).toThrow(/no status\.traffic array/);
+  });
+});

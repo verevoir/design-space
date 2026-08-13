@@ -280,3 +280,22 @@ describe('every run: block is valid shell', () => {
     expect(failures).toEqual([]);
   });
 });
+
+describe('every job that runs a repo script checks the repo out', () => {
+  /**
+   * The cleanup job shipped without a checkout while its logic was inline shell, then kept
+   * running after that logic moved into scripts/ — so it would have invoked bash against a file
+   * that was never on the runner. It has only ever been skipped, so nothing executed it.
+   */
+  it('the cleanup job checks out before invoking scripts/', () => {
+    const cleanup = yml.slice(yml.indexOf('\n  cleanup:'));
+
+    expect(cleanup).toContain('scripts/remove-preview-tag.sh');
+    expect(cleanup).toMatch(/uses: actions\/checkout@[0-9a-f]{40}/);
+
+    // Order matters: a checkout after the script would not help.
+    expect(cleanup.indexOf('actions/checkout@')).toBeLessThan(
+      cleanup.indexOf('scripts/remove-preview-tag.sh'),
+    );
+  });
+});

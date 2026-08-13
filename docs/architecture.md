@@ -202,7 +202,10 @@ packages/
   studio/           the two modes: journey editing, and the matrix.
 examples/journeys/  the reference journey the port is induced from.
 docs/               this file, and the ADRs.
-tests/              the review gate's own tests (see below).
+scripts/            logic the workflows call, kept here so it can be tested: the preview
+                    smoke checks, tag removal, gcloud URL extraction, and the PR comment's
+                    update-or-create decision.
+tests/              tests for the review gate and for scripts/ (see below).
 .github/
   workflows/        CI, the antagonistic-review panel, and the per-PR preview deploy.
   antagonistic-review/   the panel's scripts. All of them move together.
