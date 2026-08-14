@@ -289,11 +289,14 @@ recorded here so the next person does not have to rediscover them.
   **none has ever been promoted** — the pipeline validates changes it never ships. So the first
   real promotion is not a rehearsal: it is the redeploy that makes the live service match its
   own source, and `/health` returning 200 on the traffic-serving revision is the proof.
-- **This repository forbids merge commits**, so the final step is a *squash* onto an unmoved
-  `main`, not a fast-forward merge. The intent of ADR 0007 is unchanged — one new commit, no
-  conflict resolution, nothing to reconcile after the canary — but the ADR says "fast-forward"
-  and needs amending to match, or the branch protection needs changing. **Operator decision
-  outstanding.**
+- **This repository forbids merge commits, and ADR 0007 already assumes that.** Its
+  "the branch must fast-forward onto `main`" is a *precondition* checked before canarying —
+  `git merge-base --is-ancestor origin/main HEAD` — not a statement about the merge method. The
+  ADR then designs explicitly for squash and rebase minting a new SHA: the proven image is
+  retagged onto the merged commit, and the merged **tree** is asserted equal to the canaried
+  tree, SHA equality having been rejected as unachievable on GitHub. So `--squash` is the
+  expected landing, and the retag-and-compare is not optional detail — it is the whole reason
+  the ADR can tolerate a new SHA.
 - **The tagged-revision mechanism underneath this story is proved** by 2S.3: per-PR `--no-traffic
   --tag pr-<n>` deploys, smoke against the tag URL, and tag removal on close have all run against
   the real service. What is unproved is everything about *traffic* — no traffic split has ever

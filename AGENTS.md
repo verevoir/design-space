@@ -63,9 +63,12 @@ not repeated.
   the capabilities project alongside it:
 
   ```sh
-  PREGATE_PI_CONFIG=~/claude-configs/nextlake/.claude.json \
+  PREGATE_PI_CONFIG=<the Claude config file holding your model credentials> \
     node ../capabilities/scripts/run-pregate.mjs --base main
   ```
+
+  The config path is machine-specific and deliberately not written down here — a literal path
+  from one operator's laptop is wrong for everyone else and unverifiable from this repository.
 
   About five minutes and a couple of dollars — cheap against a CI round trip, and it runs the
   same five lenses.
