@@ -1,0 +1,278 @@
+name: PR preview
+
+# Deploy a no-traffic tagged revision for every pull request and run smoke tests against it.
+# ADR 0007: a change is deployed and exercised in production before it reaches main.
+#
+# Three triggers, one event shape each:
+#   opened / synchronize / reopened  →  build, push, deploy, smoke, comment
+#   closed                           →  remove the pr-<n> tag so tags don't accumulate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# Concurrency is declared PER JOB, not here. A single workflow-level group covers deploy and
+# cleanup alike, so a deploy-triggering event could cancel an in-flight cleanup — closing a PR,
+# then pushing or reopening, would abort the tag removal partway and leave the tag routing with
+# nothing scheduled to remove it. Deploys are safe to supersede; cleanups are not.
+
+# Minimal token grant.
+# id-token:write     — Workload Identity Federation (WIF) requires this to exchange
+#                      a GitHub OIDC token for a Google credential.
+# pull-requests:write — needed to create and update the preview-URL comment.
+# contents:read      — checkout.  Listed explicitly so the job's token is not wider
+#                      than it needs to be even though read is the repo default.
+# Declared per job below rather than here: the cleanup job posts no comment, so granting it
+# pull-requests:write would hand a token wider than the job needs — which is the thing the
+# comment above claims to avoid.
+permissions: {}
+
+# ---------------------------------------------------------------------------
+# Shared configuration — single source of truth for every job below.
+# ---------------------------------------------------------------------------
+env:
+  PROJECT_ID:   design-space-505306
+  REGION:       europe-west2
+  SERVICE:      design-space-studio
+  REGISTRY:     europe-west2-docker.pkg.dev
+  IMAGE_REPO:   europe-west2-docker.pkg.dev/design-space-505306/design-space/design-space-studio
+  # The identity that holds run.admin + artifactregistry.writer.
+  # Authenticated via WIF; no service-account key exists or is needed.
+  DEPLOYER_SA:  ds-deployer@design-space-505306.iam.gserviceaccount.com
+  # Invoke-only, and only on this one service. The smoke test needs to CALL the revision, not
+  # administer it — minting its token as the deployer would put run.admin behind a curl.
+  INVOKER_SA:   ds-invoker@design-space-505306.iam.gserviceaccount.com
+  WIF_PROVIDER: projects/959702328785/locations/global/workloadIdentityPools/github/providers/github
+
+jobs:
+  # --------------------------------------------------------------------------
+  # deploy — build the image, push to Artifact Registry, deploy with --no-traffic
+  #          --tag pr-<n>, run smoke tests, post or update the PR comment.
+  #
+  # Skipped on PR close (the cleanup job handles that).
+  # --------------------------------------------------------------------------
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    # Superseding a deploy is the point: a newer push should replace an older one's preview.
+    concurrency:
+      group: preview-deploy-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    timeout-minutes: 20
+    permissions:
+      contents: read        # checkout
+      id-token: write       # Workload Identity Federation
+      pull-requests: write  # post or update the preview comment
+
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs, not to floating
+      # major-version tags.  The version comment makes the pin legible so it can
+      # be bumped deliberately.  Same discipline as ci.yml.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # ------------------------------------------------------------------
+      # Fork guard — WIF cannot issue credentials to a fork because the
+      # provider's condition is:
+      #   assertion.repository == 'verevoir/design-space'
+      # A fork's head runs under a different repository name so the condition
+      # fails and no token is issued.  Attempting to authenticate would produce
+      # an error rather than a graceful skip, so we detect forks here and
+      # write a plain explanation to the job summary instead.
+      #
+      # This mirrors exactly the guard the antagonistic-review panel uses for
+      # the same reason (see .github/workflows/antagonistic-review.yml).
+      # ------------------------------------------------------------------
+      - name: Skip deploy for fork PRs
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Preview unavailable for fork pull requests
+
+          Cloud Run deployments require credentials from Workload Identity Federation.
+          The WIF provider condition is scoped to `verevoir/design-space`; a fork's
+          head runs under a different repository name so no credential can be issued.
+
+          This is the same guard that prevents the antagonistic-review panel from
+          reaching org secrets on a fork PR — the restriction is intentional, not a
+          bug.  A maintainer with write access can push the branch here to obtain a
+          preview URL.
+          EOF
+
+      # All remaining steps run only on same-repo PRs.
+
+      - name: Authenticate to Google Cloud via WIF
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account:            ${{ env.DEPLOYER_SA }}
+          # token_format: 'access_token' is the default and is sufficient for
+          # gcloud CLI and docker credential-helper usage.
+
+      - name: Set up gcloud CLI
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a # v2.1.2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker to authenticate to Artifact Registry
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and push image (linux/amd64)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          # Tag by commit SHA for immutable artefact identity.
+          # The image must be linux/amd64 — see docs/architecture.md §9a:
+          # a build on Apple Silicon produces arm64 which Cloud Run rejects at
+          # startup with "exec format error".  The ubuntu-latest runner is x86-64.
+          IMAGE="${{ env.IMAGE_REPO }}:${{ github.sha }}"
+          docker build --platform linux/amd64 --tag "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy revision with pr-${{ github.event.pull_request.number }} tag (no traffic)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          TAG="pr-${{ github.event.pull_request.number }}"
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image          "${{ env.IMAGE }}" \
+            --region         "${{ env.REGION }}" \
+            --tag            "$TAG" \
+            --no-traffic \
+            --quiet
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Retrieve the tag's URL
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          # The parsing lives in scripts/service-urls.mjs so its not-found path can be tested —
+          # see tests/service-urls.test.ts. A lookup that quietly returned nothing would leave
+          # the smoke tests pointed at an empty URL, reporting success against nothing.
+          #
+          # One describe, both URLs. Why the audience is the service and not the tag is
+          # explained at the minting step below.
+          gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.REGION }}" --format json \
+          | node scripts/service-urls.mjs "${{ env.TAG }}" >> "$GITHUB_ENV"
+
+      # An audience-scoped ID token cannot come from `gcloud auth print-identity-token` here:
+      # Workload Identity Federation yields an EXTERNAL ACCOUNT credential, and that command
+      # rejects it with "Invalid account type for --audiences. Requires valid service account."
+      # The supported route is to ask the auth action for the token directly, which performs the
+      # impersonation and returns an ID token minted for the deployer, scoped to the audience.
+      #
+      # The audience is the SERVICE url, not the tag url — Cloud Run validates an ID token's
+      # audience against the service, and one minted for the per-tag hostname is refused with a
+      # bare "Unauthorized". The request still goes TO the tag url; only the audience differs.
+      #
+      # It runs after the deploy because SERVICE_URL is read from the describe step above.
+      - name: Mint an ID token scoped to the service
+        id: preview_token
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.INVOKER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ env.SERVICE_URL }}
+          id_token_include_email: true
+
+      # Register the token for masking before it can reach any log line.  The env: block
+      # supplies the value so ${{ }} interpolation never appears in the echoed command.
+      # Residual exposure: the token was already written to the step output store by the
+      # auth action before this mask runs.  That store is encrypted at rest and not echoed
+      # to the public log, but it is readable by subsequent steps and by anyone with
+      # admin access to the run.  The mask prevents the value appearing in log text; it
+      # does not erase it from the output store.
+      - name: Mask the preview token so it cannot appear in log output
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          TOKEN: ${{ steps.preview_token.outputs.id_token }}
+        run: echo "::add-mask::$TOKEN"
+
+      - name: Run smoke tests against the preview revision
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          # Pass the token through the environment, not on the command line, so it
+          # is never echoed in the step's command log.
+          SMOKE_ID_TOKEN: ${{ steps.preview_token.outputs.id_token }}
+        run: |
+          # Smoke runs against the TAGGED revision, which carries no traffic — production is
+          # untouched whether these pass or fail. That ordering is the point of ADR 0007.
+          bash scripts/smoke.sh "${{ env.TAG_URL }}"
+
+      - name: Post or update preview URL comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          # pull-requests:write is granted on this job only, not workflow-wide.
+          script: |
+            // The update-vs-create branch lives in scripts/upsert-preview-comment.mjs so it can
+            // be tested — see tests/upsert-preview-comment.test.ts. A PR gathering one comment
+            // per push would bury its own review conversation.
+            const { previewCommentBody, upsertPreviewComment } =
+              await import('${{ github.workspace }}/scripts/upsert-preview-comment.mjs');
+
+            const prNumber = context.payload.pull_request.number;
+            const body = previewCommentBody({
+              tagUrl:   process.env.TAG_URL,
+              prNumber,
+              sha:      context.sha,
+            });
+
+            const { action } = await upsertPreviewComment({
+              github,
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              prNumber,
+              body,
+            });
+            core.info(`preview comment ${action}`);
+  cleanup:
+    # NOT cancel-in-progress: a half-finished tag removal leaves the tag routing, and nothing
+    # else will come along to finish it. Queue behind any in-flight cleanup instead.
+    concurrency:
+      group: preview-cleanup-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    if: |
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read   # checkout
+      id-token: write  # Workload Identity Federation
+      # deliberately NO pull-requests: write — this job comments on nothing
+
+    steps:
+      # Required: the tag-removal logic lives in scripts/, so without a checkout this job runs
+      # `bash` against a file that is not on the runner. It was inline shell before the logic was
+      # extracted for testing, which is why the checkout was not needed until now.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Matches the deploy job: the repository token is not needed after checkout, and
+          # leaving it in .git/config would hand it to every step that follows.
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud via WIF
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account:            ${{ env.DEPLOYER_SA }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a # v2.1.2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Remove pr-${{ github.event.pull_request.number }} tag
+        run: |
+          # The three-way logic lives in the script so it can be tested — see
+          # tests/remove-preview-tag.test.ts. Inline shell in a workflow cannot be.
+          bash scripts/remove-preview-tag.sh \
+            "${{ env.SERVICE }}" \
+            "${{ env.REGION }}" \
+            "pr-${{ github.event.pull_request.number }}"

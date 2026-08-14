@@ -232,6 +232,32 @@ protects the review panel.
 
 **Writes.** `.github/workflows/`, smoke tests.
 
+**Status.** Mostly done — two of four done-when clauses proved against the real thing, two not.
+
+**Proved, and here is how to check it rather than take my word:** the `PR preview` workflow on
+this branch has run to success on every push — see its runs under Actions, and the preview comment
+it posted on PR #6, which the workflow updates in place rather than reposting. Those two artefacts
+are the evidence; a URL quoted in prose is not, because a hostname in a document is
+indistinguishable from a test fixture. (One was: an earlier version of this status quoted a URL
+that the service-urls tests also used as a mock, so the "proof" traced to invented data even
+though the deploy was real. The fixtures are now obviously synthetic.)
+
+So "a PR shows a working URL a human can open" and "smoke tests run against it" both hold.
+
+**Not proved — tag removal on close.** The cleanup job has only ever been *skipped*: no PR has
+closed since the workflow existed, so the removal has never run against Cloud Run. Its decision
+logic is now a tested script (`scripts/remove-preview-tag.sh`) covering removed / already-absent /
+real-failure, but a test with a stubbed `gcloud` is not the same claim as having done it. Merging
+this PR is the first time it runs for real.
+
+**Not proved — the fork path.** The degraded behaviour is pinned by the workflow shape tests, but
+no fork PR has ever been opened against this repository, so it has not been observed.
+
+**On the tag-removal step itself.** It previously ended `|| echo "…nothing to do"`, which reported
+success for every failure — expired credentials, a network fault, a wrong service name — leaving
+the tag routing while the job went green. It now tolerates only an absent tag, judged from
+gcloud's own output naming *this* tag, and fails the job on anything else.
+
 ### 2S.4 A change reaches `main` only after serving production traffic
 
 **Outcome.** Promotion is: assert the branch fast-forwards onto `main`, deploy a `candidate`
@@ -252,6 +278,21 @@ merged tree is asserted equal to the canaried tree.
 **Writes.** `.github/workflows/`.
 
 ---
+
+### 2S.5 The smoke test authenticates as an identity that can only invoke
+
+**Outcome.** Preview and canary smoke tests authenticate as a principal holding
+`roles/run.invoker` on the studio service and nothing else, instead of reusing the deploy
+identity's `run.admin`.
+
+**Why.** `no-standing-auth-bypass` asks that a non-interactive credential be least-privilege.
+Invoking a service needs no administrative right, and a leaked token should not be able to
+redeploy or delete the thing it was meant to curl.
+
+**Status.** Done. `ds-invoker` exists, holds `roles/run.invoker` on `design-space-studio` and
+**no project-level grant at all**, and is assumable only under the same WIF condition as the
+deployer. The preview workflow mints the smoke token as that identity; a shape test asserts the
+minting step names the invoker and never the deployer, so the arrangement cannot quietly revert.
 
 ## Wave 2 — the second contract
 

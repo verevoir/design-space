@@ -10,8 +10,9 @@
  * without invoking serve.ts itself).
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { writeFile, rm, mkdir } from 'node:fs/promises';
+import { writeFile, rm, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { createServer } from 'node:net';
@@ -36,6 +37,27 @@ function findFreePort(): Promise<number> {
   });
 }
 
+/**
+ * Save and restore `process.env.PORT` around every test in the calling describe block.
+ *
+ * PORT is process-wide and vitest reuses a worker context across files, so a leaked value
+ * would silently steer whichever test runs next in this worker — `server.test.ts` in this
+ * same package reads it. Every block below that assigns PORT calls this; a block that
+ * assigns PORT without it is the defect this helper exists to make hard to reintroduce.
+ */
+function preservePortEnv(): void {
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env['PORT'];
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env['PORT'];
+    else process.env['PORT'] = saved;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -47,24 +69,19 @@ const GAPS_JSON = JSON.stringify([{ screenId: 'screen-1', component: 'compare-se
 // Tests
 // ---------------------------------------------------------------------------
 
-let origPort: string | undefined;
-
 describe('serve.ts end-to-end: real document on disk → real server → real HTTP response', () => {
   let tmpDir: string;
   let server: Server | undefined;
 
+  preservePortEnv();
+
   beforeEach(async () => {
-    origPort = process.env['PORT'];
     tmpDir = join(tmpdir(), `ds-serve-e2e-${process.pid}-${Date.now()}`);
     await rm(tmpDir, { recursive: true, force: true });
     await mkdir(tmpDir, { recursive: true });
   });
 
   afterEach(async () => {
-    // PORT is process-wide and vitest reuses a worker context across files, so a leaked value
-    // would silently steer whichever test runs next in this worker.
-    if (origPort === undefined) delete process.env['PORT'];
-    else process.env['PORT'] = origPort;
     if (server) {
       await new Promise<void>((res) => server!.close(() => res()));
       server = undefined;
@@ -127,6 +144,8 @@ describe('serveDocument: an unreadable gaps sidecar does not stop the document b
   let tmpDir2: string;
   let srv: Server | undefined;
 
+  preservePortEnv();
+
   beforeEach(async () => {
     tmpDir2 = join(tmpdir(), `ds-serve-gaps-${process.pid}-${Math.abs(Number(process.hrtime.bigint() % 100000n))}`);
     await rm(tmpDir2, { recursive: true, force: true });
@@ -154,6 +173,11 @@ describe('serveDocument: an unreadable gaps sidecar does not stop the document b
       stderrChunks.push(String(chunk));
       return true;
     };
+
+    // Take a free port. Without this the server binds startServer's 8080 default and the test
+    // passes or fails according to what else is listening on the machine — it passed in CI and
+    // failed locally for exactly that reason.
+    process.env['PORT'] = String(await findFreePort());
 
     try {
       const { serveDocument } = await import('./serve.js');
@@ -183,9 +207,37 @@ describe('serve.ts self-start guard', () => {
   });
 });
 
+describe('this file does not leak PORT between blocks', () => {
+  it('gives every describe block that assigns PORT the save/restore hooks', async () => {
+    // A structural check, because the defect is invisible at runtime: a block that sets PORT
+    // without restoring it still passes on its own, and only steers a *later* file's tests.
+    // Two blocks here were written that way and were caught by review rather than by the
+    // suite. This makes the third one red instead.
+    const source = await readFile(fileURLToPath(import.meta.url), 'utf-8');
+
+    // Chunk the file by describe block; index 0 is everything above the first one, which is
+    // where the helper itself lives.
+    const blocks = source.split(/^describe\(/m).slice(1);
+    expect(blocks.length).toBeGreaterThan(1);
+
+    const offenders = blocks
+      .filter((b) => /process\.env\['PORT'\]\s*=/.test(b))
+      .filter((b) => !b.includes('preservePortEnv()'))
+      .map((b) => b.slice(0, b.indexOf('\n')));
+
+    expect(
+      offenders,
+      'These describe blocks assign process.env.PORT but never call preservePortEnv(), ' +
+        'so the value leaks to whatever vitest runs next in this worker.',
+    ).toEqual([]);
+  });
+});
+
 describe('serveDocument: an absent gaps sidecar is silent', () => {
   let quietDir: string;
   let quietSrv: Server | undefined;
+
+  preservePortEnv();
 
   beforeEach(async () => {
     quietDir = join(tmpdir(), `ds-serve-nogaps-${process.pid}-${Math.abs(Number(process.hrtime.bigint() % 100000n))}`);
@@ -212,6 +264,8 @@ describe('serveDocument: an absent gaps sidecar is silent', () => {
       stderrChunks.push(String(chunk));
       return true;
     };
+
+    process.env['PORT'] = String(await findFreePort());
 
     try {
       const { serveDocument } = await import('./serve.js');

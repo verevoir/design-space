@@ -202,9 +202,12 @@ packages/
   studio/           the two modes: journey editing, and the matrix.
 examples/journeys/  the reference journey the port is induced from.
 docs/               this file, and the ADRs.
-tests/              the review gate's own tests (see below).
+scripts/            logic the workflows call, kept here so it can be tested: the preview
+                    smoke checks, tag removal, gcloud URL extraction, and the PR comment's
+                    update-or-create decision.
+tests/              tests for the review gate and for scripts/ (see below).
 .github/
-  workflows/        CI, including the antagonistic-review panel.
+  workflows/        CI, the antagonistic-review panel, and the per-PR preview deploy.
   antagonistic-review/   the panel's scripts. All of them move together.
 ```
 
@@ -255,6 +258,41 @@ Registry storage for the pushed images.
 and a real billing read is the only thing that supplies one. Recorded as outstanding rather than
 estimated, because an arithmetic guess dressed as a measurement is the failure this project keeps
 finding.
+
+### Per-PR preview deployments
+
+`.github/workflows/preview.yml` gives every pull request its own deployment (ADR 0007, story
+2S.3):
+
+| trigger | what happens |
+|---|---|
+| PR opened / updated | build, push to Artifact Registry, `run deploy --no-traffic --tag pr-<n>` |
+| then | smoke tests against that tag's URL, and the URL posted as a PR comment |
+| PR closed | the `pr-<n>` tag is removed |
+| PR from a fork | deploy skipped, with the reason stated in the job summary |
+
+Auth is keyless — Workload Identity Federation, with the smoke step's ID token minted by the auth
+action and **scoped to the SERVICE url**, not the tag url: Cloud Run validates an audience against
+the service, and a token minted for a per-tag hostname is rejected with a bare `Unauthorized`.
+
+The workflow deliberately holds almost no logic. Tag-URL extraction, the preview comment's
+update-vs-create decision, the smoke checks and the tag removal all live in `scripts/` with tests,
+because **inline workflow code is only executed when its trigger fires** — and a stray `fi` sat
+undetected in the cleanup step through several green runs for exactly that reason. Every `run:`
+block is now parsed with `bash -n` at test time.
+
+### Two identities, and why
+
+| identity | holds | used for |
+|---|---|---|
+| `ds-deployer` | `run.admin`, `artifactregistry.writer`, `actAs` on `ds-runtime` | building, pushing, deploying, traffic |
+| `ds-invoker` | `roles/run.invoker` on `design-space-studio` **and nothing else** — no project-level grant at all | minting the smoke test's ID token |
+| `ds-runtime` | nothing | the identity the container runs as |
+
+The smoke test calls the service; it has no business being able to administer it. Minting its
+token as the deployer put `run.admin` behind a curl, so a workflow change that leaked the token
+would have leaked an administrative credential. All three are assumable only under the WIF
+provider condition `assertion.repository=='verevoir/design-space'`.
 
 ### The health endpoint is `/health`
 
