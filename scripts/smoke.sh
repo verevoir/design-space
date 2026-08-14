@@ -11,12 +11,22 @@
 # SMOKE_ID_TOKEN (env) — takes precedence over the positional ID_TOKEN argument so the CI
 #               workflow can supply the token through the environment rather than the command
 #               line (where it would be echoed to the log).
+# SMOKE_JOURNEY (env) — the journey document whose screens must appear in the rendered page.
+#               Defaults to the broadband-switch reference journey, which is what the studio
+#               serves at /.
+# SMOKE_EXPECT_REVISION (env) — when set, /health must report exactly this Cloud Run revision.
+#               Unset means no assertion: a container running outside Cloud Run has no revision
+#               to report, so requiring one would break local and preview runs.
 #
 # Exit code: 0 if both checks pass, non-zero otherwise.
 # The same script is used by the preview workflow (2S.3) and will be reused by the
 # promotion workflow (2S.4); pointing it at a different BASE_URL is the only difference.
 
 set -euo pipefail
+
+# Resolved from the script's own location, not the caller's cwd — this is invoked from the repo
+# root by CI and from anywhere by a developer, and the journey document must be found in both.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BASE_URL="${1:-}"
 # SMOKE_ID_TOKEN (env) takes precedence; fall back to the positional argument for local use.
@@ -87,15 +97,38 @@ else
   echo "OK    GET /  status 200"
 fi
 
-# The first screen of the broadband-switch reference journey carries this heading.
-# Changing it breaks the rendering contract — a meaningful, non-trivial assertion.
-HEADING="Choose a new package"
-if [[ "$FETCH_BODY" != *"$HEADING"* ]]; then
-  echo "FAIL  GET /  body does not contain reference journey heading: \"${HEADING}\"" >&2
-  fail=1
-else
-  echo "OK    GET /  body contains reference journey heading"
+# EVERY screen of the reference journey must be present, not merely the first.
+#
+# This asserted one hard-coded heading — one screen of five — so a change that rendered only the
+# entry screen, or dropped the last three, passed the gate that ADR 0007 rests its whole merge
+# ordering on. The expectations are DERIVED from the journey document, so a screen added to the
+# journey becomes a screen the smoke requires without anyone remembering to edit a literal here.
+# That is what journey-smoke-coverage asks for.
+JOURNEY="${SMOKE_JOURNEY:-${SCRIPT_DIR}/../examples/journeys/broadband-switch.json}"
+
+if [[ ! -f "$JOURNEY" ]]; then
+  # Fatal rather than falling back to a weaker check. A smoke that quietly narrows its own
+  # coverage while still reporting success is the precise failure this replaced.
+  echo "FAIL  journey document not found at ${JOURNEY} — refusing to report success against an unknown journey" >&2
+  exit 1
 fi
+
+if ! EXPECTATIONS="$(node "${SCRIPT_DIR}/journey-expectations.mjs" "$JOURNEY")"; then
+  echo "FAIL  could not derive screen expectations from ${JOURNEY}" >&2
+  exit 1
+fi
+
+while IFS= read -r expected; do
+  [[ -z "$expected" ]] && continue
+  if [[ "$FETCH_BODY" != *"$expected"* ]]; then
+    echo "FAIL  GET /  body does not contain journey screen heading: \"${expected}\"" >&2
+    fail=1
+  else
+    echo "OK    GET /  body contains journey screen heading: \"${expected}\""
+  fi
+  # A here-string keeps this loop in the current shell, so fail=1 survives it. A pipe would run
+  # the loop in a subshell and every failure would be discarded.
+done <<< "$EXPECTATIONS"
 
 # ---------------------------------------------------------------------------
 # Check 2 — GET /health returns 200 and a JSON payload with status=ok and portVersion.
@@ -128,6 +161,21 @@ if [[ ! "$FETCH_BODY" =~ \"portVersion\"[[:space:]]*:[[:space:]]*\"[0-9]+\.[0-9]
   fail=1
 else
   echo "OK    GET /health  body contains portVersion"
+fi
+
+# Which build answered, when the caller knows what it expects.
+#
+# portVersion is a compile-time constant of the port package, so two different builds of the
+# same port version are indistinguishable by it. The promotion workflow needs more than that:
+# its health check must fail if the incumbent revision answered rather than the candidate.
+# /health echoes Cloud Run's K_REVISION, and this asserts it.
+if [[ -n "${SMOKE_EXPECT_REVISION:-}" ]]; then
+  if [[ ! "$FETCH_BODY" =~ \"revision\"[[:space:]]*:[[:space:]]*\"${SMOKE_EXPECT_REVISION}\" ]]; then
+    echo "FAIL  GET /health  expected revision ${SMOKE_EXPECT_REVISION} — got: ${FETCH_BODY}" >&2
+    fail=1
+  else
+    echo "OK    GET /health  answered by revision ${SMOKE_EXPECT_REVISION}"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

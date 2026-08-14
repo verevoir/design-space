@@ -304,6 +304,19 @@ recorded here so the next person does not have to rediscover them.
 
 ---
 
+**Status.** Implemented, not yet verified. `.github/workflows/promote.yml` runs the full sequence
+— wait for the other checks, assert ancestry, capture a rollback target, build, deploy a
+digest-pinned `candidate` revision at zero traffic, smoke, cut 10%, health-check, cut 100%,
+squash-merge, assert tree equality, retag the proven digest, pin traffic and drop the tag — with
+every step timeout-bounded and a rollback path guarded so it cannot move traffic after the merge.
+The decision logic lives in `scripts/promote/` with tests rather than in `run:` blocks. The smoke
+now walks every screen of the reference journey, derived from the journey document. ADR 0007 is
+amended for the health-check divergence.
+
+Outstanding: the gates have not been run against this change and it has not promoted anything, so
+nothing here is proved. It promotes itself by carrying the `promote` label, and that is the
+intended first proof.
+
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
 **Outcome.** Preview and canary smoke tests authenticate as a principal holding

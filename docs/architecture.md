@@ -267,6 +267,9 @@ finding.
 | trigger | what happens |
 |---|---|
 | PR opened / updated | build, push to Artifact Registry, `run deploy --no-traffic --tag pr-<n>` |
+| PR labelled `promote` | wait for the other checks, assert ancestry, capture the traffic assignment as a rollback target, deploy a `candidate` revision **pinned by image digest** carrying no traffic, smoke it, cut 10%, health-check the candidate tag URL, cut 100%, squash-merge, assert the merged tree equals the canaried tree, retag the proven digest, pin traffic and drop the tag |
+| promotion failure, before the merge | restore the captured traffic assignment, remove the `candidate` tag, record the deployment as failed — no rebuild |
+| promotion failure, after the merge | traffic stays on the canaried revision, which is the proven artefact; nothing is retagged and an operator decides |
 | then | smoke tests against that tag's URL, and the URL posted as a PR comment |
 | PR closed | the `pr-<n>` tag is removed |
 | PR from a fork | deploy skipped, with the reason stated in the job summary |
@@ -293,6 +296,15 @@ The smoke test calls the service; it has no business being able to administer it
 token as the deployer put `run.admin` behind a curl, so a workflow change that leaked the token
 would have leaked an administrative credential. All three are assumable only under the WIF
 provider condition `assertion.repository=='verevoir/design-space'`.
+
+### `/health` says which build answered
+
+It returns `status`, `portVersion` and `revision`. `revision` is Cloud Run's `K_REVISION`, echoed
+back, and is `null` when the container runs anywhere else. It exists because `portVersion` is a
+compile-time constant of the port package, so every build of a given port version reports the same
+value and no caller can tell two of them apart. The promotion's health check needs exactly that
+distinction — at a 10% traffic split the incumbent answers most requests, so a check that could
+not name the revision would pass without ever reaching the candidate.
 
 ### The health endpoint is `/health`
 

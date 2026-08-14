@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createServer, Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
+import { expectationsForFile } from '../scripts/journey-expectations.mjs';
 
 // ---------------------------------------------------------------------------
 // Behaviour tests for scripts/smoke.sh
@@ -32,8 +33,17 @@ const SMOKE_SH = resolve(
   '../scripts/smoke.sh',
 );
 
-// Heading and health-body strings smoke.sh asserts on.
-const GOOD_BODY_ROOT   = '<html><body><h1>Choose a new package</h1></body></html>';
+// The reference journey's screen headings, derived the same way smoke.sh derives them rather
+// than restated here. A hand-listed fixture would drift the moment a screen is added: the
+// fixture would keep passing while covering one screen fewer than the journey has.
+const JOURNEY_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../examples/journeys/broadband-switch.json',
+);
+const JOURNEY_HEADINGS = expectationsForFile(JOURNEY_PATH);
+
+// A page that renders every screen — the shape a healthy deployment serves.
+const GOOD_BODY_ROOT = `<html><body>${JOURNEY_HEADINGS.map((h) => `<h1>${h}</h1>`).join('')}</body></html>`;
 const GOOD_HEALTH_BODY = '{"status":"ok","portVersion":"1.0"}';
 
 // ---------------------------------------------------------------------------
@@ -313,7 +323,7 @@ describe('smoke.sh — /health body checks', () => {
         return;
       }
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end('<html>Choose a new package</html>');
+      res.end(GOOD_BODY_ROOT);
     });
     await new Promise<void>((res) => server.listen(0, '127.0.0.1', () => res()));
     const addr = server.address();
@@ -343,6 +353,113 @@ describe('smoke.sh — /health body checks', () => {
     const r = await runSmoke(`http://127.0.0.1:${port}`);
 
     expect(r.exitCode).toBe(0);
+  });
+});
+
+describe('smoke.sh — every screen of the journey, not just the first', () => {
+  let srv4: Server;
+
+  afterEach(async () => {
+    if (srv4) await new Promise<void>((r) => srv4.close(() => r()));
+  });
+
+  async function serveRoot(body: string): Promise<number> {
+    srv4 = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(GOOD_HEALTH_BODY);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(body);
+      }
+    });
+    await new Promise<void>((r) => srv4.listen(0, '127.0.0.1', () => r()));
+    const a = srv4.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('derives more than one expectation from the reference journey', () => {
+    // Guards the guard. If this collapses to one the widening has been undone, and the test
+    // below would still pass while checking nothing the old single-literal check did not.
+    expect(JOURNEY_HEADINGS.length).toBeGreaterThan(1);
+  });
+
+  it('fails when a LATER screen is missing, naming the screen', async () => {
+    // Precisely the page the old check passed: screen one rendered, the rest dropped.
+    const port = await serveRoot(`<html><body><h1>${JOURNEY_HEADINGS[0]}</h1></body></html>`);
+    const r = await runSmoke(`http://127.0.0.1:${port}`);
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain(JOURNEY_HEADINGS[JOURNEY_HEADINGS.length - 1]!);
+  });
+
+  it('passes when every screen heading is present', async () => {
+    const port = await serveRoot(GOOD_BODY_ROOT);
+
+    expect((await runSmoke(`http://127.0.0.1:${port}`)).exitCode).toBe(0);
+  });
+});
+
+describe('smoke.sh — SMOKE_EXPECT_REVISION pins which build answered', () => {
+  let srv5: Server;
+
+  afterEach(async () => {
+    if (srv5) await new Promise<void>((r) => srv5.close(() => r()));
+  });
+
+  async function serveRevision(revision: string | null): Promise<number> {
+    const health = JSON.stringify({ status: 'ok', portVersion: '1.0', revision });
+    srv5 = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(health);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(GOOD_BODY_ROOT);
+      }
+    });
+    await new Promise<void>((r) => srv5.listen(0, '127.0.0.1', () => r()));
+    const a = srv5.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('passes when the expected revision answered', async () => {
+    const port = await serveRevision('design-space-studio-00007');
+    const r = await runSmoke(`http://127.0.0.1:${port}`, {
+      SMOKE_EXPECT_REVISION: 'design-space-studio-00007',
+    });
+
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('fails when a DIFFERENT revision answered', async () => {
+    // The failure this exists for. At a 10% split the incumbent answers most requests, so a
+    // health check that did not pin the revision would happily pass against the old build and
+    // report the candidate healthy without ever reaching it.
+    const port = await serveRevision('design-space-studio-00002');
+    const r = await runSmoke(`http://127.0.0.1:${port}`, {
+      SMOKE_EXPECT_REVISION: 'design-space-studio-00007',
+    });
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/expected revision design-space-studio-00007/);
+  });
+
+  it('fails when the build reports no revision at all', async () => {
+    // A build too old to echo K_REVISION must not read as a match.
+    const port = await serveRevision(null);
+    const r = await runSmoke(`http://127.0.0.1:${port}`, {
+      SMOKE_EXPECT_REVISION: 'design-space-studio-00007',
+    });
+
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  it('asserts nothing about the revision when the variable is unset', async () => {
+    // Preview runs and local containers have no K_REVISION; requiring one would break both.
+    const port = await serveRevision(null);
+
+    expect((await runSmoke(`http://127.0.0.1:${port}`)).exitCode).toBe(0);
   });
 });
 
