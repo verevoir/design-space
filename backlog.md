@@ -232,7 +232,9 @@ protects the review panel.
 
 **Writes.** `.github/workflows/`, smoke tests.
 
-**Status.** Mostly done — two of four done-when clauses proved against the real thing, two not.
+**Status.** Mostly done, one clause outstanding — three of the four done-when clauses are proved
+against the real thing. The fourth, the fork path, needs a fork PR, and nobody has opened one
+against this repository.
 
 **Proved, and here is how to check it rather than take my word:** the `PR preview` workflow on
 this branch has run to success on every push — see its runs under Actions, and the preview comment
@@ -244,11 +246,12 @@ though the deploy was real. The fixtures are now obviously synthetic.)
 
 So "a PR shows a working URL a human can open" and "smoke tests run against it" both hold.
 
-**Not proved — tag removal on close.** The cleanup job has only ever been *skipped*: no PR has
-closed since the workflow existed, so the removal has never run against Cloud Run. Its decision
-logic is now a tested script (`scripts/remove-preview-tag.sh`) covering removed / already-absent /
-real-failure, but a test with a stubbed `gcloud` is not the same claim as having done it. Merging
-this PR is the first time it runs for real.
+**Proved on merge — tag removal on close.** Until this PR merged the cleanup job had only ever
+been *skipped*, so the removal had never run against Cloud Run and a test with a stubbed `gcloud`
+was standing in for the claim. Merging it ran the job for real: run `31801164544` reports
+`Removed tag pr-6`, with traffic left at 100% on the serving revision. The removed / already-absent
+/ real-failure branches of `scripts/remove-preview-tag.sh` remain covered by tests; what the merge
+added is that the removed branch has now executed against the real service.
 
 **Not proved — the fork path.** The degraded behaviour is pinned by the workflow shape tests, but
 no fork PR has ever been opened against this repository, so it has not been observed.
