@@ -232,7 +232,9 @@ protects the review panel.
 
 **Writes.** `.github/workflows/`, smoke tests.
 
-**Status.** Mostly done — two of four done-when clauses proved against the real thing, two not.
+**Status.** Mostly done, one clause outstanding — three of the four done-when clauses are proved
+against the real thing. The fourth, the fork path, needs a fork PR, and nobody has opened one
+against this repository.
 
 **Proved, and here is how to check it rather than take my word:** the `PR preview` workflow on
 this branch has run to success on every push — see its runs under Actions, and the preview comment
@@ -244,11 +246,12 @@ though the deploy was real. The fixtures are now obviously synthetic.)
 
 So "a PR shows a working URL a human can open" and "smoke tests run against it" both hold.
 
-**Not proved — tag removal on close.** The cleanup job has only ever been *skipped*: no PR has
-closed since the workflow existed, so the removal has never run against Cloud Run. Its decision
-logic is now a tested script (`scripts/remove-preview-tag.sh`) covering removed / already-absent /
-real-failure, but a test with a stubbed `gcloud` is not the same claim as having done it. Merging
-this PR is the first time it runs for real.
+**Proved on merge — tag removal on close.** Until this PR merged the cleanup job had only ever
+been *skipped*, so the removal had never run against Cloud Run and a test with a stubbed `gcloud`
+was standing in for the claim. Merging it ran the job for real: run `31801164544` reports
+`Removed tag pr-6`, with traffic left at 100% on the serving revision. The removed / already-absent
+/ real-failure branches of `scripts/remove-preview-tag.sh` remain covered by tests; what the merge
+added is that the removed branch has now executed against the real service.
 
 **Not proved — the fork path.** The degraded behaviour is pinned by the workflow shape tests, but
 no fork PR has ever been opened against this repository, so it has not been observed.
@@ -276,6 +279,28 @@ served canary traffic is the image retagged onto the merged commit rather than a
 merged tree is asserted equal to the canaried tree.
 
 **Writes.** `.github/workflows/`.
+
+**Starting conditions, measured 2026-08-14.** Three facts that change how this story is built,
+recorded here so the next person does not have to rediscover them.
+
+- **Production is running stale code, and this story is what fixes it.** Traffic sits 100% on
+  revision `design-space-studio-00002`, which serves `/` but 404s `/health` because it predates
+  the endpoint. Twenty-four revisions have been built and smoke-tested by previews since, and
+  **none has ever been promoted** — the pipeline validates changes it never ships. So the first
+  real promotion is not a rehearsal: it is the redeploy that makes the live service match its
+  own source, and `/health` returning 200 on the traffic-serving revision is the proof.
+- **This repository forbids merge commits, and ADR 0007 already assumes that.** Its
+  "the branch must fast-forward onto `main`" is a *precondition* checked before canarying —
+  `git merge-base --is-ancestor origin/main HEAD` — not a statement about the merge method. The
+  ADR then designs explicitly for squash and rebase minting a new SHA: the proven image is
+  retagged onto the merged commit, and the merged **tree** is asserted equal to the canaried
+  tree, SHA equality having been rejected as unachievable on GitHub. So `--squash` is the
+  expected landing, and the retag-and-compare is not optional detail — it is the whole reason
+  the ADR can tolerate a new SHA.
+- **The tagged-revision mechanism underneath this story is proved** by 2S.3: per-PR `--no-traffic
+  --tag pr-<n>` deploys, smoke against the tag URL, and tag removal on close have all run against
+  the real service. What is unproved is everything about *traffic* — no traffic split has ever
+  been performed on this service, and no rollback has ever run.
 
 ---
 

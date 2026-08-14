@@ -52,6 +52,40 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
 - **Keep the seams repo-shaped** (ADR 0004). The test of a correct boundary: could this package
   be published and consumed from another repository without moving code?
 
+## Operating this repo
+
+How to *run* things here. Platform facts — the service, the identities, why the image must be
+`linux/amd64`, why the health endpoint is `/health` — live in `docs/architecture.md` §9a and are
+not repeated.
+
+- **Run the review panel locally before pushing.** PRs otherwise take several rounds; the local
+  run exists to bring that number down, not to replace CI. It lives outside this repository, in
+  the capabilities project alongside it:
+
+  ```sh
+  PREGATE_PI_CONFIG=<the Claude config file holding your model credentials> \
+    node ../capabilities/scripts/run-pregate.mjs --base main
+  ```
+
+  The config path is machine-specific and deliberately not written down here — a literal path
+  from one operator's laptop is wrong for everyone else and unverifiable from this repository.
+
+  About five minutes and a couple of dollars — cheap against a CI round trip, and it runs the
+  same five lenses.
+
+- **Read the panel's findings from the run artifacts, not the check annotations.** An annotation
+  is a one-line summary; the artifact carries the whole finding, with file and line.
+
+  ```sh
+  gh run download <run-id> -R verevoir/design-space -D verdicts
+  # verdicts/verdict-<lens>/verdict.json
+  ```
+
+- **Pass `--account=` on every `gcloud` call.** The machine's active account belongs to a
+  different organisation and holds nothing here, so a call without it fails on permissions in a
+  way that reads like a missing grant rather than the wrong identity. The account that holds this
+  project is the one in the commit trailers.
+
 ## Where this sits
 
 Inside `aigency/projects/` for now, and expected to move to a project focused on the development
