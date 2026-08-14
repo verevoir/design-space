@@ -280,6 +280,25 @@ merged tree is asserted equal to the canaried tree.
 
 **Writes.** `.github/workflows/`.
 
+**Starting conditions, measured 2026-08-14.** Three facts that change how this story is built,
+recorded here so the next person does not have to rediscover them.
+
+- **Production is running stale code, and this story is what fixes it.** Traffic sits 100% on
+  revision `design-space-studio-00002`, which serves `/` but 404s `/health` because it predates
+  the endpoint. Twenty-four revisions have been built and smoke-tested by previews since, and
+  **none has ever been promoted** — the pipeline validates changes it never ships. So the first
+  real promotion is not a rehearsal: it is the redeploy that makes the live service match its
+  own source, and `/health` returning 200 on the traffic-serving revision is the proof.
+- **This repository forbids merge commits**, so the final step is a *squash* onto an unmoved
+  `main`, not a fast-forward merge. The intent of ADR 0007 is unchanged — one new commit, no
+  conflict resolution, nothing to reconcile after the canary — but the ADR says "fast-forward"
+  and needs amending to match, or the branch protection needs changing. **Operator decision
+  outstanding.**
+- **The tagged-revision mechanism underneath this story is proved** by 2S.3: per-PR `--no-traffic
+  --tag pr-<n>` deploys, smoke against the tag URL, and tag removal on close have all run against
+  the real service. What is unproved is everything about *traffic* — no traffic split has ever
+  been performed on this service, and no rollback has ever run.
+
 ---
 
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
