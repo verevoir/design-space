@@ -2,7 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
 import { createServer, Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { expectationsForFile } from '../scripts/journey-expectations.mjs';
 
 // ---------------------------------------------------------------------------
@@ -460,6 +462,64 @@ describe('smoke.sh — SMOKE_EXPECT_REVISION pins which build answered', () => {
     const port = await serveRevision(null);
 
     expect((await runSmoke(`http://127.0.0.1:${port}`)).exitCode).toBe(0);
+  });
+});
+
+describe('smoke.sh — the two fatal branches around deriving journey expectations', () => {
+  let srv6: Server;
+  const tmpDirs: string[] = [];
+
+  afterEach(async () => {
+    if (srv6) await new Promise<void>((r) => srv6.close(() => r()));
+    await Promise.all(tmpDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  async function tmpJourney(content: string | null): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'ds-smoke-journey-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'journey.json');
+    if (content !== null) await writeFile(path, content, 'utf-8');
+    return path;
+  }
+
+  async function serveOk(): Promise<number> {
+    srv6 = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(GOOD_HEALTH_BODY);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body>anything</body></html>');
+      }
+    });
+    await new Promise<void>((r) => srv6.listen(0, '127.0.0.1', () => r()));
+    const a = srv6.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('fails fatally, naming the path, when SMOKE_JOURNEY points at a file that does not exist', async () => {
+    // Fatal rather than a weaker fallback — a smoke that quietly narrowed its own coverage
+    // while still reporting success is the precise failure journey-smoke-coverage replaced.
+    const port = await serveOk();
+    const missing = await tmpJourney(null); // never written — the path does not exist
+    const r = await runSmoke(`http://127.0.0.1:${port}`, { SMOKE_JOURNEY: missing });
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('journey document not found');
+    expect(r.stderr).toContain(missing);
+  });
+
+  it('fails fatally, surfacing the reason, when the journey document cannot be turned into expectations', async () => {
+    // A journey with zero screens is valid JSON but journey-expectations.mjs refuses it —
+    // exercising the subprocess-failure branch in smoke.sh itself, not just the library
+    // function's own throw (already covered in tests/promote-decisions.test.ts).
+    const port = await serveOk();
+    const empty = await tmpJourney(JSON.stringify({ screens: [] }));
+    const r = await runSmoke(`http://127.0.0.1:${port}`, { SMOKE_JOURNEY: empty });
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('could not derive screen expectations');
+    expect(r.stderr).toContain(empty);
   });
 });
 

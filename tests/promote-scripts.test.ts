@@ -32,6 +32,21 @@ async function stub(name: string, output: string, code: number): Promise<string>
   return dir;
 }
 
+/** A stub that writes `stdout` on fd1 and `stderr` on fd2 separately, then exits `code`. Used
+ * to prove a script parses only the stdout channel — stderr chatter on an otherwise-successful
+ * call must not corrupt an exact parse or comparison. */
+async function stubWithStderr(name: string, stdout: string, stderr: string, code: number): Promise<string> {
+  const dir = await tmp(`ds-${name}-stubse-`);
+  const path = join(dir, name);
+  await writeFile(
+    path,
+    `#!/bin/sh\ncat <<'STUBEOF'\n${stdout}\nSTUBEOF\ncat <<'STUBEOF' >&2\n${stderr}\nSTUBEOF\nexit ${code}\n`,
+    'utf-8',
+  );
+  await chmod(path, 0o755);
+  return dir;
+}
+
 /** A stub that records the arguments it was called with, one call per line. */
 async function recordingStub(name: string, output: string, code: number): Promise<{ dir: string; log: string }> {
   const dir = await tmp(`ds-${name}-rec-`);
@@ -324,6 +339,17 @@ describe('capture-traffic.sh', () => {
     expect(r.code).not.toBe(0);
     await expect(readFile(out, 'utf-8')).rejects.toThrow();
   });
+
+  it('still parses the describe output when gcloud writes chatter to stderr on an otherwise-successful call', async () => {
+    // Merging stderr into the JSON that gets parsed (2>&1) would corrupt it. This proves the
+    // parse survives real-world chatter — e.g. "Updated property [core/project]" — on stderr.
+    const dir = await stubWithStderr('gcloud', DESCRIBE, 'Updated property [core/project].', 0);
+    const out = join(await tmp('ds-snap-'), 'snap.json');
+    const r = run('capture-traffic.sh', ['svc', 'eu', out], dir);
+
+    expect(r.code).toBe(0);
+    expect(JSON.parse(await readFile(out, 'utf-8')).assignments).toEqual([{ revision: 'rev-2', percent: 100 }]);
+  });
 });
 
 describe('rollback.sh', () => {
@@ -448,6 +474,32 @@ describe('squash-merge.sh', () => {
     expect(r.code).not.toBe(0);
     expect(r.err).toContain('names no merge commit');
   });
+
+  it('still recognises MERGED exactly when gh writes chatter to stderr on an otherwise-successful call', async () => {
+    // Merging stderr into STATE (2>&1) would corrupt the exact comparison against "MERGED", and
+    // a perfectly-merged PR would be refused as neither MERGED nor OPEN, for the wrong reason.
+    const dir = await tmp('ds-gh-chatter-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *"--json state"*) echo "MERGED"; echo "Warning: chatter on an otherwise-successful call" >&2 ;;',
+        '  *"--json mergeCommit"*) echo "cafebabe" ;;',
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+        'exit 0',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+
+    const r = run('squash-merge.sh', ['o/r', '7'], dir);
+
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe('cafebabe');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -505,5 +557,16 @@ describe('wait-for-green.sh', () => {
     expect(r.code).not.toBe(0);
     expect(r.err).toContain('did not go green within 0s');
     expect(r.err).toContain('waiting on: ci');
+  });
+
+  it('still parses the checks payload when gh writes chatter to stderr on an otherwise-successful call', async () => {
+    // Merging stderr into BODY (2>&1) would corrupt the JSON parse, silently blocking a healthy
+    // promotion on chatter — e.g. a rate-limit notice — that was never part of the answer.
+    const body = JSON.stringify({ total_count: 1, check_runs: [check('ci', 'completed', 'success')] });
+    const dir = await stubWithStderr('gh', body, 'Warning: rate limit low', 0);
+
+    const r = run('wait-for-green.sh', ['o/r', 'abc123', 'promote'], dir, NOW);
+
+    expect(r.code).toBe(0);
   });
 });

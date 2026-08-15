@@ -21,10 +21,18 @@ merge_sha() {
   gh pr view "$PR" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // ""' 2>/dev/null
 }
 
-STATE="$(gh pr view "$PR" --repo "$REPO" --json state --jq '.state' 2>&1)" || {
-  echo "::error title=Merge failed::could not read the state of ${REPO}#${PR}: ${STATE}" >&2
+# stdout and stderr are captured SEPARATELY here, not merged with 2>&1: STATE is compared
+# exactly against "MERGED" and "OPEN" below, and a warning gh writes to stderr on an otherwise-
+# successful call would land inside that string and break the comparison — a perfectly mergeable
+# PR refused because STATE was neither string any more, exactly for the wrong reason.
+STATE_STDERR="$(mktemp)"
+STATE="$(gh pr view "$PR" --repo "$REPO" --json state --jq '.state' 2>"$STATE_STDERR")" || {
+  STATE_ERR="$(cat "$STATE_STDERR")"
+  rm -f "$STATE_STDERR"
+  echo "::error title=Merge failed::could not read the state of ${REPO}#${PR}: ${STATE}${STATE_ERR}" >&2
   exit 1
 }
+rm -f "$STATE_STDERR"
 
 if [ "$STATE" = "MERGED" ]; then
   SHA="$(merge_sha)"
