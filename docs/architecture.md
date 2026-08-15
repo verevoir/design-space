@@ -218,7 +218,8 @@ scripts/            logic the workflows call, kept here so it can be tested: the
                     update-or-create decision.
 tests/              tests for the review gate and for scripts/ (see below).
 .github/
-  workflows/        CI, the antagonistic-review panel, and the per-PR preview deploy.
+  workflows/        CI, the antagonistic-review panel, the per-PR preview deploy
+                    (`preview.yml`), and the label-triggered promotion (`promote.yml`).
   antagonistic-review/   the panel's scripts. All of them move together.
 ```
 
@@ -278,9 +279,6 @@ finding.
 | trigger | what happens |
 |---|---|
 | PR opened / updated | build, push to Artifact Registry, `run deploy --no-traffic --tag pr-<n>` |
-| PR labelled `promote` | wait for the other checks, assert ancestry, capture the traffic assignment as a rollback target, deploy a `candidate` revision **pinned by image digest** carrying no traffic, smoke it, cut 10%, health-check the candidate tag URL, cut 100%, squash-merge, assert the merged tree equals the canaried tree, retag the proven digest, pin traffic and drop the tag |
-| promotion failure, before the merge | restore the captured traffic assignment, remove the `candidate` tag, record the deployment as failed — no rebuild |
-| promotion failure, after the merge | traffic stays on the canaried revision, which is the proven artefact; nothing is retagged and an operator decides |
 | then | smoke tests against that tag's URL, and the URL posted as a PR comment |
 | PR closed | the `pr-<n>` tag is removed |
 | PR from a fork | deploy skipped, with the reason stated in the job summary |
@@ -294,6 +292,40 @@ update-vs-create decision, the smoke checks and the tag removal all live in `scr
 because **inline workflow code is only executed when its trigger fires** — and a stray `fi` sat
 undetected in the cleanup step through several green runs for exactly that reason. Every `run:`
 block is now parsed with `bash -n` at test time.
+
+### Promotion (`promote.yml`)
+
+A separate workflow from `preview.yml`, triggered by the `promote` label rather than by every
+push (ADR 0007, story 2S.4). A pull request already has a `pr-<n>` preview from the workflow
+above; labelling it `promote` runs a distinct sequence that turns that same change into the
+change production is serving, and then lands it:
+
+| step | what happens |
+|---|---|
+| guard | fork PRs are skipped, with the reason in the job summary — WIF cannot issue them a credential |
+| authorization | the actor who applied the label is checked for **admin or write** permission via the GitHub API. Applying a label itself needs only GitHub's `triage` role, which is narrower than write — this closes that gap explicitly rather than relying on it |
+| green gate | wait for every other check on the commit to conclude green, excluding this workflow's own check (else it would wait on itself) |
+| ancestry | assert the branch is up to date with its base — the last point at which stopping costs nothing |
+| deploy candidate | build, push, deploy a `candidate` revision **pinned by image digest**, carrying no traffic |
+| canary | smoke the candidate at zero traffic, cut 10%, health-check the candidate tag URL specifically, cut 100% |
+| merge | squash-merge the pull request — only now, after the change has served all of production |
+| verify | assert the merged tree equals the canaried tree |
+| finish | retag the proven digest onto the merge commit, pin traffic to it by name, drop the `candidate` tag |
+
+**Rollback.** On failure or cancellation (including the job's own `timeout-minutes` bound, which
+GitHub reports as `cancelled` rather than `failed`) — but only while a restore point exists and
+only while the merge has not succeeded. That second condition is checked twice: once from the
+workflow's own step conclusion, and independently by asking GitHub directly whether the pull
+request is actually `MERGED`, since a step's conclusion can read `cancelled` even after the
+underlying `gh pr merge` call already succeeded. **After a successful merge, traffic is left on
+the canaried revision** — the proven artefact — and an operator decides; nothing is retagged or
+rolled back automatically, because the commit is already on `main` and cannot be un-merged here.
+
+Auth, identities and the digest pin are shared with the deploy path described above. The
+decision logic — the green-gate wait, the ancestry and tree-equality checks, traffic capture and
+restore, retagging, the authorization check — all live in `scripts/promote/` with tests, for the
+same reason as the preview workflow: inline `run:` code only runs when its trigger fires, which
+for a rollback path can be never until the day it matters.
 
 ### Two identities, and why
 

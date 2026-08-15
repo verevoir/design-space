@@ -4,7 +4,7 @@
 # tag. Nothing is rebuilt: the revision being restored to already exists and already served
 # traffic, so recovery is one API call and does not wait on CI.
 #
-#   usage: rollback.sh <snapshot-file> [tag-to-remove]
+#   usage: rollback.sh <snapshot-file> [tag-to-remove] [owner/repo pr-number]
 #
 # Idempotent by construction. Restoring an assignment that is already in place is a no-op, and a
 # tag that is already gone is not an error — a rollback that failed when run twice would be a
@@ -15,15 +15,39 @@
 # report a failed rollback that in fact succeeded. See the ADR 0007 amendment: this is a
 # one-time condition that ends with the first successful promotion.
 #
+# MERGE-STATE GUARD. The workflow's own `if:` gates this step on `steps.merge.conclusion !=
+# 'success'` — but a step's CONCLUSION is not the same fact as whether `gh pr merge` actually
+# succeeded. That call can succeed on GitHub's side and then have its OWN STEP marked
+# `cancelled` (a job-level timeout landing mid-step) or `failure`, in which case the workflow's
+# condition alone would still let this step run, and restoring traffic would leave `main`
+# describing a change production is not running — the split-brain state ADR 0007 exists to
+# prevent. So when <owner/repo> and <pr-number> are both given, this asks the SAME question
+# squash-merge.sh already answers for idempotency — is the pull request actually merged? — and
+# if so, touches nothing: traffic stays exactly where it is, on the canaried revision, and an
+# operator decides what happens next. This is best-effort: if the state cannot be read at all,
+# the restore proceeds rather than stranding traffic on an unreadable answer — the workflow's
+# own condition is still the first defense, this is the second.
+#
 # Exit status:
 #   0  traffic is back on the captured assignment and the tag is gone
-#   n  it is not — this is an incident; the message says what state to expect
+#   2  the pull request is already merged; nothing was touched, an operator must decide
+#   n  (other) it is not restored — this is an incident; the message says what state to expect
 set -euo pipefail
 
 SNAPSHOT="${1:?snapshot file required}"
 TAG="${2:-}"
+REPO="${3:-}"
+PR="${4:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -n "$REPO" ] && [ -n "$PR" ]; then
+  MERGE_STATE="$(gh pr view "$PR" --repo "$REPO" --json state --jq '.state' 2>/dev/null || true)"
+  if [ "$MERGE_STATE" = "MERGED" ]; then
+    echo "::error title=Rollback refused::${REPO}#${PR} is already MERGED. Traffic was left exactly where it was, on the canaried revision — restoring the pre-promotion assignment now would leave main describing a change production is not running. This deployment is recorded as failed; an operator must decide whether to promote forward or revert on main." >&2
+    exit 2
+  fi
+fi
 
 if [ ! -s "$SNAPSHOT" ]; then
   echo "::error title=Rollback failed::no restore point at ${SNAPSHOT}; traffic must be restored by hand." >&2

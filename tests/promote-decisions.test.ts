@@ -1,8 +1,21 @@
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { summariseChecks, excludeSelf, parseCheckRuns, exitCodeFor, describeVerdict } from '../scripts/promote/checks-green.mjs';
 import { snapshotFromDescribe, restoreSpec, revisionForTag } from '../scripts/promote/traffic-snapshot.mjs';
 import { expectationsFor } from '../scripts/journey-expectations.mjs';
+
+// journey-expectations.mjs's CLI usage-error guard lives only inside its
+// `if (process.argv[1] && ...)` entry point — reached only when the file is run directly, the
+// same shape as traffic-snapshot.mjs's CLI argument validation, which needed the same treatment.
+const JOURNEY_EXPECTATIONS_CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../scripts/journey-expectations.mjs');
+
+function runJourneyExpectationsCli(args: string[]) {
+  const res = spawnSync('node', [JOURNEY_EXPECTATIONS_CLI, ...args], { encoding: 'utf-8' });
+  return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
+}
 
 // The decisions the promotion turns on, tested as pure functions. They live outside the
 // workflow because an inline run: block only executes when its trigger fires — which, for a
@@ -292,5 +305,14 @@ describe('journey-expectations — what the smoke must find', () => {
     expect(() => expectationsFor({ screens: [{ blocks: [{ component: 'status', props: {} }] }] })).toThrow(
       /no screen carries a prompt heading/,
     );
+  });
+});
+
+describe('journey-expectations.mjs — CLI usage-error guard', () => {
+  it('refuses to run with no journey path, rather than reading undefined as a path', () => {
+    const r = runJourneyExpectationsCli([]);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('usage: journey-expectations.mjs <path-to-journey.json>');
   });
 });

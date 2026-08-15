@@ -264,6 +264,29 @@ describe('promote.yml — fork pull requests cannot promote', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The authorization boundary — applying a label needs only 'triage', which is narrower than
+// what actually moving production traffic and merging to main should require
+// ---------------------------------------------------------------------------
+
+describe('promote.yml — the actor is checked for write access, not just label-apply rights', () => {
+  it('checks the actor before anything else runs, right after the fork guard', () => {
+    const authIdx = yml.indexOf('Verify the actor holds write access');
+    const waitIdx = yml.indexOf('Wait for every other check');
+    const forkIdx = yml.indexOf('Skip promotion for fork pull requests');
+
+    expect(authIdx).toBeGreaterThan(forkIdx);
+    expect(authIdx).toBeLessThan(waitIdx);
+  });
+
+  it('delegates the decision to a tested script, not an inline permission string', () => {
+    const auth = stepContaining('Verify the actor holds write access');
+
+    expect(auth).toContain('scripts/promote/assert-authorized.sh');
+    expect(auth).toMatch(/assert-authorized\.sh[\s\S]*github\.repository[\s\S]*github\.actor/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The gate that decides whether the change is allowed to promote at all
 // ---------------------------------------------------------------------------
 
@@ -397,6 +420,19 @@ describe('promote.yml — the rollback path', () => {
 
     expect(rollback).not.toContain('docker build');
     expect(rollback).not.toContain('gcloud run deploy');
+  });
+
+  it('gives rollback.sh the means to verify actual merge state, not just the step conclusion', () => {
+    // steps.merge.conclusion != 'success' is necessary but not sufficient: gh pr merge can
+    // succeed on GitHub's side and then have ITS OWN STEP marked cancelled or failed by a
+    // job-level timeout landing mid-step. The workflow condition alone cannot tell that apart
+    // from a merge that never happened, so rollback.sh is passed the repo and PR number and
+    // asks GitHub directly — the same question squash-merge.sh already asks for idempotency —
+    // as a second, independent check before it moves any traffic.
+    const rollback = stepContaining('Roll back on failure').replace(/\s+/g, ' ');
+
+    expect(rollback).toContain('scripts/promote/rollback.sh');
+    expect(rollback).toMatch(/rollback\.sh[^;]*\$\{\{ github\.repository \}\}[^;]*\$\{\{ github\.event\.pull_request\.number \}\}/);
   });
 });
 

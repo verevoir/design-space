@@ -417,6 +417,69 @@ describe('rollback.sh', () => {
     expect(r.code).not.toBe(0);
     expect(r.err).toContain('may be serving the failed candidate');
   });
+
+  /** A `gh` stub that answers only `pr view --json state`, for the merge-state guard. */
+  async function ghStateStub(state: string): Promise<string> {
+    const dir = await tmp('ds-gh-state-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        `  *"--json state"*) echo "${state}" ;;`,
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+        'exit 0',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return dir;
+  }
+
+  it('refuses to move traffic when the pull request is already merged', async () => {
+    // The exact split-brain race the workflow condition alone cannot close: gh pr merge
+    // succeeded, but the step that ran it was then marked cancelled or failed by a job
+    // timeout. No gcloud stub is provided at all here, proving traffic is never touched.
+    const dir = await ghStateStub('MERGED');
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate', 'o/r', '7'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('already MERGED');
+  });
+
+  it('restores traffic normally when the pull request is not merged', async () => {
+    const ghDir = await ghStateStub('OPEN');
+    const { dir: gcloudDir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate', 'o/r', '7'], `${ghDir}:${gcloudDir}`);
+
+    expect(r.code).toBe(0);
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
+
+  it('proceeds with the restore, rather than stranding traffic, when merge state cannot be read', async () => {
+    // Best-effort by design: an unreadable gh call must not leave traffic stuck on an incident
+    // already underway. The workflow-level condition is still the first defense.
+    const dir = await tmp('ds-gh-broken-');
+    const ghPath = join(dir, 'gh');
+    await writeFile(ghPath, '#!/bin/sh\nexit 1\n', 'utf-8');
+    await chmod(ghPath, 0o755);
+    const { dir: gcloudDir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate', 'o/r', '7'], `${dir}:${gcloudDir}`);
+
+    expect(r.code).toBe(0);
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
+
+  it('still restores traffic normally when no repo/PR is given (backward compatible)', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
+
+    expect(r.code).toBe(0);
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -541,6 +604,94 @@ describe('squash-merge.sh', () => {
 
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe('cafebabe');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assert-authorized.sh
+// ---------------------------------------------------------------------------
+
+describe('assert-authorized.sh', () => {
+  /** A `gh` stub that answers `api .../collaborators/<actor>/permission` with `perm`. */
+  async function ghPermStub(perm: string, code = 0): Promise<string> {
+    const dir = await tmp('ds-gh-perm-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        `  *"collaborators"*"permission"*) echo "${perm}"; exit ${code} ;;`,
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return dir;
+  }
+
+  it('allows an actor with write permission', async () => {
+    const dir = await ghPermStub('write');
+    const r = run('assert-authorized.sh', ['o/r', 'adsurg'], dir);
+
+    expect(r.code).toBe(0);
+  });
+
+  it('allows an actor with admin permission', async () => {
+    const dir = await ghPermStub('admin');
+    const r = run('assert-authorized.sh', ['o/r', 'adsurg'], dir);
+
+    expect(r.code).toBe(0);
+  });
+
+  it('refuses an actor who holds only triage — enough to apply the label, not enough to promote', async () => {
+    // The whole point: triage can apply the label but must not be enough on its own to move
+    // production traffic and merge to main.
+    const dir = await ghPermStub('triage');
+    const r = run('assert-authorized.sh', ['o/r', 'someone'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("holds only 'triage'");
+  });
+
+  it('refuses an actor with only read permission', async () => {
+    const dir = await ghPermStub('read');
+    const r = run('assert-authorized.sh', ['o/r', 'someone'], dir);
+
+    expect(r.code).not.toBe(0);
+  });
+
+  it('fails closed when the permission cannot be read at all', async () => {
+    // An unreadable answer must not be treated as authorised by default — unlike the rollback
+    // merge-state guard, there is no safe direction to fall through to here: proceeding on an
+    // unknown permission is exactly the gap this script exists to close.
+    const dir = await ghPermStub('', 1);
+    const r = run('assert-authorized.sh', ['o/r', 'someone'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('could not read');
+  });
+
+  it('still recognises the permission exactly when gh writes chatter to stderr on an otherwise-successful call', async () => {
+    const dir = await tmp('ds-gh-perm-chatter-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *"collaborators"*"permission"*) echo "write"; echo "Warning: chatter" >&2 ;;',
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+
+    const r = run('assert-authorized.sh', ['o/r', 'adsurg'], dir);
+
+    expect(r.code).toBe(0);
   });
 });
 

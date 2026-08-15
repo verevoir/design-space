@@ -106,6 +106,20 @@ jobs:
 
       # All remaining steps run only on same-repo PRs.
 
+      # ------------------------------------------------------------------
+      # Applying the `promote` label needs only GitHub's `triage` role — narrower than write.
+      # This job moves production traffic and merges to main unattended, so it checks the
+      # stronger bound explicitly rather than trusting the label mechanism's own, weaker one.
+      # ------------------------------------------------------------------
+      - name: Verify the actor holds write access, not just enough to apply a label
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/promote/assert-authorized.sh \
+            "${{ github.repository }}" "${{ github.actor }}"
+
       - name: Wait for every other check on this commit to go green
         if: github.event.pull_request.head.repo.full_name == github.repository
         timeout-minutes: 35
@@ -350,6 +364,13 @@ jobs:
       # exists to prevent. This is what implements the ruling on the tree-equality hazard —
       # after a successful merge, traffic STAYS on the canaried revision, which is the proven
       # artefact, and a human decides what happens next.
+      #
+      # That condition is necessary but not sufficient: a step's CONCLUSION is not the same fact
+      # as whether the merge actually happened. `gh pr merge` can succeed on GitHub's side and
+      # then have its OWN step marked `cancelled` by a job-level timeout landing mid-step, in
+      # which case this `if` alone would still let rollback run. rollback.sh is given the repo
+      # and PR number so it can ask GitHub directly — the same question squash-merge.sh already
+      # asks for idempotency — as a second, independent check before it touches any traffic.
       # ------------------------------------------------------------------
       - name: Roll back on failure or timeout
         if: |
@@ -359,5 +380,8 @@ jobs:
           steps.capture.conclusion == 'success' &&
           steps.merge.conclusion != 'success'
         timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          bash scripts/promote/rollback.sh "${{ env.SNAPSHOT_FILE }}" "${{ env.CANDIDATE_TAG }}"
+          bash scripts/promote/rollback.sh "${{ env.SNAPSHOT_FILE }}" "${{ env.CANDIDATE_TAG }}" \
+            "${{ github.repository }}" "${{ github.event.pull_request.number }}"
