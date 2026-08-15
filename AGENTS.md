@@ -60,7 +60,7 @@ not repeated.
 
 - **Run the review panel locally before pushing.** PRs otherwise take several rounds; the local
   run exists to bring that number down, not to replace CI. It lives outside this repository, in
-  the capabilities project alongside it:
+  the capabilities project alongside it, and can be run by hand:
 
   ```sh
   PREGATE_PI_CONFIG=<the Claude config file holding your model credentials> \
@@ -72,6 +72,21 @@ not repeated.
 
   About five minutes and a couple of dollars — cheap against a CI round trip, and it runs the
   same five lenses.
+
+  The same script is also declared as the `pregate` release step in `aigency.json`, so it can be
+  driven through `run_release_step` instead of typed by hand — both paths invoke
+  `../capabilities/scripts/run-pregate.mjs`, and neither replaces the other. The declared step
+  needs `CLAUDE_CODE_OAUTH_TOKEN` (model credentials, replacing `PREGATE_PI_CONFIG` for that
+  invocation) and `AIGENCY_GUARDRAILS_TOKEN` (reads the provisioned rubric and publishes each
+  lens's verdict). A declaration's `env` list names variables, not values, so both must actually
+  be exported in the runtime's own process and listed in that runtime's `AIGENCY_ALLOWED_ENV`
+  before `aigency.json` naming them has any effect — the file cannot grant an environment variable
+  that was never exported.
+
+  The declared step also passes `--lens-timeout 900`, wider than the script's own 180-second
+  default. `correctness` was seen to exceed 180s and come back with no verdict at all rather
+  than a slow one; the flag's deadline is shared with the retry, so 900s has to cover both the
+  first attempt and one retry, not just a single try.
 
 - **Read the panel's findings from the run artifacts, not the check annotations.** An annotation
   is a one-line summary; the artifact carries the whole finding, with file and line.
