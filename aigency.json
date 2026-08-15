@@ -28,7 +28,8 @@
       "kind": "gate",
       "command": ["npm", "run", "lint"],
       "description": "ESLint. Blocking because a worker can fix it by editing its own output, which is the line between a gate that teaches and one that nags.",
-      "blocking": true
+      "blocking": true,
+      "timeoutMs": 60000
     },
     {
       "name": "pregate",
