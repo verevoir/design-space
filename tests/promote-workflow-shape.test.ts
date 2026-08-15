@@ -361,10 +361,17 @@ describe('promote.yml — the rollback path', () => {
     expect(capture).toBeLessThan(deploy);
   });
 
-  it('rolls back on failure', () => {
+  it('rolls back on failure, cancellation, or the job hitting its own timeout', () => {
+    // failure() alone does not cover a job cancelled by timeout-minutes — GitHub marks that
+    // job `cancelled`, not `failed`, and a step whose own `if` is not always() is skipped once
+    // the job's status is cancelled, before its condition is even evaluated. Both gaps must be
+    // closed: always() to keep the step in play, cancelled() alongside failure() to decide it
+    // should run.
     const rollback = stepContaining('Roll back on failure');
 
+    expect(rollback).toContain('always()');
     expect(rollback).toContain('failure()');
+    expect(rollback).toContain('cancelled()');
     expect(rollback).toContain('scripts/promote/rollback.sh');
   });
 
