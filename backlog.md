@@ -312,7 +312,9 @@ digest-pinned `candidate` revision at zero traffic, smoke, cut 10%, health-check
 squash-merge, assert tree equality, retag the proven digest, pin traffic and drop the tag — with
 every step timeout-bounded and a rollback path guarded so it cannot move traffic after the merge.
 The decision logic lives in `scripts/promote/` with tests rather than in `run:` blocks. The smoke
-now walks every screen of the reference journey, derived from the journey document. ADR 0007 is
+now asserts the prompt heading of every screen of the reference journey, derived from the journey
+document — headings only, and a screen carrying no prompt heading fails the derivation rather than
+being skipped past. ADR 0007 is
 amended for the health-check divergence.
 
 Outstanding: the gates have not been run against this change and it has not promoted anything, so

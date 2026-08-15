@@ -237,7 +237,7 @@ jobs:
           SMOKE_EXPECT_REVISION: ${{ env.CANDIDATE_REVISION }}
         run: |
           # Zero traffic: production is untouched whether this passes or fails. That ordering is
-          # the point of ADR 0007. The smoke walks every screen of the documented journey.
+          # the point of ADR 0007. The smoke asserts the prompt heading of every screen of the documented journey — headings only, and a screen carrying no prompt heading fails the derivation rather than being skipped.
           bash scripts/smoke.sh "$TAG_URL"
 
       - name: Cut 10% of traffic to the candidate

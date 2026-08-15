@@ -24,6 +24,16 @@ import { pathToFileURL } from 'node:url';
  * renderer demonstrably emits — the previous single-literal check proved that against the live
  * service. Asserting on action labels or component internals as well would couple the smoke to
  * the adapter's markup, so a sketch-adapter restyle would fail a deploy that is fine.
+ *
+ * Because the derivation is heading-only, a screen carrying no prompt heading cannot be covered by
+ * it. That is a HARD ERROR here rather than a silent skip: skipping it quietly leaves the smoke
+ * asserting less than the promotion claims it asserts, and the claim, not the gap, is what gets
+ * read later. The error names the screen, so the fix — give it a heading, or widen this derivation
+ * on purpose — is a decision someone takes rather than one that happens to them.
+ *
+ * Residual, stated rather than fixed: two screens sharing a heading collapse to one expectation, so
+ * a page rendering only one of them still passes. Headings in the reference journeys are distinct,
+ * and a duplicate is a journey-authoring smell in its own right.
  */
 export function expectationsFor(journey) {
   const screens = journey?.screens;
@@ -32,16 +42,29 @@ export function expectationsFor(journey) {
   }
 
   const headings = [];
-  for (const screen of screens) {
+  const uncovered = [];
+  screens.forEach((screen, index) => {
+    const before = headings.length;
     for (const block of screen?.blocks ?? []) {
       if (block?.component === 'prompt' && typeof block?.props?.heading === 'string') {
         headings.push(block.props.heading);
       }
     }
-  }
+    if (headings.length === before) {
+      uncovered.push(typeof screen?.id === 'string' && screen.id.length > 0 ? screen.id : `#${index + 1}`);
+    }
+  });
 
   if (headings.length === 0) {
     throw new Error('no screen carries a prompt heading — the smoke would assert nothing');
+  }
+
+  if (uncovered.length > 0) {
+    throw new Error(
+      `these screens carry no prompt heading, so the smoke cannot cover them: ${uncovered.join(', ')} — ` +
+        'give each one a prompt heading, or widen this derivation deliberately. A screen skipped here is ' +
+        'a screen the promotion reports having walked and did not.',
+    );
   }
 
   return [...new Set(headings)];

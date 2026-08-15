@@ -449,3 +449,61 @@ describe('squash-merge.sh', () => {
     expect(r.err).toContain('names no merge commit');
   });
 });
+
+// ---------------------------------------------------------------------------
+// wait-for-green.sh
+// ---------------------------------------------------------------------------
+
+// The verdict itself is checks-green.mjs, tested as a pure function elsewhere. What is tested
+// here is the wrapper's own three error paths, each of which decides whether a promotion stops:
+// a page it cannot see past, an API it could not read, and a bound it reached. All three run
+// only during a failure, which is precisely when nobody is watching them for the first time.
+
+describe('wait-for-green.sh', () => {
+  const NOW = { WAIT_FOR_GREEN_TIMEOUT: '0', WAIT_FOR_GREEN_INTERVAL: '1' };
+
+  const check = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
+
+  it('refuses to judge a commit carrying more checks than it can read in one page', async () => {
+    // The guard's own comment says the verdict would become wrong SILENTLY. A subset that
+    // happens to be green reads exactly like a green suite, so the count is asserted rather
+    // than assumed — note this payload's visible check IS green, so nothing but the guard
+    // stands between it and a promotion.
+    const body = JSON.stringify({ total_count: 101, check_runs: [check('ci', 'completed', 'success')] });
+    const dir = await stub('gh', body, 0);
+
+    const r = run('wait-for-green.sh', ['o/r', 'abc123', 'promote'], dir, NOW);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('exceeds the single page');
+  });
+
+  it('stops when the checks cannot be read, rather than treating an unreadable API as pending', async () => {
+    // An API error is not "no checks failed yet". Waiting it out would burn the bound and then
+    // report a timeout, naming the wrong cause to whoever reads it.
+    const dir = await stub('gh', 'gh: HTTP 502 Bad Gateway', 1);
+
+    const r = run('wait-for-green.sh', ['o/r', 'abc123', 'promote'], dir, NOW);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('could not read the checks for abc123');
+    expect(r.err).toContain('502');
+  });
+
+  it('fails when the bound is reached, rather than waiting forever or reporting green', async () => {
+    // A pending suite that never finishes is the case the bound exists for, and the exit status
+    // must be the failing one: a promotion that treated "ran out of time" as "good enough"
+    // would merge a commit whose review never finished.
+    const body = JSON.stringify({
+      total_count: 2,
+      check_runs: [check('ci', 'in_progress', null), check('promote', 'in_progress', null)],
+    });
+    const dir = await stub('gh', body, 0);
+
+    const r = run('wait-for-green.sh', ['o/r', 'abc123', 'promote'], dir, NOW);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('did not go green within 0s');
+    expect(r.err).toContain('waiting on: ci');
+  });
+});

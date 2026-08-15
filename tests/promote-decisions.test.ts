@@ -229,6 +229,33 @@ describe('journey-expectations — what the smoke must find', () => {
     expect(() => expectationsFor({ screens: [] })).toThrow(/no screens/);
   });
 
+  it('refuses a journey where SOME screen carries no prompt heading, naming that screen', () => {
+    // The hole the docs claim closed: the derivation is heading-only, so a headingless screen is
+    // one the smoke never looks at while the workflow says it walked every screen. Silently
+    // returning the other screens' headings is what made that claim false, so the screen is named
+    // and the run stops.
+    const mixed = {
+      screens: [
+        { id: 'covered', blocks: [{ component: 'prompt', props: { heading: 'One' } }] },
+        { id: 'quiet', blocks: [{ component: 'status', props: {} }] },
+      ],
+    };
+
+    expect(() => expectationsFor(mixed)).toThrow(/carry no prompt heading/);
+    expect(() => expectationsFor(mixed)).toThrow(/quiet/);
+  });
+
+  it('names an unidentified screen by its position rather than saying nothing useful', () => {
+    expect(() =>
+      expectationsFor({
+        screens: [
+          { blocks: [{ component: 'prompt', props: { heading: 'One' } }] },
+          { blocks: [{ component: 'status', props: {} }] },
+        ],
+      }),
+    ).toThrow(/#2/);
+  });
+
   it('refuses a journey whose screens carry no prompt heading', () => {
     // Returning an empty list would make the smoke pass against any page at all.
     expect(() => expectationsFor({ screens: [{ blocks: [{ component: 'status', props: {} }] }] })).toThrow(

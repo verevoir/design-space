@@ -71,11 +71,15 @@ prop shapes, derived from real journeys rather than designed a priori. An adapte
 it, and may do so with completely different markup: a fixed bottom action bar, a different
 confirmation pattern, its own structural opinions.
 
-What an adapter supplies is **markup, styles and tokens**: component renderers, a CSS rules
-string written against `var(--ds-*)`, and its token set as structured data rather than an opaque
-blob — structured because the contrast check of §7 has to read a value, not parse a stylesheet.
-That contract lives in its own package, `adapter-contract`, and deliberately not in `port`, which
-may not know about rendering (ADR 0008).
+What an adapter supplies **is to become markup, styles and tokens** — decided in ADR 0008 and
+scheduled as story 2.2, not yet built: component renderers, a CSS rules string written against
+`var(--ds-*)`, and its token set as structured data rather than an opaque blob — structured
+because the contrast check of §7 will have to read a value, not parse a stylesheet. That contract
+is to live in its own package, `adapter-contract`, and deliberately not in `port`, which may not
+know about rendering.
+
+Until 2.2 lands, the contract is `name` and `components` alone: `render` owns the whole `<style>`
+block, so an adapter cannot contribute CSS and every adapter renders identically.
 
 Two consequences worth stating plainly:
 
@@ -199,7 +203,7 @@ flow one way; no deep imports across packages.
 packages/
   journey-model/    schema, types, validation.  Knows nothing about rendering.
   port/             component contracts + extraction from journeys.
-  adapter-contract/ what an adapter supplies: components, styles, structured tokens.
+  adapter-contract/ planned (story 2.2): components, styles, structured tokens.
   adapter-sketch/   the reference adapter. Hand-crafted.
   adapter-tokens/   degenerate token-variant adapters over the sketch markup.
   store/            the (object, ref) resolver. Git-backed today.
