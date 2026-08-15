@@ -57,12 +57,21 @@ jobs:
     concurrency:
       group: promote-${{ github.repository }}
       cancel-in-progress: false
-    timeout-minutes: 45
+    # 90, not 45. The two largest step-level bounds alone — wait-for-green (35) and the image
+    # build and push (20) — already sum to 55, more than the previous 45-minute job bound: a
+    # healthy run that spent close to its own allowance waiting for other checks, or building a
+    # slow image, could hit the job timeout before it ever got to fail on its own terms. 90
+    # leaves real margin above that 55-minute floor for the rest of the sequence (whose
+    # remaining step bounds sum to roughly 165 more) without matching the full architectural sum
+    # of every step's own ceiling (~220), which would defeat the point of bounding the job at
+    # all. The rollback step below is what makes ANY point at which this fires safe — not the
+    # specific number chosen here.
+    timeout-minutes: 90
     permissions:
       contents: write        # squash-merge writes to the base branch
       pull-requests: write   # merge the pull request
       id-token: write        # Workload Identity Federation
-      checks: read           # read this commit's check runs
+      checks: read            # read this commit's check runs
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -315,7 +324,21 @@ jobs:
             "${{ env.SERVICE }}" "${{ env.REGION }}" "${{ env.CANDIDATE_TAG }}"
 
       # ------------------------------------------------------------------
-      # Rollback, on two conditions.
+      # Rollback fires on failure() OR cancelled(), gated through always().
+      #
+      # `failure()` alone does not cover this job's own timeout-minutes bound. When the JOB
+      # timeout fires, GitHub marks the job's status `cancelled`, not `failed` — `failure()`
+      # only becomes true for an explicit step failure, so a run killed by its own bound would
+      # skip this step by default and leave traffic split with nothing scheduled to restore it.
+      # That is the exact state ADR 0007 exists to prevent, produced by the bound meant to
+      # prevent it.
+      #
+      # `always()` is required too, and separately from `cancelled()`: without it, a step whose
+      # `if` is not itself `always()` is skipped outright once the job's status is `cancelled`,
+      # before its own condition is even evaluated. `always()` is what lets this step still be
+      # considered; `cancelled()` (alongside `failure()`) is what then decides it should run.
+      #
+      # Rollback, on two further conditions.
       #
       # `steps.capture.conclusion == 'success'` — without a restore point there is nothing to
       # roll back TO, and running anyway would fail confusingly during whatever incident is
@@ -328,9 +351,10 @@ jobs:
       # after a successful merge, traffic STAYS on the canaried revision, which is the proven
       # artefact, and a human decides what happens next.
       # ------------------------------------------------------------------
-      - name: Roll back on failure
+      - name: Roll back on failure or timeout
         if: |
-          failure() &&
+          always() &&
+          (failure() || cancelled()) &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           steps.capture.conclusion == 'success' &&
           steps.merge.conclusion != 'success'
