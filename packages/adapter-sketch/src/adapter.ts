@@ -1,21 +1,13 @@
 import { type PromptProps } from '@design-space/port';
+import { type Adapter, type ComponentRenderer } from '@design-space/adapter-contract';
+import { SKETCH_CSS_CUSTOM_PROPERTIES } from './tokens.js';
+import { SKETCH_STYLES } from './styles.js';
 
-/**
- * A component renderer takes validated props and returns an HTML string.
- * The adapter is not given the journey document — it only sees the props for
- * one block at a time (architecture §3: adapters must not know which journey).
- */
-export type ComponentRenderer<T = Record<string, unknown>> = (props: T) => string;
-
-/**
- * An adapter: a map from component name to its renderer.
- * The renderer is typed as `(props: unknown) => string` at the registry level;
- * each implementation casts to its own prop type after validation by the port.
- */
-export interface Adapter {
-  readonly name: string;
-  readonly components: Readonly<Record<string, ComponentRenderer<unknown>>>;
-}
+// The adapter's component renderer registry re-exports the shared contract's
+// `Adapter` and `ComponentRenderer` types (ADR 0008) rather than declaring
+// its own structural copy — this package used to be the only place `Adapter`
+// was declared at all, which is what made the two later copies in `render`
+// and `gate` invisible drift instead of an obvious duplication.
 
 // ---------------------------------------------------------------------------
 // Component implementations
@@ -29,6 +21,8 @@ function renderPrompt(props: PromptProps): string {
   <h1 class="ds-prompt__heading">${escapeHtml(props.heading)}</h1>${explainHtml ? `\n  ${explainHtml}` : ''}
 </div>`;
 }
+
+const renderPromptComponent: ComponentRenderer<PromptProps> = renderPrompt;
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -49,6 +43,8 @@ function escapeHtml(text: string): string {
 export const sketchAdapter: Adapter = {
   name: 'sketch',
   components: {
-    prompt: (props) => renderPrompt(props as PromptProps),
+    prompt: (props: unknown) => renderPromptComponent(props as PromptProps),
   },
+  styles: SKETCH_STYLES,
+  tokens: SKETCH_CSS_CUSTOM_PROPERTIES,
 };

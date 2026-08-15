@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { check } from './gate.js';
 import { render } from '@design-space/render';
 import type { JourneyDocument } from '@design-space/journey-model';
-import type { AdapterLike } from './adapter-like.js';
+import type { AdapterLike } from '@design-space/adapter-contract';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -42,12 +42,16 @@ const SKETCH_LIKE_ADAPTER: AdapterLike = {
   components: {
     prompt: (_props) => `<div class="ds-prompt">Prompt</div>`,
   },
+  styles: '',
+  tokens: {},
 };
 
 /** Adapter that implements nothing. */
 const EMPTY_ADAPTER: AdapterLike = {
   name: 'empty',
   components: {},
+  styles: '',
+  tokens: {},
 };
 
 /** Adapter where prompt exists but always throws — simulates a renderer defect. */
@@ -56,6 +60,8 @@ const THROWING_ADAPTER: AdapterLike = {
   components: {
     prompt: (_props) => { throw new Error('renderer exploded'); },
   },
+  styles: '',
+  tokens: {},
 };
 
 /**
@@ -190,7 +196,7 @@ describe('check()', () => {
     it('defect finding falls back to "unknown error" when the GapRecord carries no error text', () => {
       // `check()` is public API accepting `renderGaps` directly, so a caller may
       // pass a GapRecord with no `error` field. The fallback `gap.error ?? 'unknown error'`
-      // at gate.ts:97 is reachable and must produce the literal string 'unknown error'
+      // at gate.ts is reachable and must produce the literal string 'unknown error'
       // rather than undefined or an empty string.
       //
       // We pass a hand-crafted GapRecord: the adapter has a `prompt` renderer (so
@@ -258,6 +264,30 @@ describe('check()', () => {
         missing: expect.any(Array),
         findings: expect.any(Array),
       });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // ADR 0008 — the adapter contract carries presentation (story 2.2)
+  // ---------------------------------------------------------------------------
+
+  describe('adapter contract: check() rejects an incomplete adapter', () => {
+    it('throws when the adapter has no styles field', () => {
+      const incomplete = {
+        name: 'incomplete',
+        components: {},
+        tokens: {},
+      } as unknown as AdapterLike;
+      expect(() => check(incomplete, [])).toThrow(/styles/);
+    });
+
+    it('throws when the adapter has no tokens field', () => {
+      const incomplete = {
+        name: 'incomplete',
+        components: {},
+        styles: '',
+      } as unknown as AdapterLike;
+      expect(() => check(incomplete, [])).toThrow(/tokens/);
     });
   });
 });

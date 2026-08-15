@@ -385,6 +385,29 @@ token value as data rather than as text.
 **Reads.** `packages/port`.
 **Unblocks.** 3.1, and through it 4.1. Disjoint from 2.1, which writes `port` alone.
 
+**Status.** Done. `packages/adapter-contract` holds the widened `Adapter` contract — `name`,
+`components`, `styles` (a rules string written against `var(--ds-*)`) and `tokens` (structured
+data, not an opaque string) — with `assertAdapter` enforcing the shape at every call site. Both
+structural `AdapterLike` copies are gone: `render` and `gate` now type against the imported
+contract, `gate`'s own `adapter-like.ts` is deleted outright, and `GapRecord` is an honest import
+from `render` rather than a hand-copied duplicate.
+
+Component appearance — `.ds-prompt*`, `.ds-action--*` — moved out of `render`'s `PAGE_CSS` and
+into the sketch adapter's own `styles` module. `SKETCH_CSS_CUSTOM_PROPERTIES` is now the sketch
+token set, read as structured data, and is no longer dead code. `.ds-screen` and `.ds-gap` stay
+document chrome in `render` — they are not a port component's appearance — but their border
+colour now reads through `var(--ds-*, literal)`, so an adapter can still recolour them via a
+token without owning the rule. That split is what lets 4.1 change token values without touching
+markup.
+
+Mutation-checked: every new assertion was proved by deliberately breaking the behaviour it names,
+watching the suite go red naming that assertion, then restoring it — including the two hardest
+cases, reinstating each deleted structural duplicate and confirming the rejection tests, not the
+compiler, are what catch it. One assertion was found worthless mid-session — a `:root` presence
+check satisfied by an unrelated reset rule already in `render`'s own CSS — and was rewritten to
+assert the token declaration's containment within the block, not merely both strings' presence
+somewhere in the document.
+
 ---
 
 ## Wave 3 — three siblings off the port

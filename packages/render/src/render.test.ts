@@ -46,11 +46,15 @@ const PROMPT_ONLY_ADAPTER: AdapterLike = {
       return `<div class="ds-prompt"><h1>${p.heading}</h1></div>`;
     },
   },
+  styles: '',
+  tokens: {},
 };
 
 const EMPTY_ADAPTER: AdapterLike = {
   name: 'empty-adapter',
   components: {},
+  styles: '',
+  tokens: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -287,6 +291,8 @@ describe('render()', () => {
           return `<div class="custom">${p.label}</div>`;
         },
       },
+      styles: '',
+      tokens: {},
     };
 
     const CUSTOM_WIDGET_JOURNEY: JourneyDocument = {
@@ -330,6 +336,8 @@ describe('render()', () => {
             throw new Error('custom renderer blew up');
           },
         },
+        styles: '',
+        tokens: {},
       };
       const { gaps } = render(CUSTOM_WIDGET_JOURNEY, THROWING_CUSTOM_ADAPTER);
       const gap = gaps.find((g) => g.component === 'custom-widget');
@@ -412,6 +420,8 @@ describe('render()', () => {
           throw new Error(SECRET_ERROR_TEXT);
         },
       },
+      styles: '',
+      tokens: {},
     };
 
     it('the rendered HTML does not contain the internal exception message when a renderer throws', () => {
@@ -448,6 +458,145 @@ describe('render()', () => {
       const { html } = render(journey, THROWING_ADAPTER);
       // The gap element must name the component so the developer knows which one failed.
       expect(html).toContain('aria-label="Gap: prompt"');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // ADR 0008 — the adapter contract carries presentation (story 2.2)
+  // ---------------------------------------------------------------------------
+
+  describe('adapter contract: rejects an incomplete adapter (ADR 0008)', () => {
+    it('throws when the adapter has no styles field', () => {
+      const incomplete = {
+        name: 'incomplete',
+        components: {},
+        tokens: {},
+      } as unknown as AdapterLike;
+      expect(() => render(MINIMAL_JOURNEY, incomplete)).toThrow(/styles/);
+    });
+
+    it('throws when the adapter has no tokens field', () => {
+      const incomplete = {
+        name: 'incomplete',
+        components: {},
+        styles: '',
+      } as unknown as AdapterLike;
+      expect(() => render(MINIMAL_JOURNEY, incomplete)).toThrow(/tokens/);
+    });
+  });
+
+  describe('adapter contract: tokens are emitted as a :root block (ADR 0008)', () => {
+    const TOKEN_ADAPTER: AdapterLike = {
+      name: 'token-adapter',
+      components: {},
+      styles: '',
+      tokens: { 'ds-test-token': '#123456' },
+    };
+
+    it('wraps the adapter tokens in a :root { } declaration block', () => {
+      const { html } = render(MINIMAL_JOURNEY, TOKEN_ADAPTER);
+      // Assert the RELATIONSHIP — the token declaration appears INSIDE a
+      // :root { ... } block — not merely that both substrings appear
+      // somewhere in the document. render's own PAGE_CSS reset rule already
+      // contains a bare ":root {" (`:root { box-sizing: border-box; }`), so
+      // checking for that substring alone, or for the declaration text alone,
+      // proves nothing about whether the adapter's tokens are actually wrapped.
+      expect(html).toMatch(/:root\s*\{[^}]*--ds-test-token:\s*#123456;[^}]*\}/);
+    });
+  });
+
+  describe('adapter contract: adapter styles reach the document (ADR 0008)', () => {
+    const STYLED_ADAPTER: AdapterLike = {
+      name: 'styled-adapter',
+      components: {},
+      styles: '.ds-marker-unique-9f2 { color: chartreuse; }',
+      tokens: {},
+    };
+
+    it('concatenates the adapter styles into the document <style> block', () => {
+      const { html } = render(MINIMAL_JOURNEY, STYLED_ADAPTER);
+      expect(html).toContain('.ds-marker-unique-9f2 { color: chartreuse; }');
+    });
+  });
+
+  describe('adapter contract: token-only variants change CSS but never markup (ADR 0008, 4.1)', () => {
+    const SHARED_STYLES = '.ds-widget { color: var(--ds-widget-colour, #000); }';
+
+    const ADAPTER_A: AdapterLike = {
+      name: 'variant-a',
+      components: {
+        prompt: (props) => {
+          const p = props as { heading: string };
+          return `<div class="ds-prompt">${p.heading}</div>`;
+        },
+      },
+      styles: SHARED_STYLES,
+      tokens: { 'ds-widget-colour': '#111111' },
+    };
+
+    const ADAPTER_B: AdapterLike = {
+      ...ADAPTER_A,
+      name: 'variant-b',
+      tokens: { 'ds-widget-colour': '#eeeeee' },
+    };
+
+    function stripStyleBlock(html: string): string {
+      return html.replace(/<style>[\s\S]*?<\/style>/, '<style></style>');
+    }
+
+    it('two adapters differing only in tokens produce different CSS', () => {
+      const a = render(MINIMAL_JOURNEY, ADAPTER_A).html;
+      const b = render(MINIMAL_JOURNEY, ADAPTER_B).html;
+      expect(a).not.toBe(b);
+      expect(a).toContain('--ds-widget-colour: #111111;');
+      expect(b).toContain('--ds-widget-colour: #eeeeee;');
+    });
+
+    it('and identical markup once the <style> block is stripped', () => {
+      const a = render(MINIMAL_JOURNEY, ADAPTER_A).html;
+      const b = render(MINIMAL_JOURNEY, ADAPTER_B).html;
+      // Names differ (adapter.name is echoed in the header), so compare with
+      // that one, expected difference normalised out.
+      const normalise = (html: string) => stripStyleBlock(html).replace(/variant-[ab]/, 'variant-X');
+      expect(normalise(a)).toBe(normalise(b));
+    });
+  });
+
+  describe('component appearance moved out of render (ADR 0008)', () => {
+    it("render's own CSS no longer defines .ds-action--primary — that is now the adapter's job", () => {
+      const NO_STYLE_ADAPTER: AdapterLike = {
+        name: 'no-style',
+        components: {},
+        styles: '',
+        tokens: {},
+      };
+      const { html } = render(MINIMAL_JOURNEY, NO_STYLE_ADAPTER);
+      expect(html).not.toContain('.ds-action--primary');
+      expect(html).not.toContain('.ds-prompt__heading {');
+    });
+  });
+
+  describe("render's chrome falls back sanely when a token is absent (ADR 0008)", () => {
+    it('the .ds-screen border rule reads var(--ds-border-color) with a literal fallback', () => {
+      const NO_TOKEN_ADAPTER: AdapterLike = {
+        name: 'no-tokens',
+        components: {},
+        styles: '',
+        tokens: {},
+      };
+      const { html } = render(MINIMAL_JOURNEY, NO_TOKEN_ADAPTER);
+      expect(html).toContain('var(--ds-border-color, #ddd)');
+    });
+
+    it('the .ds-gap border rule reads var(--ds-gap-border) with a literal fallback', () => {
+      const NO_TOKEN_ADAPTER: AdapterLike = {
+        name: 'no-tokens',
+        components: {},
+        styles: '',
+        tokens: {},
+      };
+      const { html } = render(MINIMAL_JOURNEY, NO_TOKEN_ADAPTER);
+      expect(html).toContain('var(--ds-gap-border, #e74c3c)');
     });
   });
 });
