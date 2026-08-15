@@ -183,6 +183,20 @@ describe('assert-tree-equal.sh', () => {
     expect(r.code).not.toBe(0);
     expect(r.out).not.toContain('identical');
   });
+
+  it('fails rather than reporting a match when NEITHER ref resolves', async () => {
+    // The hole the single-bad-ref case above does not reach. If resolve_tree can report a
+    // failure without failing its caller, BOTH trees are the empty string, "" equals "", and
+    // the script announces an identical tree it never compared — a green promotion built on a
+    // comparison that never happened.
+    const dir = await repoWithCommit();
+
+    const r = runIn(dir, 'assert-tree-equal.sh', ['no-such-ref', 'also-missing']);
+
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain('identical');
+    expect(r.err).toContain('cannot resolve');
+  });
 });
 
 // ---------------------------------------------------------------------------
