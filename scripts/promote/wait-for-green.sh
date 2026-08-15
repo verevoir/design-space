@@ -28,16 +28,25 @@ INTERVAL="${WAIT_FOR_GREEN_INTERVAL:-20}"
 STARTED=$SECONDS
 
 while : ; do
-  set +e
   # per_page=100 rather than --paginate: --paginate concatenates JSON documents, which is not
   # itself valid JSON. This service has nowhere near 100 checks; if it ever does, the verdict
   # becomes wrong silently, so the count is asserted below.
-  BODY="$(gh api "repos/${REPO}/commits/${SHA}/check-runs?per_page=100" 2>&1)"
+  #
+  # stdout and stderr are captured SEPARATELY, not merged with 2>&1: BODY is parsed as JSON
+  # below, and a warning gh writes to stderr on an otherwise-successful call would land inside
+  # that string and corrupt the parse — silently blocking a healthy promotion on chatter that
+  # was never part of the answer.
+  API_STDERR="$(mktemp)"
+  set +e
+  BODY="$(gh api "repos/${REPO}/commits/${SHA}/check-runs?per_page=100" 2>"$API_STDERR")"
   API_RC=$?
   set -e
+  API_ERR="$(cat "$API_STDERR")"
+  rm -f "$API_STDERR"
 
   if [ "$API_RC" -ne 0 ]; then
-    echo "$BODY" >&2
+    [ -n "$BODY" ] && echo "$BODY" >&2
+    [ -n "$API_ERR" ] && echo "$API_ERR" >&2
     echo "::error title=Promotion blocked::could not read the checks for ${SHA}." >&2
     exit 1
   fi
