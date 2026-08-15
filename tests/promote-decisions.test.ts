@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { summariseChecks, excludeSelf, parseCheckRuns, exitCodeFor } from '../scripts/promote/checks-green.mjs';
+import { summariseChecks, excludeSelf, parseCheckRuns, exitCodeFor, describeVerdict } from '../scripts/promote/checks-green.mjs';
 import { snapshotFromDescribe, restoreSpec, revisionForTag } from '../scripts/promote/traffic-snapshot.mjs';
 import { expectationsFor } from '../scripts/journey-expectations.mjs';
 
@@ -96,6 +96,37 @@ describe('checks-green — the verdict', () => {
     expect(parseCheckRuns('{"check_runs":[{"name":"a"}]}')).toHaveLength(1);
     expect(parseCheckRuns('[{"name":"a"}]')).toHaveLength(1);
     expect(() => parseCheckRuns('{"nope":1}')).toThrow();
+  });
+});
+
+describe('checks-green — describing the verdict for a human', () => {
+  // describeVerdict is what a promotion run actually prints when it blocks — the failure-
+  // reporting function's own output. The green/pending paths are already exercised indirectly
+  // through wait-for-green.sh; the branch that reports a REAL failed check, and the branch that
+  // reports no checks at all, were previously never reached by any test.
+
+  it('names the failing checks when the verdict is failed', () => {
+    const summary = summariseChecks([completed('ci', 'failure'), completed('review', 'success')]);
+
+    expect(describeVerdict(summary)).toBe('failed — ci');
+  });
+
+  it('names every failing check, not just the first', () => {
+    const summary = summariseChecks([completed('ci', 'failure'), completed('review', 'failure')]);
+
+    expect(describeVerdict(summary)).toBe('failed — ci, review');
+  });
+
+  it('says empty rather than something that could be misread as passing', () => {
+    const summary = summariseChecks([]);
+
+    expect(describeVerdict(summary)).toBe('empty — no checks found for this commit, which is not the same as passing');
+  });
+
+  it('names how many checks passed when the verdict is green', () => {
+    const summary = summariseChecks([completed('ci', 'success'), completed('review', 'success')]);
+
+    expect(describeVerdict(summary)).toBe('green — 2 check(s) passed');
   });
 });
 

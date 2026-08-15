@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 // incident, on a day nobody planned for, so "it looked right" is not evidence.
 
 const SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), '../scripts/promote');
+const TRAFFIC_SNAPSHOT_CLI = resolve(SCRIPTS, 'traffic-snapshot.mjs');
 
 const tmpDirs: string[] = [];
 
@@ -89,6 +90,13 @@ async function repoWithCommit(): Promise<string> {
 
 function runIn(cwd: string, script: string, args: string[]) {
   const res = spawnSync('bash', [join(SCRIPTS, script), ...args], { cwd, encoding: 'utf-8' });
+  return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
+}
+
+/** Runs traffic-snapshot.mjs's own CLI entry point directly — no shell wrapper sits between
+ * this and its argument validation, so this is the only way to reach those branches at all. */
+function runTrafficSnapshotCli(args: string[], stdin: string) {
+  const res = spawnSync('node', [TRAFFIC_SNAPSHOT_CLI, ...args], { input: stdin, encoding: 'utf-8' });
   return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
 }
 
@@ -408,6 +416,40 @@ describe('rollback.sh', () => {
 
     expect(r.code).not.toBe(0);
     expect(r.err).toContain('may be serving the failed candidate');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// traffic-snapshot.mjs — CLI argument validation
+// ---------------------------------------------------------------------------
+
+// The parsing functions themselves (snapshotFromDescribe, restoreSpec, revisionForTag) are
+// exercised as pure functions in tests/promote-decisions.test.ts. What is tested here is the
+// two argument-validation branches that live only in this CLI entry point — neither call site
+// (capture-traffic.sh, rollback.sh) ever exercises them, since both always pass complete,
+// recognised flags.
+
+describe('traffic-snapshot.mjs — CLI argument validation', () => {
+  it('refuses --snapshot without both --service and --region', () => {
+    const r = runTrafficSnapshotCli(['--snapshot', '--service', 'svc'], '{}');
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('--snapshot requires --service and --region');
+  });
+
+  it('refuses --snapshot with --region but no --service', () => {
+    const r = runTrafficSnapshotCli(['--snapshot', '--region', 'eu'], '{}');
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('--snapshot requires --service and --region');
+  });
+
+  it('refuses when none of --snapshot, --restore-spec or --revision-for-tag is given', () => {
+    // A typo'd or missing flag must not fall through and read stdin as some other operation.
+    const r = runTrafficSnapshotCli(['--nonsense'], '{}');
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('expected one of --snapshot, --restore-spec, --revision-for-tag');
   });
 });
 
