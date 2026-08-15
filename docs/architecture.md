@@ -71,6 +71,12 @@ prop shapes, derived from real journeys rather than designed a priori. An adapte
 it, and may do so with completely different markup: a fixed bottom action bar, a different
 confirmation pattern, its own structural opinions.
 
+What an adapter supplies is **markup, styles and tokens**: component renderers, a CSS rules
+string written against `var(--ds-*)`, and its token set as structured data rather than an opaque
+blob — structured because the contrast check of §7 has to read a value, not parse a stylesheet.
+That contract lives in its own package, `adapter-contract`, and deliberately not in `port`, which
+may not know about rendering (ADR 0008).
+
 Two consequences worth stating plainly:
 
 - **Token-only themes are a degenerate adapter.** "Lighter, more airy" reuses the sketch
@@ -193,6 +199,7 @@ flow one way; no deep imports across packages.
 packages/
   journey-model/    schema, types, validation.  Knows nothing about rendering.
   port/             component contracts + extraction from journeys.
+  adapter-contract/ what an adapter supplies: components, styles, structured tokens.
   adapter-sketch/   the reference adapter. Hand-crafted.
   adapter-tokens/   degenerate token-variant adapters over the sketch markup.
   store/            the (object, ref) resolver. Git-backed today.

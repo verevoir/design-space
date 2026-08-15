@@ -12,9 +12,11 @@ the same time, and hold disjoint write-sets. An increment is a real **barrier** 
 the previous wave lands before the next begins. The numbering states merge order, not branch
 topology.
 
-**Width:** fans to 2 after wave 0, narrows to 1 for 2S.1, then fans to 2 again — the deployment
+**Width:** fans to 2 after wave 0, narrows to 1 for 2S.1, then fans again — the deployment
 chain `2S.2 → 2S.3 → 2S.4` runs alongside wave 2, because it writes `studio`, `Dockerfile` and
-`.github/` while wave 2 writes `port`. Wave 3 then fans to 3.
+`.github/` while wave 2 writes `port` and the adapter contract. Wave 2 itself holds two siblings:
+2.1 writes `port`, 2.2 writes `adapter-contract`, `render`, `gate` and `adapter-sketch`. Wave 3
+then fans to 3.
 **Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight stories, so seven
 edges, each a genuine dependency rather than narrative order. The deployment chain is three
 stories long and is not on that path; it finishes well inside it.
@@ -352,6 +354,35 @@ possible and removing or renaming one within a session is refused.
 **Reads.** `packages/journey-model`, `examples/journeys`.
 **Unblocks.** 3.1, 3.2, 3.3 — this is where the plan fans to three.
 
+### 2.2 An adapter supplies its own presentation, not only its markup
+
+**Outcome.** The adapter contract carries `styles` — a CSS rules string written against
+`var(--ds-*)` — and `tokens` — the token set as structured data — alongside `name` and
+`components`, and it lives in a package of its own. `render`, `gate` and `adapter-sketch` import
+that one contract, and the structural `AdapterLike` copies in `render` and `gate` are gone.
+Component appearance moves out of `render`'s module constant and into the sketch adapter.
+
+**Why.** ADR 0008. As built, `render` owns the `<style>` block, the contract has no way to
+contribute CSS, and `SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — so ADR 0001's central claim,
+that an adapter decides what a component looks like, is unimplemented and 3.1 has no way to give
+the sketch adapter a sketch style. Two things force the shape. 4.1's done-bar requires the
+contrast check to pass for each variant, and an opaque CSS string cannot be contrast-checked,
+which is why `tokens` is structured data. And the two `AdapterLike` copies are *structural*, not
+imports, so widening the contract without deleting them breaks nothing, changes nothing on the
+page, and reads exactly like a fix.
+
+**Done when.** The served page carries the sketch adapter's `--ds-*` properties; an adapter
+supplying different token values changes the rendering without changing any markup; component
+appearance is no longer in `render`'s module constant; `render` and `gate` type against the
+contract package and neither structural copy remains anywhere in the tree; two documents rendered
+from different adapters in one page do not affect each other's styling; and the gate reads a
+token value as data rather than as text.
+
+**Writes.** `packages/adapter-contract`, `packages/render`, `packages/gate`,
+`packages/adapter-sketch`.
+**Reads.** `packages/port`.
+**Unblocks.** 3.1, and through it 4.1. Disjoint from 2.1, which writes `port` alone.
+
 ---
 
 ## Wave 3 — three siblings off the port
@@ -361,16 +392,12 @@ against any particular adapter, which is what keeps it a sibling of 3.1 rather t
 
 ### 3.1 The sketch adapter renders every component in the port
 
-**Known gap, found 2026-08-12 by running the container rather than the suite.** `render.ts` owns the
-`<style>` block through a module constant, and the `Adapter` interface has **no way to contribute
-CSS at all**. So every adapter currently renders with identical styling, and
-`SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — defined, exported, pinned by a test file that
-asserts every one of its token values, and referenced by nothing outside that test. The served
-page contains no `--ds-*` properties.
-
-That is ADR 0001's central claim unimplemented: an adapter is supposed to decide what a component
-looks like. **This story must widen the `Adapter` contract to carry presentation**, not only
-markup, or the sketch style cannot exist and 4.1 cannot work.
+**The contract this story needs is widened by 2.2, which lands first.** The gap found 2026-08-12
+— `render` owning the `<style>` block, the adapter contract unable to contribute CSS, and
+`SKETCH_CSS_CUSTOM_PROPERTIES` dead — is 2.2's work, decided in ADR 0008 and taken out of this
+story deliberately: widening a contract that `render` and `gate` both copy structurally is a
+different job from designing a hand-drawn rendering, and doing both here would repeat 2S.1's one
+story, two jobs. This story writes the sketch style *against* that contract.
 
 **Outcome.** A hand-drawn adapter implements the whole port. The rendering reads as provisional
 through typography and colour — handwriting face, warm paper, ink rather than black, one hard
@@ -427,7 +454,7 @@ design system) from a *defect* (a finding about the adapter).
 
 ### 4.1 Token-variant adapters carry the airy-versus-dense conversation
 
-**Blocked on 3.1's adapter-contract widening.** A token-variant adapter changes values over shared
+**Blocked on 2.2, the adapter-contract widening.** A token-variant adapter changes values over shared
 markup (ADR 0001's degenerate case) — which is only meaningful once an adapter can supply those
 values. Today it cannot, so swapping a token set would change nothing on screen.
 
