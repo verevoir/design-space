@@ -22,18 +22,26 @@ OUT="${3:?output file required}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# stdout and stderr are captured SEPARATELY, not merged with 2>&1: DESCRIBE is parsed as JSON
+# below, and a warning gcloud writes to stderr on an otherwise-successful call (e.g. "Updated
+# property [core/project]") would land inside that string and corrupt the parse — refusing to
+# start a promotion, with no rollback target, over chatter that was never part of the answer.
+DESCRIBE_STDERR="$(mktemp)"
 set +e
-DESCRIBE="$(gcloud run services describe "$SERVICE" --region "$REGION" --format json 2>&1)"
+DESCRIBE="$(gcloud run services describe "$SERVICE" --region "$REGION" --format json 2>"$DESCRIBE_STDERR")"
 RC=$?
 set -e
+DESCRIBE_ERR="$(cat "$DESCRIBE_STDERR")"
+rm -f "$DESCRIBE_STDERR"
 
 if [ "$RC" -ne 0 ]; then
-  echo "$DESCRIBE" >&2
+  [ -n "$DESCRIBE" ] && echo "$DESCRIBE" >&2
+  [ -n "$DESCRIBE_ERR" ] && echo "$DESCRIBE_ERR" >&2
   echo "::error title=Promotion blocked::could not describe ${SERVICE}; refusing to start a promotion with no rollback target." >&2
   exit "$RC"
 fi
 
-# The parsing is in node so its failure modes are tested — see tests/promote-traffic.test.ts.
+# The parsing is in node so its failure modes are tested — see tests/promote-decisions.test.ts.
 # It refuses to write a snapshot whose percentages do not total 100, or one that would restore
 # to LATEST rather than to a concrete revision.
 if ! printf '%s' "$DESCRIBE" \
