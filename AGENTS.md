@@ -83,10 +83,32 @@ not repeated.
   before `aigency.json` naming them has any effect — the file cannot grant an environment variable
   that was never exported.
 
-  The declared step also passes `--lens-timeout 900`, wider than the script's own 180-second
-  default. `correctness` was seen to exceed 180s and come back with no verdict at all rather
-  than a slow one; the flag's deadline is shared with the retry, so 900s has to cover both the
-  first attempt and one retry, not just a single try.
+  Threat model, stated plainly rather than left implicit: `run-pregate.mjs` is not versioned
+  with this repository, is not pinned to a commit, and is not checksummed before it runs — the
+  two tokens above are handed to whatever the sibling checkout happens to contain at call time.
+  No cloud, deploy, or repo-write credential reaches it; that is the entire credential surface.
+  If that checkout were modified between one invocation and the next, both tokens would be
+  exposed to whatever it now did, and nothing here catches that mechanically. This is an
+  accepted trade-off, not a fix: what keeps the exposure to an opt-in, local action rather than
+  something that fires on every commit is that the step stays advisory, non-blocking, and only
+  ever runs when a developer names it deliberately — never inside a gate or CI. Pinning
+  `../capabilities` to a specific commit and verifying it before invocation would close this
+  properly; that is future work this file's shape cannot enforce today, recorded here so it
+  reads as a decision rather than an oversight.
+
+  The declared step also passes `--lens-timeout 480`, wider than the script's own 180-second
+  default (`correctness` was once seen to exceed 180s and come back with no verdict at all,
+  rather than a slow one). 480 is not a free choice: the panel warms one lens alone, then fans
+  the other four behind it, so worst case is TWO lens deadlines, not five. Preflight (up to
+  three sequential 60s-bounded setup calls) adds 3 minutes, rubric provisioning — bounded by
+  this same lens deadline — adds 8, and two lens deadlines add 16, for 27 minutes against the
+  script's own hardcoded 30-minute inner backstop (`PREGATE_TIMEOUT_MS`'s default). That
+  backstop firing before the declared `timeoutMs` in `aigency.json` is what lets a run report
+  *which* lens hung rather than being killed anonymously — so this flag cannot simply be raised
+  the next time a lens times out; past roughly 500s the 27-minute sum crosses the 30-minute
+  backstop and that property is lost. The real fix for a slow lens is lowering
+  preflight/provisioning overhead, or raising `PREGATE_TIMEOUT_MS` itself (which needs exporting
+  in the runtime's own process and adding to `AIGENCY_ALLOWED_ENV`, not just changing this flag).
 
 - **Read the panel's findings from the run artifacts, not the check annotations.** An annotation
   is a one-line summary; the artifact carries the whole finding, with file and line.
