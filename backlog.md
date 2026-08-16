@@ -17,8 +17,10 @@ chain `2S.2 → 2S.3 → 2S.4` runs alongside wave 2, because it writes `studio`
 `.github/` while wave 2 writes `port` and the adapter contract. Wave 2 itself holds two siblings:
 2.1 writes `port`, 2.2 writes `adapter-contract`, `render`, `gate` and `adapter-sketch`. Wave 3
 then fans to 3.
-**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight stories, so seven
-edges, each a genuine dependency rather than narrative order. The deployment chain is three
+**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 2.2 → 3.1 → 4.2 → 5.1 → 6.1` — nine stories, so eight
+edges, each a genuine dependency rather than narrative order. 2.2 sits on it because 3.1 reads
+the adapter contract 2.2 widens ("the contract this story needs is widened by 2.2, which lands
+first") — 2.1 alone no longer reaches 3.1 directly. The deployment chain is three
 stories long and is not on that path; it finishes well inside it.
 
 This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and

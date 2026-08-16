@@ -671,6 +671,40 @@ describe('squash-merge.sh', () => {
     return dir;
   }
 
+  /** A `gh` stub whose `--json state` call itself fails — the initial state read, before any
+   * merge is attempted. Distinct from every other `ghStub` case above, which all answer that
+   * call successfully and vary what happens next. */
+  async function ghStateReadFailsStub(): Promise<string> {
+    const dir = await tmp('ds-gh-state-fail-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *"--json state"*) echo "HTTP 502 Bad Gateway" >&2; exit 1 ;;',
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return dir;
+  }
+
+  it('fails closed, with its own distinct annotation, when the initial state read itself fails', async () => {
+    // The sibling of assert-authorized.sh's 'fails closed when the permission cannot be read at
+    // all' — same stub-failure technique, applied to this script's own state-read branch, which
+    // had none. Every ghStub(...) case above starts from a state read that SUCCEEDS; this is the
+    // one case where that read itself is what fails.
+    const dir = await ghStateReadFailsStub();
+    const r = run('squash-merge.sh', ['o/r', '7'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('::error title=Merge failed::could not read the state of o/r#7');
+    expect(r.err).toContain('HTTP 502 Bad Gateway');
+  });
+
   it('merges an open PR and returns the merge commit', async () => {
     const r = run('squash-merge.sh', ['o/r', '7'], await ghStub('OPEN', 'deadbeef'));
 
