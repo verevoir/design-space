@@ -4,7 +4,15 @@
 # tag. Nothing is rebuilt: the revision being restored to already exists and already served
 # traffic, so recovery is one API call and does not wait on CI.
 #
-#   usage: rollback.sh <snapshot-file> [tag-to-remove]
+#   usage: rollback.sh <snapshot-file> [tag-to-remove] [owner/repo] [pr-number]
+#
+# owner/repo and pr-number are OPTIONAL, and exist for exactly one reason: a second, independent
+# check that this pull request has not already been merged. The workflow's own condition
+# (steps.merge.conclusion != 'success') is necessary but not sufficient — `gh pr merge` can
+# succeed on GitHub's side and then have its OWN step marked cancelled by a job-level timeout
+# landing mid-step. Passing repo+PR here lets this script ask GitHub directly, as a second line
+# of defence before it touches any traffic. Omitting them is backward compatible: the script
+# proceeds with the restore exactly as it always did.
 #
 # Idempotent by construction. Restoring an assignment that is already in place is a no-op, and a
 # tag that is already gone is not an error — a rollback that failed when run twice would be a
@@ -22,12 +30,28 @@ set -euo pipefail
 
 SNAPSHOT="${1:?snapshot file required}"
 TAG="${2:-}"
+REPO="${3:-}"
+PR="${4:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ ! -s "$SNAPSHOT" ]; then
   echo "::error title=Rollback failed::no restore point at ${SNAPSHOT}; traffic must be restored by hand." >&2
   exit 1
+fi
+
+# The second, independent MERGED check. Best-effort in the direction that matters: an unreadable
+# `gh` call must not strand traffic on an incident already underway — the workflow-level
+# condition is still the first line of defence — so only a CONFIRMED "MERGED" answer stops this
+# script. Anything else (OPEN, an error, a timeout) falls through to the restore.
+if [ -n "$REPO" ] && [ -n "$PR" ]; then
+  set +e
+  MERGE_STATE="$(gh pr view "$PR" --repo "$REPO" --json state --jq '.state' 2>/dev/null)"
+  set -e
+  if [ "$MERGE_STATE" = "MERGED" ]; then
+    echo "::error title=Rollback refused::${REPO}#${PR} is already MERGED; traffic must NOT be rolled back onto a commit that is no longer on the base branch. This is the split-brain the workflow's own condition alone cannot close — an operator must decide what happens next." >&2
+    exit 1
+  fi
 fi
 
 # One call, tab-separated, rather than two node startups reading the same file.
