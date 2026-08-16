@@ -9,7 +9,9 @@ import { spawnSync } from 'node:child_process';
 import {
   describeSpawnResult,
   DEFAULT_SPAWN_TIMEOUT_MS,
+  DEFAULT_KILL_GRACE_MS,
   spawnTimeoutMs,
+  killGraceMs,
   stageVerifiedCopy,
   ALLOWED_SPAWN_ENV_VARS,
 } from '../scripts/verified-pregate.mjs';
@@ -319,6 +321,91 @@ describe('verified-pregate.mjs', () => {
     expect(spawnTimeoutMs({ PREGATE_SPAWN_TIMEOUT_MS: '1234' })).toBe(1234);
     expect(spawnTimeoutMs({ PREGATE_SPAWN_TIMEOUT_MS: 'not-a-number' })).toBe(DEFAULT_SPAWN_TIMEOUT_MS);
     expect(spawnTimeoutMs({})).toBe(DEFAULT_SPAWN_TIMEOUT_MS);
+  });
+
+  it('killGraceMs honours PREGATE_KILL_GRACE_MS and falls back on a bad value', () => {
+    expect(killGraceMs({ PREGATE_KILL_GRACE_MS: '500' })).toBe(500);
+    expect(killGraceMs({ PREGATE_KILL_GRACE_MS: 'nope' })).toBe(DEFAULT_KILL_GRACE_MS);
+    expect(killGraceMs({})).toBe(DEFAULT_KILL_GRACE_MS);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE LIVE-COST DEFECT: a timeout must kill the whole process GROUP, not just the
+  // immediate child. run-pregate.mjs spawns nested per-lens node processes of its own,
+  // undetached, so they inherit their parent's process group by ordinary OS behaviour. A
+  // wrapper that only ever signals its direct child by pid leaves those nested processes
+  // orphaned and still running — still making paid model calls — after this wrapper has
+  // already given up and reported failure. This must distinguish killing the CHILD from
+  // killing the GROUP, or it is a hollow assertion that passes under both the old and new
+  // behaviour.
+  // -------------------------------------------------------------------------
+
+  it("kills the WHOLE process group on timeout — a nested grandchild does not outlive it", async () => {
+    const dir = await tmp('ds-vp-group-');
+    const pidFile = join(dir, 'grandchild.pid');
+    const heartbeatFile = join(dir, 'heartbeat.txt');
+
+    // The nested process run-pregate.mjs itself spawns, in miniature: writes its own pid so
+    // the test can check on it later, then proves it is still alive by growing a file every
+    // 100ms. Spawned WITHOUT detached — the realistic shape, per the ALLOWED_SPAWN_ENV_VARS
+    // doc comment's own quote of run-pregate.mjs's `spawn('node', [plan.bin, ...])` call.
+    const grandchildScript = join(dir, 'grandchild.mjs');
+    await writeFile(
+      grandchildScript,
+      [
+        "import { appendFileSync } from 'node:fs';",
+        'let n = 0;',
+        `setInterval(() => { appendFileSync(${JSON.stringify(heartbeatFile)}, String(n++) + '\\n'); }, 100);`,
+      ].join('\n'),
+      'utf-8',
+    );
+
+    // The fixture "panel": spawns the grandchild above, records its pid, then hangs forever
+    // itself — never exiting on its own, so only the wrapper's OWN timeout ends this run,
+    // exactly like the real hung-lens case this defect was found against.
+    const target = await fixtureTarget(
+      dir,
+      [
+        "import { spawn } from 'node:child_process';",
+        "import { writeFileSync } from 'node:fs';",
+        `const gc = spawn(process.execPath, [${JSON.stringify(grandchildScript)}], { stdio: 'ignore' });`,
+        `writeFileSync(${JSON.stringify(pidFile)}, String(gc.pid));`,
+        'gc.unref();',
+        'setInterval(() => {}, 1000);',
+      ].join('\n'),
+    );
+    const pinPath = await pinFor(dir, target);
+
+    const r = runWrapper({
+      PREGATE_TARGET_SCRIPT: target,
+      PREGATE_PIN_FILE: pinPath,
+      PREGATE_SPAWN_TIMEOUT_MS: '300',
+      PREGATE_KILL_GRACE_MS: '300',
+    });
+
+    expect(r.code).not.toBe(0);
+
+    const grandchildPid = Number((await readFile(pidFile, 'utf-8')).trim());
+    const isAlive = () => {
+      try {
+        process.kill(grandchildPid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // A moment past the wrapper's own return for the OS to actually deliver the signal.
+    await new Promise((res) => setTimeout(res, 600));
+
+    expect(isAlive()).toBe(false);
+
+    // Corroborating evidence, not merely the pid check, which a reused pid could satisfy by
+    // accident: the heartbeat file must have genuinely STOPPED growing, not merely exist.
+    const before = await readFile(heartbeatFile, 'utf-8');
+    await new Promise((res) => setTimeout(res, 400));
+    const after = await readFile(heartbeatFile, 'utf-8');
+    expect(after).toBe(before);
   });
 
   // -------------------------------------------------------------------------
