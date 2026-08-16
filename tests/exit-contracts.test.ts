@@ -6,10 +6,11 @@
  * proven here — the parser against literal strings, the verdict against disposable fixture
  * repositories rather than trusting the doc comment's own description of itself.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -192,6 +193,66 @@ describe('findUnassertedCodes — fixture repos', () => {
 // ---------------------------------------------------------------------------
 // The real repository, right now
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// main() — the CLI entry point itself, not just the functions it calls.
+//
+// Every OTHER new CLI script this PR adds (journey-expectations.mjs, traffic-snapshot.mjs) is
+// exercised via spawnSync against its own process boundary — proving its exit-code selection
+// and its stdout/stderr routing, not just the pure functions underneath. This script's main()
+// had none of that: only the exported functions were imported and called directly. Driven here
+// the same way, against a fixture repo via the CHECK_EXIT_CONTRACTS_ROOT override main() reads
+// — never against the real repository, so this can prove the failing branch too.
+// ---------------------------------------------------------------------------
+
+const CHECK_EXIT_CONTRACTS_CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../scripts/check-exit-contracts.mjs');
+
+function runCheckExitContractsCli(root: string) {
+  const res = spawnSync('node', [CHECK_EXIT_CONTRACTS_CLI], {
+    encoding: 'utf-8',
+    env: { ...process.env, CHECK_EXIT_CONTRACTS_ROOT: root },
+  });
+  return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
+}
+
+describe('check-exit-contracts.mjs — CLI entry point (main())', () => {
+  it('exits 0 and reports clean on stdout when every documented code is precisely asserted', async () => {
+    fixtureDir = await fixtureRepo({
+      'scripts/thing.sh': ['# Exit status:', '#   0  ok', '#   3  refused, an incident', '#   n  other, general failure'].join('\n'),
+      'tests/thing.test.ts': "it('refuses', () => { expect(run('thing.sh').code).toBe(3); });",
+    });
+
+    const r = runCheckExitContractsCli(fixtureDir);
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('every documented multi-outcome exit contract is precisely asserted');
+    expect(r.err).toBe('');
+  });
+
+  it('exits 1 and reports the unasserted code on stderr — the exact original rollback.sh defect, reproduced through the CLI boundary', async () => {
+    fixtureDir = await fixtureRepo({
+      'scripts/thing.sh': ['# Exit status:', '#   0  ok', '#   3  refused, an incident', '#   n  other, general failure'].join('\n'),
+      'tests/thing.test.ts': "it('refuses', () => { expect(run('thing.sh').code).not.toBe(0); });",
+    });
+
+    const r = runCheckExitContractsCli(fixtureDir);
+
+    expect(r.code).toBe(1);
+    expect(r.out).toBe('');
+    expect(r.err).toContain('FAILED');
+    expect(r.err).toContain('scripts/thing.sh');
+    expect(r.err).toContain('exit 3');
+  });
+
+  it('reads its default ROOT — the real repository — when the override is unset, and finds it clean', () => {
+    // The one assertion that ties this back to production behaviour: with no env override at
+    // all, main() must fall through to the same ROOT the rest of this file already proves is
+    // clean (findUnassertedCodes() — the real repository, above).
+    const res = spawnSync('node', [CHECK_EXIT_CONTRACTS_CLI], { encoding: 'utf-8' });
+
+    expect(res.status).toBe(0);
+  });
+});
 
 describe('findUnassertedCodes — the real repository', () => {
   it('reports no findings: rollback.sh\'s exit 2 and checks-green.mjs\'s 0/1/2 are all precisely asserted', () => {

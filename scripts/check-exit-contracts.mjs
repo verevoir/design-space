@@ -175,7 +175,14 @@ export function findUnassertedCodes(root = ROOT) {
 }
 
 function main() {
-  const findings = findUnassertedCodes();
+  // Overridable, the same "path a test can point at a disposable stub" shape
+  // observe-canary.sh's CANARY_OBSERVE_SMOKE already uses: unset in every real invocation (CI,
+  // `npm run check-exit-contracts`), so production behaviour is always findUnassertedCodes()
+  // against this repository's own ROOT. Set only by tests/exit-contracts.test.ts, to reach this
+  // entry point's own exit-code and stdout/stderr branches against a fixture repo without ever
+  // running against — or risking a false result from — the real tree.
+  const root = process.env['CHECK_EXIT_CONTRACTS_ROOT'] || ROOT;
+  const findings = findUnassertedCodes(root);
   if (findings.length === 0) {
     process.stdout.write('check-exit-contracts: every documented multi-outcome exit contract is precisely asserted.\n');
     process.exit(0);

@@ -14,7 +14,8 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format": "prettier --check .",
-    "verify": "npm run build && npm run test && npm run lint"
+    "exit-contracts": "node scripts/check-exit-contracts.mjs",
+    "verify": "npm run build && npm run test && npm run lint && npm run exit-contracts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

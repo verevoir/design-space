@@ -890,6 +890,44 @@ describe('wait-for-green.sh', () => {
 
   const check = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
 
+  /** A `gh` stub whose check-runs response varies by call number — call 1 gets `responses[0]`,
+   * call 2 gets `responses[1]`, and so on; once past the given responses the LAST one repeats.
+   * Counter-backed, the same pattern observe-canary.sh's tests already use via `smokeStub`
+   * (review found: applied there, never applied here) — this is that pattern applied to `gh`,
+   * so the loop's actual retry behaviour, not just its single-pass shape, can be proven. */
+  async function ghPollStub(responses: string[]): Promise<{ dir: string; log: string }> {
+    const dir = await tmp('ds-gh-poll-');
+    const log = join(dir, 'calls.log');
+    const counter = join(dir, 'count');
+    const path = join(dir, 'gh');
+    await writeFile(counter, '0', 'utf-8');
+    const numbered = responses
+      .map((body, i) => `  ${i + 1})\ncat <<'STUBEOF'\n${body}\nSTUBEOF\n  ;;`)
+      .join('\n');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        `n=$(cat "${counter}")`,
+        'n=$((n + 1))',
+        `echo "$n" > "${counter}"`,
+        `echo "call $n" >> "${log}"`,
+        'case "$n" in',
+        numbered,
+        '  *)',
+        "cat <<'STUBEOF'",
+        responses[responses.length - 1],
+        'STUBEOF',
+        '  ;;',
+        'esac',
+        'exit 0',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return { dir, log };
+  }
+
   it('refuses to judge a commit carrying more checks than it can read in one page', async () => {
     // The guard's own comment says the verdict would become wrong SILENTLY. A subset that
     // happens to be green reads exactly like a green suite, so the count is asserted rather
@@ -965,6 +1003,49 @@ describe('wait-for-green.sh', () => {
     // always includes a line reading "at ... (node:...)" or similar internal frame markers.
     // None of that belongs in this step's log once the parse failure is caught and reported.
     expect(r.err).not.toContain('    at ');
+  });
+
+  it('actually iterates the loop: polls again after a pending response and succeeds once the check goes green', async () => {
+    // The gap review found: every other test here pins WAIT_FOR_GREEN_TIMEOUT to 0, so the loop
+    // body runs exactly once and a fixed-response stub cannot tell a working retry loop from a
+    // broken one. This proves the loop truly polls MORE THAN ONCE, using a counter-backed gh
+    // stub that answers pending on call 1 and green on call 2 — the same property
+    // observe-canary.sh's smokeStub already proves for its own retry loop.
+    const pending = JSON.stringify({ total_count: 1, check_runs: [check('ci', 'in_progress', null)] });
+    const green = JSON.stringify({ total_count: 1, check_runs: [check('ci', 'completed', 'success')] });
+    const { dir, log } = await ghPollStub([pending, green]);
+
+    const r = run('wait-for-green.sh', ['o/r', 'abc123', 'promote'], dir, {
+      WAIT_FOR_GREEN_TIMEOUT: '10',
+      WAIT_FOR_GREEN_INTERVAL: '0',
+    });
+
+    expect(r.code).toBe(0);
+    const calls = (await readFile(log, 'utf-8')).trim().split('\n');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('keeps polling — more than once — before a bound that is reached only after real iterations, not immediately', async () => {
+    // The other half of the same gap: with TIMEOUT=0 the bound fires on the very first pass, so
+    // no existing test could distinguish "the bound fired instantly" from "the bound fired after
+    // genuinely waiting". A nonzero timeout paired with a stub that never goes green proves the
+    // loop ran more than once before the bound stopped it — not that it merely exited once.
+    const pending = JSON.stringify({ total_count: 1, check_runs: [check('ci', 'in_progress', null)] });
+    const { dir, log } = await ghPollStub([pending]);
+
+    const r = run('wait-for-green.sh', ['o/r', 'abc123', 'promote'], dir, {
+      WAIT_FOR_GREEN_TIMEOUT: '3',
+      WAIT_FOR_GREEN_INTERVAL: '1',
+    });
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('did not go green within 3s');
+    const calls = (await readFile(log, 'utf-8')).trim().split('\n');
+    // >= 2 rather than a tighter bound: each iteration's own subprocess overhead (spawning gh
+    // and node) eats into the 1s poll interval unpredictably under load, so the exact count
+    // varies run to run — what must hold is that the loop polled AGAIN after the first pending
+    // response, not merely that it exited once.
+    expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 });
 
