@@ -995,6 +995,28 @@ describe('observe-canary.sh', () => {
     expect(r.err).toContain('must be a positive integer');
   });
 
+  // CANARY_OBSERVE_PROBES had a test for its own validation guard; CANARY_OBSERVE_INTERVAL_S —
+  // its sibling, checked by the identical `[[ "$X" =~ ^[0-9]+$ ]]` shape two lines below in the
+  // script — had none. An untested guard is not a proven guard: this is the asymmetry review
+  // (docs) found once before, on the same script.
+  it('refuses a non-numeric CANARY_OBSERVE_INTERVAL_S rather than silently sleeping for NaN seconds', async () => {
+    const { path } = await smokeStub();
+
+    const r = runObserve(path, { CANARY_OBSERVE_INTERVAL_S: 'ten' });
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('must be a non-negative integer');
+  });
+
+  it('refuses a negative CANARY_OBSERVE_INTERVAL_S rather than accepting it', async () => {
+    const { path } = await smokeStub();
+
+    const r = runObserve(path, { CANARY_OBSERVE_INTERVAL_S: '-1' });
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('must be a non-negative integer');
+  });
+
   it('refuses with no TAG_URL argument at all', async () => {
     const { path } = await smokeStub();
     const res = spawnSync('bash', [join(SCRIPTS, 'observe-canary.sh')], {

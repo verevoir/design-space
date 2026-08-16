@@ -19,8 +19,13 @@
 #               to report, so requiring one would break local and preview runs.
 #
 # Exit code: 0 if both checks pass, non-zero otherwise.
-# The same script is used by the preview workflow (2S.3) and will be reused by the
-# promotion workflow (2S.4); pointing it at a different BASE_URL is the only difference.
+# The same script is used by both the preview workflow (2S.3) and the promotion workflow
+# (2S.4) — including the promotion's repeated-probe canary observation (observe-canary.sh),
+# which shells out to this script once per probe. The two callers differ in more than the
+# BASE_URL they point at: promotion also sets SMOKE_EXPECT_REVISION, asserting /health answers
+# from the specific candidate revision rather than an incumbent that might still be serving the
+# blended traffic split; the preview workflow leaves it unset, since a locally-run or preview
+# container has no revision assertion to make.
 
 set -euo pipefail
 
