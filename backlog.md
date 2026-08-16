@@ -385,7 +385,7 @@ token value as data rather than as text.
 **Reads.** `packages/port`.
 **Unblocks.** 3.1, and through it 4.1. Disjoint from 2.1, which writes `port` alone.
 
-**Status.** Done. `packages/adapter-contract` holds the widened `Adapter` contract — `name`,
+**Status.** Mostly done, one clause outstanding. `packages/adapter-contract` holds the widened `Adapter` contract — `name`,
 `components`, `styles` (a rules string written against `var(--ds-*)`) and `tokens` (structured
 data, not an opaque string) — with `assertAdapter` enforcing the shape at every call site. Both
 structural `AdapterLike` copies are gone: `render` and `gate` now type against the imported
@@ -407,6 +407,14 @@ compiler, are what catch it. One assertion was found worthless mid-session — a
 check satisfied by an unrelated reset rule already in `render`'s own CSS — and was rewritten to
 assert the token declaration's containment within the block, not merely both strings' presence
 somewhere in the document.
+
+**Outstanding: the gate does not read a token value as data.** `packages/gate/src/gate.ts` never
+touches `adapter.tokens` at all — coverage, gap and defect classification are the whole of what
+it checks today. The contract makes `tokens` available as a structured record (enforced by
+`assertAdapter`), and `render` is the one consumer that reads it, to emit the page's `:root`
+block. The reading-as-data behaviour this done-when clause names is the contrast check, which is
+4.1's work and has not started. This clause was marked satisfied when it should not have been;
+the story is not fully Done until 4.1 lands or this clause is otherwise demonstrated.
 
 ---
 
