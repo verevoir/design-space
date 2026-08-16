@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   describeSpawnResult,
   DEFAULT_SPAWN_TIMEOUT_MS,
@@ -410,6 +410,108 @@ describe('verified-pregate.mjs', () => {
   });
 
   // -------------------------------------------------------------------------
+  // THE EXTERNAL-SIGNAL DEFECT: this wrapper's own group-kill only ever fires on ITS OWN
+  // internal timeout. Nothing forwarded a SIGTERM delivered to this wrapper from OUTSIDE it —
+  // the shape the runtime's own runner takes when ITS timeoutMs fires — to the panel's group,
+  // which `detached: true` makes a SEPARATE group from this wrapper's own. spawnSync (used by
+  // runWrapper above) BLOCKS this test process, so nothing external could ever signal the
+  // wrapper mid-run; this is why this one case uses async `spawn` instead.
+  // -------------------------------------------------------------------------
+
+  it("forwards an EXTERNAL SIGTERM — the runtime's own timeoutMs, not this wrapper's own internal bound — to the panel's group", async () => {
+    const dir = await tmp('ds-vp-extsig-');
+    const pidFile = join(dir, 'grandchild.pid');
+    const heartbeatFile = join(dir, 'heartbeat.txt');
+
+    const grandchildScript = join(dir, 'grandchild.mjs');
+    await writeFile(
+      grandchildScript,
+      [
+        "import { appendFileSync } from 'node:fs';",
+        'let n = 0;',
+        `setInterval(() => { appendFileSync(${JSON.stringify(heartbeatFile)}, String(n++) + '\\n'); }, 100);`,
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const target = await fixtureTarget(
+      dir,
+      [
+        "import { spawn } from 'node:child_process';",
+        "import { writeFileSync } from 'node:fs';",
+        `const gc = spawn(process.execPath, [${JSON.stringify(grandchildScript)}], { stdio: 'ignore' });`,
+        `writeFileSync(${JSON.stringify(pidFile)}, String(gc.pid));`,
+        'gc.unref();',
+        'setInterval(() => {}, 1000);',
+      ].join('\n'),
+    );
+    const pinPath = await pinFor(dir, target);
+
+    // PREGATE_SPAWN_TIMEOUT_MS is deliberately generous — the point is to prove the wrapper
+    // reacts to a signal from OUTSIDE itself, distinct from its own internal bound, so that
+    // internal path must not fire during this test.
+    const wrapperProc = spawn(process.execPath, [WRAPPER], {
+      env: {
+        ...process.env,
+        PREGATE_TARGET_SCRIPT: target,
+        PREGATE_PIN_FILE: pinPath,
+        PREGATE_SPAWN_TIMEOUT_MS: '30000',
+      },
+      stdio: 'ignore',
+    });
+
+    try {
+      // Wait for the grandchild to actually be RUNNING, not merely spawned — the pidfile alone
+      // proves spawn() returned, but the heartbeat file existing proves its setInterval has
+      // fired at least once. Without this, a SIGTERM sent right after the pidfile appears can
+      // kill the grandchild before it ever writes a single heartbeat, and the assertion below
+      // would fail on a missing file for a reason having nothing to do with the defect tested.
+      const deadline = Date.now() + 5000;
+      while (!existsSync(pidFile)) {
+        if (Date.now() > deadline) throw new Error('grandchild pidfile never appeared in time');
+        await new Promise((res) => setTimeout(res, 20));
+      }
+      while (!existsSync(heartbeatFile)) {
+        if (Date.now() > deadline) throw new Error('grandchild heartbeat never appeared in time');
+        await new Promise((res) => setTimeout(res, 20));
+      }
+
+      // The signal under test: an EXTERNAL SIGTERM, exactly the shape the runtime's own runner
+      // sends this wrapper's whole process group on ITS OWN timeoutMs — not this wrapper's own
+      // internal timeout firing.
+      process.kill(wrapperProc.pid!, 'SIGTERM');
+
+      await new Promise((res) => wrapperProc.on('exit', res));
+
+      const grandchildPid = Number((await readFile(pidFile, 'utf-8')).trim());
+      const isAlive = () => {
+        try {
+          process.kill(grandchildPid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      await new Promise((res) => setTimeout(res, 300));
+      expect(isAlive()).toBe(false);
+
+      // Corroborating evidence, not merely the pid check, which a reused pid could satisfy by
+      // accident: the heartbeat file must have genuinely STOPPED growing, not merely exist.
+      const before = await readFile(heartbeatFile, 'utf-8');
+      await new Promise((res) => setTimeout(res, 400));
+      const after = await readFile(heartbeatFile, 'utf-8');
+      expect(after).toBe(before);
+    } finally {
+      try {
+        wrapperProc.kill('SIGKILL');
+      } catch {
+        // Best-effort cleanup; the process has very likely already exited by this point.
+      }
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // The child receives an explicit, minimal environment — never this process's own,
   // wholesale. Asserted on the child's OWN reported environment, not merely that the tokens
   // are present, which would pass just as happily under a full-inheritance leak.
@@ -457,6 +559,12 @@ describe('verified-pregate.mjs', () => {
     );
     expect(unexpected).toEqual([]);
   });
+
+  // -------------------------------------------------------------------------
+  // Staging the verified copy can fail (a full disk, a read-only directory) — previously
+  // reachable only by luck. stageVerifiedCopy takes an injectable `write`, so this is now a
+  // pure, deterministic test rather than one that depends on the filesystem's own failure modes.
+  // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
   // THE SECURITY DEFECT: PREGATE_TARGET_SCRIPT and PREGATE_PIN_FILE are read from this
