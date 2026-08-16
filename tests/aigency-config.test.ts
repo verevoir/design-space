@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 // Structural regression tests for aigency.json — declarative config that decides what runs
 // (which gates block a verify pass, which release steps exist, how long each is allowed to
-// run) deserves the same shape-pinning promote.yml gets. Assertions here are INVARIANTS, not
+// run) deserves the same shape-pinning this repository already gives its workflow files (see
+// tests/preview-workflow-shape.test.ts and tests/ci-workflow-shape.test.ts). Assertions here are INVARIANTS, not
 // exact content: the working tree can carry rows a given branch does not (this repo's local
 // tree, at time of writing, carries two extra release rows — board-status and rerun-checks —
 // that belong to a different story and must never ship on this one). Asserting structure
@@ -16,7 +17,6 @@ interface Command {
   command?: unknown;
   timeoutMs?: unknown;
   blocking?: unknown;
-  env?: unknown;
 }
 
 const raw = readFileSync(fileURLToPath(new URL('../aigency.json', import.meta.url)), 'utf8');
