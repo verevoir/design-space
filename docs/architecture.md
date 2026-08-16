@@ -291,6 +291,17 @@ block is now parsed with `bash -n` at test time.
 
 ### Promotion (`promote.yml`)
 
+**This section describes `promote.yml` as it exists on THIS branch specifically.** A fuller
+version has been developed alongside it on `2S.4-promotion-workflow`, but `.github/workflows/`
+cannot be written through the contents API this project uses for remote doc fixes, so a
+workflow-only change made on one branch cannot be mirrored onto the other without a person
+running git — the two have diverged. Two things this section used to describe are not yet true
+of THIS branch's file, and are removed below rather than left to mislead: a step checking the
+label-applier's permission before anything runs, and a second, independent GitHub-API check
+confirming a pull request is genuinely `MERGED` before rollback is refused. Both exist on
+`2S.4-promotion-workflow`'s copy. When that work reaches this branch, restore this note to
+describe them again — they are not abandoned, only not yet here.
+
 A separate workflow from `preview.yml`, triggered by the `promote` label rather than by every
 push (ADR 0007, story 2S.4). A pull request already has a `pr-<n>` preview from the workflow
 above; labelling it `promote` runs a distinct sequence that turns that same change into the
@@ -299,7 +310,6 @@ change production is serving, and then lands it:
 | step | what happens |
 |---|---|
 | guard | fork PRs are skipped, with the reason in the job summary — WIF cannot issue them a credential |
-| authorization | the actor who applied the label is checked for **admin or write** permission via the GitHub API. Applying a label itself needs only GitHub's `triage` role, which is narrower than write — this closes that gap explicitly rather than relying on it |
 | green gate | wait for every other check on the commit to conclude green, excluding this workflow's own check (else it would wait on itself) |
 | ancestry | assert the branch is up to date with its base — the last point at which stopping costs nothing |
 | deploy candidate | build, push, deploy a `candidate` revision **pinned by image digest**, carrying no traffic |
@@ -310,18 +320,19 @@ change production is serving, and then lands it:
 
 **Rollback.** On failure or cancellation (including the job's own `timeout-minutes` bound, which
 GitHub reports as `cancelled` rather than `failed`) — but only while a restore point exists and
-only while the merge has not succeeded. That second condition is checked twice: once from the
-workflow's own step conclusion, and independently by asking GitHub directly whether the pull
-request is actually `MERGED`, since a step's conclusion can read `cancelled` even after the
-underlying `gh pr merge` call already succeeded. **After a successful merge, traffic is left on
-the canaried revision** — the proven artefact — and an operator decides; nothing is retagged or
-rolled back automatically, because the commit is already on `main` and cannot be un-merged here.
+only while the merge has not succeeded. On this branch that second condition is checked once,
+from the workflow's own step conclusion (`steps.merge.conclusion != 'success'`) — not yet
+independently confirmed against GitHub's own record of the pull request's state, which is the
+gap `2S.4-promotion-workflow`'s copy closes and this branch has not yet inherited. **After a
+successful merge, traffic is left on the canaried revision** — the proven artefact — and an
+operator decides; nothing is retagged or rolled back automatically, because the commit is
+already on `main` and cannot be un-merged here.
 
 Auth, identities and the digest pin are shared with the deploy path described above. The
 decision logic — the green-gate wait, the ancestry and tree-equality checks, traffic capture and
-restore, retagging, the authorization check — all live in `scripts/promote/` with tests, for the
-same reason as the preview workflow: inline `run:` code only runs when its trigger fires, which
-for a rollback path can be never until the day it matters.
+restore, and retagging — all live in `scripts/promote/` with tests, for the same reason as the
+preview workflow: inline `run:` code only runs when its trigger fires, which for a rollback path
+can be never until the day it matters.
 
 ### Two identities, and why
 
