@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 // incident, on a day nobody planned for, so "it looked right" is not evidence.
 
 const SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), '../scripts/promote');
+const TRAFFIC_SNAPSHOT_CLI = resolve(SCRIPTS, 'traffic-snapshot.mjs');
 
 const tmpDirs: string[] = [];
 
@@ -89,6 +90,13 @@ async function repoWithCommit(): Promise<string> {
 
 function runIn(cwd: string, script: string, args: string[]) {
   const res = spawnSync('bash', [join(SCRIPTS, script), ...args], { cwd, encoding: 'utf-8' });
+  return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
+}
+
+/** Runs traffic-snapshot.mjs's own CLI entry point directly — no shell wrapper sits between
+ * this and its argument validation, so this is the only way to reach those branches at all. */
+function runTrafficSnapshotCli(args: string[], stdin: string) {
+  const res = spawnSync('node', [TRAFFIC_SNAPSHOT_CLI, ...args], { input: stdin, encoding: 'utf-8' });
   return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
 }
 
@@ -363,6 +371,74 @@ describe('rollback.sh', () => {
     return path;
   }
 
+  /** A restore point missing the `service` field entirely — JSON has no way to express
+   * "absent" except by omission, and `s.service` reads as `undefined` in that case. */
+  async function snapshotFileMissingService(): Promise<string> {
+    const path = join(await tmp('ds-snap-'), 'snap.json');
+    await writeFile(
+      path,
+      JSON.stringify({ region: 'eu', assignments: [{ revision: 'rev-2', percent: 100 }], tags: ['candidate'] }),
+      'utf-8',
+    );
+    return path;
+  }
+
+  /** A restore point whose `region` is an explicit JSON `null` — a different shape of
+   * missing than omission, and template-literal coercion turns it into the literal text
+   * "null", which is just as non-empty and just as wrong to hand to gcloud. */
+  async function snapshotFileNullRegion(): Promise<string> {
+    const path = join(await tmp('ds-snap-'), 'snap.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        service: 'svc',
+        region: null,
+        assignments: [{ revision: 'rev-2', percent: 100 }],
+        tags: ['candidate'],
+      }),
+      'utf-8',
+    );
+    return path;
+  }
+
+  /** A restore point with service/region present but no assignments at all — well-formed
+   * enough to pass the service/region check, but traffic-snapshot.mjs's --restore-spec has
+   * nothing to build a spec from and must fail on its own terms. */
+  async function snapshotFileEmptyAssignments(): Promise<string> {
+    const path = join(await tmp('ds-snap-'), 'snap.json');
+    await writeFile(path, JSON.stringify({ service: 'svc', region: 'eu', assignments: [], tags: [] }), 'utf-8');
+    return path;
+  }
+
+  /** A `gcloud` stub whose response depends on whether the call is the traffic restore
+   * (--to-revisions) or the tag removal (--remove-tags), so the tag-removal tolerance can be
+   * tested independently of the traffic-restore call that always precedes it. */
+  async function gcloudTrafficThenTagStub(tagOutput: string, tagCode: number): Promise<{ dir: string; log: string }> {
+    const dir = await tmp('ds-gcloud-split-');
+    const log = join(dir, 'calls.log');
+    const path = join(dir, 'gcloud');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        `echo "$@" >> "${log}"`,
+        'case "$*" in',
+        '  *"--remove-tags"*)',
+        "    cat <<'STUBEOF'",
+        tagOutput,
+        'STUBEOF',
+        `    exit ${tagCode} ;;`,
+        '  *)',
+        "    echo 'Traffic updated.'",
+        '    exit 0 ;;',
+        'esac',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return { dir, log };
+  }
+
   it('restores traffic to the captured assignment', async () => {
     const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
     const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
@@ -376,6 +452,38 @@ describe('rollback.sh', () => {
     run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
 
     expect(await readFile(log, 'utf-8')).toContain('--remove-tags candidate');
+  });
+
+  it('tolerates the candidate tag already being absent, rather than treating it as a failure', async () => {
+    // The three-part tolerance the script's own header calls load-bearing: a tag that is
+    // already gone is not an error, or a rollback that failed on a second run would be a
+    // rollback nobody dares re-run.
+    const { dir, log } = await gcloudTrafficThenTagStub(
+      'ERROR: (gcloud.run.services.update-traffic) NOT_FOUND: Tag "candidate" not found for service.',
+      1,
+    );
+
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('the candidate tag was already absent');
+    // Traffic was still genuinely restored — the tolerance is about the tag call only.
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
+
+  it('reports an incident when the candidate tag could not be removed for a real reason', async () => {
+    // A failure that does NOT match the "already absent" pattern — a permission error, say —
+    // must not be swallowed by the same tolerance, or a genuine incident reads as a clean run.
+    const { dir } = await gcloudTrafficThenTagStub(
+      'ERROR: (gcloud.run.services.update-traffic) PERMISSION_DENIED',
+      1,
+    );
+
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('Rollback incomplete');
+    expect(r.err).toContain('may still be routing');
   });
 
   it('never rebuilds — recovery is one API call', async () => {
@@ -402,12 +510,137 @@ describe('rollback.sh', () => {
     expect(r.err).toContain('must be restored by hand');
   });
 
+  it('refuses a restore point whose service is missing, rather than calling gcloud with the literal text "undefined"', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFileMissingService(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('names no service and region');
+    // The point: nothing was called at all — not "called with undefined".
+    await expect(readFile(log, 'utf-8')).rejects.toThrow();
+  });
+
+  it('refuses a restore point whose region is an explicit JSON null, the same as a missing one', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFileNullRegion(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('names no service and region');
+    await expect(readFile(log, 'utf-8')).rejects.toThrow();
+  });
+
+  it('refuses a restore point traffic-snapshot.mjs cannot build a --restore-spec from (no assignments)', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFileEmptyAssignments(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('could not be read; traffic must be restored by hand');
+    await expect(readFile(log, 'utf-8')).rejects.toThrow();
+  });
+
   it('reports an incident when traffic could not be restored', async () => {
     const dir = await stub('gcloud', 'ERROR: PERMISSION_DENIED', 1);
     const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
 
     expect(r.code).not.toBe(0);
     expect(r.err).toContain('may be serving the failed candidate');
+  });
+
+  /** A `gh` stub that answers only `pr view --json state`, for the merge-state guard. */
+  async function ghStateStub(state: string): Promise<string> {
+    const dir = await tmp('ds-gh-state-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        `  *"--json state"*) echo "${state}" ;;`,
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+        'exit 0',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return dir;
+  }
+
+  it('refuses to move traffic when the pull request is already merged', async () => {
+    // The exact split-brain race the workflow condition alone cannot close: gh pr merge
+    // succeeded, but the step that ran it was then marked cancelled or failed by a job
+    // timeout. No gcloud stub is provided at all here, proving traffic is never touched.
+    const dir = await ghStateStub('MERGED');
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate', 'o/r', '7'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('already MERGED');
+  });
+
+  it('restores traffic normally when the pull request is not merged', async () => {
+    const ghDir = await ghStateStub('OPEN');
+    const { dir: gcloudDir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate', 'o/r', '7'], `${ghDir}:${gcloudDir}`);
+
+    expect(r.code).toBe(0);
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
+
+  it('proceeds with the restore, rather than stranding traffic, when merge state cannot be read', async () => {
+    // Best-effort by design: an unreadable gh call must not leave traffic stuck on an incident
+    // already underway. The workflow-level condition is still the first defense.
+    const dir = await tmp('ds-gh-broken-');
+    const ghPath = join(dir, 'gh');
+    await writeFile(ghPath, '#!/bin/sh\nexit 1\n', 'utf-8');
+    await chmod(ghPath, 0o755);
+    const { dir: gcloudDir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate', 'o/r', '7'], `${dir}:${gcloudDir}`);
+
+    expect(r.code).toBe(0);
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
+
+  it('still restores traffic normally when no repo/PR is given (backward compatible)', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
+
+    expect(r.code).toBe(0);
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// traffic-snapshot.mjs — CLI argument validation
+// ---------------------------------------------------------------------------
+
+// The parsing functions themselves (snapshotFromDescribe, restoreSpec, revisionForTag) are
+// exercised as pure functions in tests/promote-decisions.test.ts. What is tested here is the
+// two argument-validation branches that live only in this CLI entry point — neither call site
+// (capture-traffic.sh, rollback.sh) ever exercises them, since both always pass complete,
+// recognised flags.
+
+describe('traffic-snapshot.mjs — CLI argument validation', () => {
+  it('refuses --snapshot without both --service and --region', () => {
+    const r = runTrafficSnapshotCli(['--snapshot', '--service', 'svc'], '{}');
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('--snapshot requires --service and --region');
+  });
+
+  it('refuses --snapshot with --region but no --service', () => {
+    const r = runTrafficSnapshotCli(['--snapshot', '--region', 'eu'], '{}');
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('--snapshot requires --service and --region');
+  });
+
+  it('refuses when none of --snapshot, --restore-spec or --revision-for-tag is given', () => {
+    // A typo'd or missing flag must not fall through and read stdin as some other operation.
+    const r = runTrafficSnapshotCli(['--nonsense'], '{}');
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('expected one of --snapshot, --restore-spec, --revision-for-tag');
   });
 });
 
@@ -499,6 +732,94 @@ describe('squash-merge.sh', () => {
 
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe('cafebabe');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assert-authorized.sh
+// ---------------------------------------------------------------------------
+
+describe('assert-authorized.sh', () => {
+  /** A `gh` stub that answers `api .../collaborators/<actor>/permission` with `perm`. */
+  async function ghPermStub(perm: string, code = 0): Promise<string> {
+    const dir = await tmp('ds-gh-perm-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        `  *"collaborators"*"permission"*) echo "${perm}"; exit ${code} ;;`,
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return dir;
+  }
+
+  it('allows an actor with write permission', async () => {
+    const dir = await ghPermStub('write');
+    const r = run('assert-authorized.sh', ['o/r', 'adsurg'], dir);
+
+    expect(r.code).toBe(0);
+  });
+
+  it('allows an actor with admin permission', async () => {
+    const dir = await ghPermStub('admin');
+    const r = run('assert-authorized.sh', ['o/r', 'adsurg'], dir);
+
+    expect(r.code).toBe(0);
+  });
+
+  it('refuses an actor who holds only triage — enough to apply the label, not enough to promote', async () => {
+    // The whole point: triage can apply the label but must not be enough on its own to move
+    // production traffic and merge to main.
+    const dir = await ghPermStub('triage');
+    const r = run('assert-authorized.sh', ['o/r', 'someone'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("holds only 'triage'");
+  });
+
+  it('refuses an actor with only read permission', async () => {
+    const dir = await ghPermStub('read');
+    const r = run('assert-authorized.sh', ['o/r', 'someone'], dir);
+
+    expect(r.code).not.toBe(0);
+  });
+
+  it('fails closed when the permission cannot be read at all', async () => {
+    // An unreadable answer must not be treated as authorised by default — unlike the rollback
+    // merge-state guard, there is no safe direction to fall through to here: proceeding on an
+    // unknown permission is exactly the gap this script exists to close.
+    const dir = await ghPermStub('', 1);
+    const r = run('assert-authorized.sh', ['o/r', 'someone'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('could not read');
+  });
+
+  it('still recognises the permission exactly when gh writes chatter to stderr on an otherwise-successful call', async () => {
+    const dir = await tmp('ds-gh-perm-chatter-');
+    const path = join(dir, 'gh');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *"collaborators"*"permission"*) echo "write"; echo "Warning: chatter" >&2 ;;',
+        '  *) echo "unexpected: $*" >&2; exit 9 ;;',
+        'esac',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+
+    const r = run('assert-authorized.sh', ['o/r', 'adsurg'], dir);
+
+    expect(r.code).toBe(0);
   });
 });
 
