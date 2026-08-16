@@ -38,7 +38,7 @@ npm install
 npm run verify
 ```
 
-`npm run verify` builds every package with `tsc -b`, runs all tests with Vitest, and lints with ESLint. It must be green before any change merges.
+`npm run verify` builds every package with `tsc -b`, runs all tests with Vitest, lints with ESLint, and checks that every documented exit contract under `scripts/` is precisely asserted in tests (`scripts/check-exit-contracts.mjs`). It must be green before any change merges.
 
 ### Container (Docker)
 
