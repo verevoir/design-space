@@ -196,8 +196,23 @@ describe('promote.yml — the traffic cut is 10 then 100', () => {
     // the one step in the sequence that observes real traffic on the new revision.
     const percents = [...flat.matchAll(/\$CANDIDATE_REVISION" (\d+)/g)].map((m) => Number(m[1]));
 
-    // 10, then 100 for the cut, then 100 again when traffic is pinned before the tag is dropped.
-    expect(percents).toEqual([10, 100, 100]);
+    // 10, then 100 — and ONLY once each. A prior version of this workflow re-issued the 100%
+    // cut a second time in the tag-drop step, on the mistaken theory that the first cut moved
+    // traffic by tag rather than by name; shift-traffic.sh never moves traffic by tag, so the
+    // second call was a true duplicate, added a failure point after the point where rollback is
+    // deliberately disabled, and was removed. A second 100 reappearing here means that
+    // regressed.
+    expect(percents).toEqual([10, 100]);
+  });
+
+  it('does not re-cut traffic after the merge — only the candidate tag is dropped there', () => {
+    // The step after the merge must not carry its own traffic-shift failure point: past the
+    // merge, rollback.sh's own merge-state guard refuses to move traffic at all, so a failure
+    // in a redundant cut here could never have been recovered automatically.
+    const dropTag = stepContaining('Drop the candidate tag');
+
+    expect(dropTag).toContain('scripts/remove-preview-tag.sh');
+    expect(dropTag).not.toContain('scripts/promote/shift-traffic.sh');
   });
 
   it('smokes the candidate BEFORE any traffic moves', () => {
@@ -425,7 +440,7 @@ describe('promote.yml — history is deep enough to answer the questions asked o
       'Squash-merge the pull request',
       'Assert the merged tree equals the canaried tree',
       'Retag the proven image',
-      'Pin traffic to the promoted revision',
+      'Drop the candidate tag now that traffic is pinned',
     ].map((name) => yml.indexOf(name));
 
     expect(order.every((i) => i >= 0)).toBe(true);

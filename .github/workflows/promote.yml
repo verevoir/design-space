@@ -328,15 +328,26 @@ jobs:
           bash scripts/promote/retag.sh \
             "${{ env.IMAGE_REPO }}" "$IMAGE_DIGEST" "$MERGE_SHA"
 
-      - name: Pin traffic to the promoted revision and drop the candidate tag
+      - name: Drop the candidate tag now that traffic is pinned
         if: github.event.pull_request.head.repo.full_name == github.repository
         timeout-minutes: 10
         run: |
-          # Pinning by name leaves an assignment that still says what it means once the tag is
-          # gone. Tag removal reuses the preview cleanup script, whose three-part tolerance
-          # accepts "already absent" and nothing else.
-          bash scripts/promote/shift-traffic.sh \
-            "${{ env.SERVICE }}" "${{ env.REGION }}" "$CANDIDATE_REVISION" 100
+          # NOT a second traffic cut, deliberately. shift-traffic.sh moves traffic BY REVISION
+          # NAME, never by tag (see its own header) — so "Cut 100% of traffic to the candidate"
+          # above already pinned $CANDIDATE_REVISION to 100% by the only mechanism that exists.
+          # An earlier version of this step re-issued that same call here, on the theory that
+          # the first cut was "by tag" and this one was the real by-name pin; that theory was
+          # checked against shift-traffic.sh directly and does not hold — both calls were
+          # identical. Repeating it added a failure point strictly AFTER the merge, exactly
+          # where the rollback step below is deliberately disabled: a failure there could not
+          # have been rolled back, and had nothing left to accomplish. That is why it is gone,
+          # not why it should be re-added if this step is ever touched again.
+          #
+          # What remains is safe to fail on its own terms: if tag removal fails, production
+          # traffic is already, and remains, correctly pinned to $CANDIDATE_REVISION — only the
+          # now-unused preview tag is left routing alongside it, which is cosmetic debt, not a
+          # production hazard. Tag removal reuses the preview cleanup script, whose three-part
+          # tolerance accepts "already absent" and nothing else.
           bash scripts/remove-preview-tag.sh \
             "${{ env.SERVICE }}" "${{ env.REGION }}" "${{ env.CANDIDATE_TAG }}"
 

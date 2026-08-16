@@ -110,6 +110,15 @@ describe('checks-green — the verdict', () => {
     expect(parseCheckRuns('[{"name":"a"}]')).toHaveLength(1);
     expect(() => parseCheckRuns('{"nope":1}')).toThrow();
   });
+
+  it('fails legibly on malformed JSON rather than throwing a raw, unattributed SyntaxError', () => {
+    // wait-for-green.sh pipes gh api's own response straight into this. A truncated body, an
+    // HTML error page, or empty output previously surfaced as whatever V8's own "Unexpected
+    // token" happened to say, with nothing here naming what failed to parse or why it matters.
+    expect(() => parseCheckRuns('not json at all')).toThrow(
+      /could not parse the check-runs response as JSON/,
+    );
+  });
 });
 
 describe('checks-green — describing the verdict for a human', () => {
