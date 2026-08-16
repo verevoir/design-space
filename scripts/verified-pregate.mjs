@@ -45,12 +45,14 @@
  * `scripts/pregate.sha256` must be updated in the SAME change, by computing the new digest
  * (`shasum -a 256 ../capabilities/scripts/run-pregate.mjs`, run from this repository's root)
  * and committing it. `scripts/pregate.sha256`'s own history is the record of when and why the
- * pin moved.
+ * pin moved. AGENTS.md § Operating this repo points here for the full procedure rather than
+ * restating it, so this paragraph — not a copy of it — is the one place that owns it.
  *
  * Target and pin paths are overridable via PREGATE_TARGET_SCRIPT / PREGATE_PIN_FILE — relative
  * paths are resolved against this repository's root, absolute paths are used as-is — which
  * exists so tests can point this at disposable fixtures rather than the real sibling checkout.
- * PREGATE_SPAWN_TIMEOUT_MS overrides the wrapper's own spawn bound, for the same reason.
+ * PREGATE_SPAWN_TIMEOUT_MS and PREGATE_KILL_GRACE_MS override the wrapper's own spawn bound and
+ * its escalation grace period, for the same reason.
  *
  * WHAT THE CHILD ACTUALLY RECEIVES. Not this process's own environment, wholesale — an
  * explicit, minimal one, built fresh from ALLOWED_SPAWN_ENV_VARS below. A wrapper whose whole
@@ -60,7 +62,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 
@@ -88,10 +90,14 @@ export const PIN_SHAPE = /^[0-9a-f]{64}$/;
  *   - HOME — planLocalPreGate calls node:os `homedir()` to locate `~/.pi/agent/mcp.json`
  *     before the ambient-token short-circuit is even reached; an unset HOME can throw before
  *     that check runs.
- *   - TMPDIR — this repository's own aigency.json already narrows the declared `pregate` row
- *     to exactly this set (PATH, HOME, TMPDIR, plus the two tokens). Mirrored here rather than
- *     re-derived, because scratch space is used well beneath run-pregate.mjs — corpus checkout,
- *     mkdtemp calls — in code this wrapper does not itself walk.
+ *   - TMPDIR — needed because scratch space is used well beneath run-pregate.mjs — corpus
+ *     checkout, mkdtemp calls — in code this wrapper does not itself walk. NOT narrowed by
+ *     aigency.json's own `env` declaration for the `pregate` row, which lists only the two
+ *     credentials above (`CLAUDE_CODE_OAUTH_TOKEN`, `AIGENCY_GUARDRAILS_TOKEN`) and says
+ *     nothing about PATH, HOME or TMPDIR — those three arrive through ordinary process
+ *     environment inheritance when the release runner spawns THIS script, not through that
+ *     declaration. This wrapper narrows its own child's environment independently, on its own
+ *     terms, rather than assuming the runner's inheritance into IT is itself narrow.
  *
  * Absent, deliberately: GITHUB_TOKEN (a corpus-token fallback this wrapper does not choose to
  * offer — AIGENCY_GUARDRAILS_TOKEN is the one credential this repository's own declared row
@@ -124,13 +130,14 @@ export function minimalEnv(env = process.env) {
 
 /**
  * How long to let the spawned panel run before this wrapper gives up and reports it, rather
- * than waiting on a hang with no diagnostic at all.
- *
- * Sits ON PURPOSE between the panel's own two layers: ABOVE run-pregate.mjs's own
- * DEFAULT_RUN_TIMEOUT_MS (30 minutes), so a genuinely wedged LENS is reported by the panel
- * itself, by name, before this wrapper would ever fire; BELOW the release step's own declared
- * timeoutMs (aigency.json's `pregate` row, 40 minutes), so a spawn wedged for some other reason
- * is reported HERE, with a message, rather than silently SIGKILLed by the runtime with none.
+ * than waiting on a hang with no diagnostic at all. The full three-layer arithmetic — this
+ * bound, the panel's own inner backstop, and the release step's declared timeoutMs, and why
+ * each must fire before the next — lives in AGENTS.md § Operating this repo, the single home
+ * for it; this comment states only the two relationships that matter to reading THIS constant:
+ * ABOVE run-pregate.mjs's own inner backstop, so a wedged LENS is reported by the panel itself,
+ * by name, before this wrapper would ever fire; BELOW the release step's own declared
+ * timeoutMs, so a spawn wedged for some other reason is reported HERE, with a message, rather
+ * than silently SIGKILLed by the runtime with none.
  */
 export const DEFAULT_SPAWN_TIMEOUT_MS = 35 * 60_000;
 
@@ -142,23 +149,123 @@ export function spawnTimeoutMs(env = process.env) {
 }
 
 /**
- * Turn a completed spawnSync result into a legible outcome. Pure and exported so this — the
+ * How long to wait, after a SIGTERM aimed at the whole process group on timeout, before
+ * escalating to SIGKILL. A group member that ignores SIGTERM (or is itself mid-syscall) would
+ * otherwise survive indefinitely under a wrapper that only ever asks nicely once — the same
+ * "narrowing, not closure" the file header states for the TOCTOU window, applied here: SIGTERM
+ * gives a well-behaved process the chance to exit cleanly; SIGKILL is the backstop for one that
+ * does not take it.
+ */
+export const DEFAULT_KILL_GRACE_MS = 2000;
+
+export function killGraceMs(env = process.env) {
+  const raw = env.PREGATE_KILL_GRACE_MS;
+  if (raw === undefined || String(raw).trim() === '') return DEFAULT_KILL_GRACE_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_KILL_GRACE_MS;
+}
+
+/**
+ * Spawn the verified copy asynchronously, in its OWN detached process group, and wait for it to
+ * finish or for the bound above to be reached.
+ *
+ * THE DEFECT THIS REPLACES. `run-pregate.mjs` spawns NESTED per-lens node processes of its own
+ * (`spawn('node', [plan.bin, ...argv], ...)`, undetached — see ALLOWED_SPAWN_ENV_VARS above).
+ * The previous version of this function used `spawnSync`'s built-in `timeout` option, which
+ * signals ONLY the direct child by pid. Those nested lens processes, sharing that child's
+ * process group by ordinary inheritance, were never signalled at all: on a timeout they
+ * survived as orphans and kept making paid model calls after this wrapper had given up on them.
+ * That is a live cost defect, and a silent one — nothing about the wrapper's own exit code or
+ * message revealed that anything was still running.
+ *
+ * THE FIX, AND ITS HONEST LIMIT. `detached: true` makes the direct child (this copy of
+ * run-pregate.mjs) the LEADER of a new process group, with pgid === child.pid. Any process it
+ * spawns WITHOUT its own `detached: true` inherits that same group by ordinary OS behaviour —
+ * which is exactly the shape `run-pregate.mjs`'s own nested spawn is, per the header comment
+ * above. Signalling the NEGATIVE pid on timeout therefore reaches the child and every
+ * undetached descendant of it in one OS-level call, delivered directly to each process rather
+ * than routed through a parent that may already be gone. What this does NOT reach: a
+ * descendant that deliberately detaches into a group of its own. Nothing here inspects
+ * `run-pregate.mjs` to confirm its nested spawn stays undetached forever, so this is stated as
+ * a narrowing tied to that script's CURRENT shape, not a guarantee independent of it — the same
+ * distinction the file header draws for the TOCTOU window, and worth exactly the same amount of
+ * scepticism if `run-pregate.mjs` ever changes how it spawns its own children.
+ *
+ * `spawnFn` is injectable so a test can substitute a stub without an OS process actually
+ * existing to be killed.
+ */
+export function spawnVerifiedCopy(
+  copyPath,
+  args,
+  { timeoutMs, env, killGraceMs: graceMs = DEFAULT_KILL_GRACE_MS, spawnFn = spawn } = {},
+) {
+  return new Promise((resolveOutcome) => {
+    let settled = false;
+    let timedOut = false;
+    let timeoutTimer;
+    let killTimer;
+
+    const child = spawnFn(process.execPath, [copyPath, ...args], {
+      stdio: 'inherit',
+      env,
+      detached: true,
+    });
+
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      resolveOutcome(outcome);
+    };
+
+    const killGroup = (signal) => {
+      if (typeof child.pid !== 'number') return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        // The group may already be gone (everything already exited), or this platform has no
+        // process-group semantics at all (Windows) — either way there is nothing further to do.
+      }
+    };
+
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      killGroup('SIGTERM');
+      killTimer = setTimeout(() => killGroup('SIGKILL'), graceMs);
+    }, timeoutMs);
+
+    child.on('error', (error) => finish({ error, status: null, signal: null, timedOut }));
+    child.on('exit', (status, signal) => finish({ error: null, status, signal, timedOut }));
+  });
+}
+
+/**
+ * Turn a completed spawn outcome into a legible result. Pure and exported so this — the
  * spawn-failure and timeout reporting the resilience lens found missing — is directly testable
  * without actually spawning a hung or missing process.
  *
- * Three shapes, all previously swallowed into a bare `exit(1)`:
- *   - `result.error` set — spawnSync could not even START the child. Previously: nothing on
- *     stderr at all.
- *   - `result.signal` set, `result.status` null — the child was killed by a signal, either this
- *     wrapper's own timeout or something external. Previously: silent exit(1).
+ * Shapes handled, all previously swallowed into a bare `exit(1)`:
+ *   - `result.timedOut` — this wrapper's own bound was reached and it killed the process group
+ *     itself (see spawnVerifiedCopy above). The primary path since that function stopped
+ *     relying on spawnSync's own timeout option.
+ *   - `result.error` with `code === 'ETIMEDOUT'` — kept for backward compatibility with a
+ *     spawnSync-shaped result, in case anything else ever constructs one; reported identically.
+ *   - `result.error` set otherwise — the child could not even be STARTED (e.g. ENOENT).
+ *   - `result.signal` set, `result.status` null, `timedOut` false — killed by a signal that was
+ *     not this wrapper's own timeout (something external).
  *   - otherwise — the child ran to completion; its own exit code is authoritative and is
  *     propagated as-is, success or failure.
  */
 export function describeSpawnResult(result, limitMs = DEFAULT_SPAWN_TIMEOUT_MS) {
-  // spawnSync's OWN timeout option reports as result.error with code ETIMEDOUT — not merely as
-  // result.signal — so this must be distinguished from a genuine could-not-start failure (e.g.
-  // ENOENT) before the generic result.error branch below, or a legible timeout message would
-  // never be reached.
+  if (result.timedOut) {
+    return {
+      exitCode: 1,
+      message:
+        `verified-pregate: the panel did not finish within this wrapper's own ` +
+        `${Math.round(limitMs / 60_000)}-minute bound; its process group was terminated.`,
+    };
+  }
   if (result.error && result.error.code === 'ETIMEDOUT') {
     return {
       exitCode: 1,
@@ -253,11 +360,12 @@ if (isMain) {
   }
 
   const limitMs = spawnTimeoutMs();
+  const graceMs = killGraceMs();
   let result;
   try {
-    result = spawnSync(process.execPath, [copyPath, ...process.argv.slice(2)], {
-      stdio: 'inherit',
-      timeout: limitMs,
+    result = await spawnVerifiedCopy(copyPath, process.argv.slice(2), {
+      timeoutMs: limitMs,
+      killGraceMs: graceMs,
       env: minimalEnv(),
     });
   } finally {
