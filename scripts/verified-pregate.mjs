@@ -51,6 +51,12 @@
  * paths are resolved against this repository's root, absolute paths are used as-is — which
  * exists so tests can point this at disposable fixtures rather than the real sibling checkout.
  * PREGATE_SPAWN_TIMEOUT_MS overrides the wrapper's own spawn bound, for the same reason.
+ *
+ * WHAT THE CHILD ACTUALLY RECEIVES. Not this process's own environment, wholesale — an
+ * explicit, minimal one, built fresh from ALLOWED_SPAWN_ENV_VARS below. A wrapper whose whole
+ * reason to exist is not trusting what it is asked to run must equally not trust that whatever
+ * narrowed ITS OWN environment on the way in will always do so; the narrowing here is
+ * independent, so the guarantee holds even if that outer one is ever loosened or bypassed.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -69,6 +75,52 @@ export function resolvePinFile(env = process.env) {
 }
 
 export const PIN_SHAPE = /^[0-9a-f]{64}$/;
+
+/**
+ * Environment variables the sibling script — and the child IT SPAWNS in turn — are known to
+ * need. Derived directly from ../capabilities/scripts/run-pregate.mjs, read before choosing
+ * this list, not assumed:
+ *   - CLAUDE_CODE_OAUTH_TOKEN, AIGENCY_GUARDRAILS_TOKEN — the two credentials this wrapper
+ *     exists to carry; read directly by planLocalPreGate.
+ *   - PATH — run-pregate.mjs itself does `spawn('node', [plan.bin, ...argv], ...)`, a bare
+ *     command name resolved against PATH (not process.execPath); without it that NESTED spawn
+ *     cannot find `node` at all.
+ *   - HOME — planLocalPreGate calls node:os `homedir()` to locate `~/.pi/agent/mcp.json`
+ *     before the ambient-token short-circuit is even reached; an unset HOME can throw before
+ *     that check runs.
+ *   - TMPDIR — this repository's own aigency.json already narrows the declared `pregate` row
+ *     to exactly this set (PATH, HOME, TMPDIR, plus the two tokens). Mirrored here rather than
+ *     re-derived, because scratch space is used well beneath run-pregate.mjs — corpus checkout,
+ *     mkdtemp calls — in code this wrapper does not itself walk.
+ *
+ * Absent, deliberately: GITHUB_TOKEN (a corpus-token fallback this wrapper does not choose to
+ * offer — AIGENCY_GUARDRAILS_TOKEN is the one credential this repository's own declared row
+ * names), AIGENCY_GUARDRAILS_URL and AIGENCY_MODEL_REASONING (both have working defaults in the
+ * code that reads them), and every PREGATE_* override read by run-pregate.mjs itself (this
+ * wrapper's PREGATE_* variables configure THIS file, not the child; conflating the two would
+ * let a variable meant for the wrapper silently retarget the panel it spawns).
+ */
+export const ALLOWED_SPAWN_ENV_VARS = Object.freeze([
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'AIGENCY_GUARDRAILS_TOKEN',
+]);
+
+/**
+ * Build the child's environment from ALLOWED_SPAWN_ENV_VARS only. Pure and exported so the
+ * boundary itself — not merely that the two tokens survive it — is directly testable: a caller
+ * asserting only "the tokens are present" would pass under a leak just as easily as under this.
+ */
+export function minimalEnv(env = process.env) {
+  const out = {};
+  for (const key of ALLOWED_SPAWN_ENV_VARS) {
+    const value = env[key];
+    if (typeof value === 'string' && value.length > 0) out[key] = value;
+  }
+  return out;
+}
 
 /**
  * How long to let the spawned panel run before this wrapper gives up and reports it, rather
@@ -133,6 +185,22 @@ export function describeSpawnResult(result, limitMs = DEFAULT_SPAWN_TIMEOUT_MS) 
   return { exitCode: result.status ?? 1, message: null };
 }
 
+/**
+ * Write TARGET's already-verified bytes to a fresh, uniquely named file in TARGET's own
+ * directory, and return its path. Pulled out of the isMain shim, with `write` injectable, so
+ * the staging-failure branch — previously reachable only by luck (a full disk, a read-only
+ * directory) — is directly testable without depending on the filesystem's own failure modes.
+ */
+export function stageVerifiedCopy(targetDir, bytes, { write = writeFileSync } = {}) {
+  const copyPath = join(targetDir, `.verified-pregate.${randomBytes(8).toString('hex')}.tmp.mjs`);
+  try {
+    write(copyPath, bytes, { flag: 'wx', mode: 0o600 });
+  } catch (err) {
+    throw new Error(`could not stage a verified copy at ${copyPath} — ${err.message}`);
+  }
+  return copyPath;
+}
+
 function refuse(message) {
   process.stderr.write(`verified-pregate: refusing to run — ${message}\n`);
   process.exit(1);
@@ -177,14 +245,11 @@ if (isMain) {
   // spawned — and what gets spawned is a copy of the bytes just verified, in TARGET's own
   // directory, never TARGET itself again. See the file header for the full reasoning and the
   // residual risk this narrows but does not eliminate.
-  const copyPath = join(
-    dirname(TARGET),
-    `.verified-pregate.${randomBytes(8).toString('hex')}.tmp.mjs`,
-  );
+  let copyPath;
   try {
-    writeFileSync(copyPath, bytes, { flag: 'wx', mode: 0o600 });
+    copyPath = stageVerifiedCopy(dirname(TARGET), bytes);
   } catch (err) {
-    refuse(`could not stage a verified copy at ${copyPath} — ${err.message}`);
+    refuse(err.message);
   }
 
   const limitMs = spawnTimeoutMs();
@@ -193,6 +258,7 @@ if (isMain) {
     result = spawnSync(process.execPath, [copyPath, ...process.argv.slice(2)], {
       stdio: 'inherit',
       timeout: limitMs,
+      env: minimalEnv(),
     });
   } finally {
     try {
