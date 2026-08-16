@@ -106,10 +106,8 @@ describe('createStudioServer()', () => {
     });
 
     it('reports the Cloud Run revision that answered, sourced from K_REVISION', async () => {
-      // portVersion is a compile-time constant of the port package, so two different builds of
-      // the same port version are indistinguishable by it. At a 10% traffic split the promotion
-      // must be able to tell the candidate from the incumbent that is answering most requests,
-      // and this field is the only thing that can.
+      // Why this field exists and what it distinguishes: docs/architecture.md §9a ("`/health`
+      // says which build answered").
       const orig = process.env['K_REVISION'];
       process.env['K_REVISION'] = 'design-space-studio-00042-abc';
       try {

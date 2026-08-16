@@ -566,14 +566,20 @@ describe('rollback.sh', () => {
     return dir;
   }
 
-  it('refuses to move traffic when the pull request is already merged', async () => {
+  it('exits precisely 2 — the documented already-merged code, not merely non-zero — when the pull request is already merged', async () => {
     // The exact split-brain race the workflow condition alone cannot close: gh pr merge
     // succeeded, but the step that ran it was then marked cancelled or failed by a job
     // timeout. No gcloud stub is provided at all here, proving traffic is never touched.
+    //
+    // The script's own header documents three distinct exits — 0 restored, 2 already merged,
+    // n (other) an incident — precisely so a caller can tell "an operator must decide" apart
+    // from "this failed and needs investigating". Asserting only non-zero here would pass
+    // identically if this branch returned the same code as a genuine incident, which is the
+    // distinction the contract exists to make.
     const dir = await ghStateStub('MERGED');
     const r = run('rollback.sh', [await snapshotFile(), 'candidate', 'o/r', '7'], dir);
 
-    expect(r.code).not.toBe(0);
+    expect(r.code).toBe(2);
     expect(r.err).toContain('already MERGED');
   });
 

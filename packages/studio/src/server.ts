@@ -29,11 +29,8 @@ function handleRequest(
 
   if (url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    // `revision` answers "which build am I?", which portVersion cannot: it is a compile-time
-    // constant of the port package, so every build of a given port version reports the same
-    // value. Cloud Run injects K_REVISION into the container; a promotion health-checks a
-    // specific revision and must be able to tell it apart from the incumbent that is still
-    // serving most of the traffic.
+    // Why `revision` exists and what it distinguishes: docs/architecture.md §9a ("`/health`
+    // says which build answered").
     //
     // Explicitly null off Cloud Run rather than omitted: a missing field is ambiguous between
     // "not running on Cloud Run" and "running on a build too old to report it", and the second

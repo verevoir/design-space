@@ -166,12 +166,10 @@ else
   echo "OK    GET /health  body contains portVersion"
 fi
 
-# Which build answered, when the caller knows what it expects.
-#
-# portVersion is a compile-time constant of the port package, so two different builds of the
-# same port version are indistinguishable by it. The promotion workflow needs more than that:
-# its health check must fail if the incumbent revision answered rather than the candidate.
-# /health echoes Cloud Run's K_REVISION, and this asserts it.
+# Which build answered, when the caller knows what it expects. Why portVersion alone cannot
+# tell two builds apart, and why the promotion workflow needs this: docs/architecture.md §9a
+# ("`/health` says which build answered"). /health echoes Cloud Run's K_REVISION, and this
+# asserts it.
 if [[ -n "${SMOKE_EXPECT_REVISION:-}" ]]; then
   if [[ ! "$FETCH_BODY" =~ \"revision\"[[:space:]]*:[[:space:]]*\"${SMOKE_EXPECT_REVISION}\" ]]; then
     echo "FAIL  GET /health  expected revision ${SMOKE_EXPECT_REVISION} — got: ${FETCH_BODY}" >&2
