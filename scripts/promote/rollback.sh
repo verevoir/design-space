@@ -55,11 +55,28 @@ if [ ! -s "$SNAPSHOT" ]; then
 fi
 
 # One call, tab-separated, rather than two node startups reading the same file.
-if ! IFS=$'\t' read -r SERVICE REGION < <(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(`${s.service}\t${s.region}\n`)' "$SNAPSHOT"); then
+#
+# VALIDATED, not merely read. `${s.service}` in a template literal stringifies whatever it
+# finds there — a MISSING field (undefined), an explicit JSON `null`, a number, an object —
+# into the literal text "undefined" / "null" / "[object Object]", which is a non-empty string
+# and slips straight past a bash `-z` check below. That is worse than no guard at all: it lets
+# the incident path call gcloud with a confidently wrong --region rather than refusing. So node
+# itself now checks the TYPE of both fields, and writes nothing to stdout — exiting non-zero
+# instead — unless both are genuinely non-empty strings; an empty stdout is what makes `read`
+# below fail, so this reuses the existing "no service and region" branch rather than adding one.
+if ! IFS=$'\t' read -r SERVICE REGION < <(node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const isNamed = (v) => typeof v === "string" && v.length > 0;
+    if (!isNamed(s.service) || !isNamed(s.region)) process.exit(1);
+    process.stdout.write(`${s.service}\t${s.region}\n`);
+  ' "$SNAPSHOT"); then
   echo "::error title=Rollback failed::the restore point at ${SNAPSHOT} names no service and region; traffic must be restored by hand." >&2
   exit 1
 fi
 
+# Defense in depth only, now unreachable in practice: the node check above already refuses
+# anything that is not a genuine non-empty string, so SERVICE/REGION cannot reach this line
+# empty. Kept in case that check is ever weakened without this one being updated to match.
 if [ -z "${SERVICE:-}" ] || [ -z "${REGION:-}" ]; then
   echo "::error title=Rollback failed::the restore point at ${SNAPSHOT} names no service and region; traffic must be restored by hand." >&2
   exit 1

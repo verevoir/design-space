@@ -371,6 +371,74 @@ describe('rollback.sh', () => {
     return path;
   }
 
+  /** A restore point missing the `service` field entirely — JSON has no way to express
+   * "absent" except by omission, and `s.service` reads as `undefined` in that case. */
+  async function snapshotFileMissingService(): Promise<string> {
+    const path = join(await tmp('ds-snap-'), 'snap.json');
+    await writeFile(
+      path,
+      JSON.stringify({ region: 'eu', assignments: [{ revision: 'rev-2', percent: 100 }], tags: ['candidate'] }),
+      'utf-8',
+    );
+    return path;
+  }
+
+  /** A restore point whose `region` is an explicit JSON `null` — a different shape of
+   * missing than omission, and template-literal coercion turns it into the literal text
+   * "null", which is just as non-empty and just as wrong to hand to gcloud. */
+  async function snapshotFileNullRegion(): Promise<string> {
+    const path = join(await tmp('ds-snap-'), 'snap.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        service: 'svc',
+        region: null,
+        assignments: [{ revision: 'rev-2', percent: 100 }],
+        tags: ['candidate'],
+      }),
+      'utf-8',
+    );
+    return path;
+  }
+
+  /** A restore point with service/region present but no assignments at all — well-formed
+   * enough to pass the service/region check, but traffic-snapshot.mjs's --restore-spec has
+   * nothing to build a spec from and must fail on its own terms. */
+  async function snapshotFileEmptyAssignments(): Promise<string> {
+    const path = join(await tmp('ds-snap-'), 'snap.json');
+    await writeFile(path, JSON.stringify({ service: 'svc', region: 'eu', assignments: [], tags: [] }), 'utf-8');
+    return path;
+  }
+
+  /** A `gcloud` stub whose response depends on whether the call is the traffic restore
+   * (--to-revisions) or the tag removal (--remove-tags), so the tag-removal tolerance can be
+   * tested independently of the traffic-restore call that always precedes it. */
+  async function gcloudTrafficThenTagStub(tagOutput: string, tagCode: number): Promise<{ dir: string; log: string }> {
+    const dir = await tmp('ds-gcloud-split-');
+    const log = join(dir, 'calls.log');
+    const path = join(dir, 'gcloud');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        `echo "$@" >> "${log}"`,
+        'case "$*" in',
+        '  *"--remove-tags"*)',
+        "    cat <<'STUBEOF'",
+        tagOutput,
+        'STUBEOF',
+        `    exit ${tagCode} ;;`,
+        '  *)',
+        "    echo 'Traffic updated.'",
+        '    exit 0 ;;',
+        'esac',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return { dir, log };
+  }
+
   it('restores traffic to the captured assignment', async () => {
     const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
     const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
@@ -384,6 +452,38 @@ describe('rollback.sh', () => {
     run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
 
     expect(await readFile(log, 'utf-8')).toContain('--remove-tags candidate');
+  });
+
+  it('tolerates the candidate tag already being absent, rather than treating it as a failure', async () => {
+    // The three-part tolerance the script's own header calls load-bearing: a tag that is
+    // already gone is not an error, or a rollback that failed on a second run would be a
+    // rollback nobody dares re-run.
+    const { dir, log } = await gcloudTrafficThenTagStub(
+      'ERROR: (gcloud.run.services.update-traffic) NOT_FOUND: Tag "candidate" not found for service.',
+      1,
+    );
+
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('the candidate tag was already absent');
+    // Traffic was still genuinely restored — the tolerance is about the tag call only.
+    expect(await readFile(log, 'utf-8')).toContain('--to-revisions rev-2=100');
+  });
+
+  it('reports an incident when the candidate tag could not be removed for a real reason', async () => {
+    // A failure that does NOT match the "already absent" pattern — a permission error, say —
+    // must not be swallowed by the same tolerance, or a genuine incident reads as a clean run.
+    const { dir } = await gcloudTrafficThenTagStub(
+      'ERROR: (gcloud.run.services.update-traffic) PERMISSION_DENIED',
+      1,
+    );
+
+    const r = run('rollback.sh', [await snapshotFile(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('Rollback incomplete');
+    expect(r.err).toContain('may still be routing');
   });
 
   it('never rebuilds — recovery is one API call', async () => {
@@ -408,6 +508,34 @@ describe('rollback.sh', () => {
 
     expect(r.code).not.toBe(0);
     expect(r.err).toContain('must be restored by hand');
+  });
+
+  it('refuses a restore point whose service is missing, rather than calling gcloud with the literal text "undefined"', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFileMissingService(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('names no service and region');
+    // The point: nothing was called at all — not "called with undefined".
+    await expect(readFile(log, 'utf-8')).rejects.toThrow();
+  });
+
+  it('refuses a restore point whose region is an explicit JSON null, the same as a missing one', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFileNullRegion(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('names no service and region');
+    await expect(readFile(log, 'utf-8')).rejects.toThrow();
+  });
+
+  it('refuses a restore point traffic-snapshot.mjs cannot build a --restore-spec from (no assignments)', async () => {
+    const { dir, log } = await recordingStub('gcloud', 'Traffic updated.', 0);
+    const r = run('rollback.sh', [await snapshotFileEmptyAssignments(), 'candidate'], dir);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('could not be read; traffic must be restored by hand');
+    await expect(readFile(log, 'utf-8')).rejects.toThrow();
   });
 
   it('reports an incident when traffic could not be restored', async () => {

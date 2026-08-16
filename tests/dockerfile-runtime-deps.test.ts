@@ -179,6 +179,30 @@ describe('the walker distinguishes real bindings from type-only ones', () => {
     ]);
   });
 
+  // The PLAIN_RE branch — default and namespace imports, as opposed to the brace-clause form
+  // every test above exercises. Previously reachable in the walker but exercised by no test at
+  // all, direct or indirect: serve.ts's own @design-space/* imports are brace-only (see the
+  // file header), so even the real-tree walk never touched this branch. Distinct from the
+  // walker's OWN declared blind spot (a combined `import Default, { a, b } from 'x'` clause,
+  // documented above and left unhandled on purpose) — this is a plain default/namespace form,
+  // which the code already handles; it simply had no test proving so.
+
+  it('a whole-declaration default import creates a real edge', () => {
+    expect(extractEdges("import Default from '@design-space/foo';")).toEqual(['@design-space/foo']);
+  });
+
+  it('a whole-declaration type-only default import creates no edge', () => {
+    expect(extractEdges("import type Default from '@design-space/foo';")).toEqual([]);
+  });
+
+  it('a namespace import creates a real edge', () => {
+    expect(extractEdges("import * as ns from '@design-space/foo';")).toEqual(['@design-space/foo']);
+  });
+
+  it('a type-only namespace import creates no edge', () => {
+    expect(extractEdges("import type * as ns from '@design-space/foo';")).toEqual([]);
+  });
+
   // This is the same assertion made against the real tree rather than a synthetic string: if
   // the walker folded type-only imports in, it would demand `gate` and `pipeline` be copied
   // into the runtime image, which architecture.md states they deliberately are not, because
