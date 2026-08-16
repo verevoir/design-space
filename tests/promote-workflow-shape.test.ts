@@ -82,6 +82,70 @@ describe('promote.yml — everything is time-bounded', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The job bound must exceed the floor its own steps set. 45 vs a derived 55 was a live bug
+// earlier tonight, and nothing caught it — this is what catches it next time.
+// ---------------------------------------------------------------------------
+
+interface StepTimeout {
+  readonly name: string;
+  readonly minutes: number;
+}
+
+/** The job-level timeout-minutes: 4-space indent, distinct from any step's 8-space one. */
+function jobTimeoutMinutes(): number {
+  const m = /\n    timeout-minutes: (\d+)/.exec(yml);
+  if (!m) throw new Error('promote.yml: could not find the job-level timeout-minutes.');
+  return Number(m[1]);
+}
+
+/** Every step's own name and timeout-minutes bound, derived from the file, never hardcoded. */
+function stepTimeouts(): StepTimeout[] {
+  return steps().map((s) => {
+    const timeoutMatch = /timeout-minutes: (\d+)/.exec(s);
+    if (!timeoutMatch) {
+      throw new Error(`promote.yml: a step has no timeout-minutes — ${s.slice(0, 60)}`);
+    }
+    const nameMatch = /name: (.+)/.exec(s);
+    const name = nameMatch ? nameMatch[1]!.trim() : s.slice(0, 60).replace(/\n/g, ' ');
+    return { name, minutes: Number(timeoutMatch[1]) };
+  });
+}
+
+describe('promote.yml — the job bound exceeds the floor its own steps set', () => {
+  const job = jobTimeoutMinutes();
+  const sorted = [...stepTimeouts()].sort((a, b) => b.minutes - a.minutes);
+  const [largest, secondLargest] = sorted;
+  const floor = largest.minutes + secondLargest.minutes;
+
+  it('found real step timeouts to derive a floor from (a trivial list would prove nothing)', () => {
+    expect(sorted.length).toBeGreaterThan(2);
+    expect(floor).toBeGreaterThan(0);
+  });
+
+  it(
+    'exceeds the sum of its own two largest step bounds — below that floor a healthy run, ' +
+      'not a hung one, could be killed by the job timeout before either step got to fail on ' +
+      'its own terms',
+    () => {
+      expect(job).toBeGreaterThan(floor);
+    },
+  );
+
+  it('the job-timeout comment cannot silently drift from the file it describes', () => {
+    // Pins the one number in the comment that is actually load-bearing — the floor itself —
+    // against the derived value. The comment's own "~220" / "roughly 165" figures state their
+    // own approximation and are not chased here; this is the number the bound must clear.
+    expect(floor).toBe(55);
+    expect([largest.minutes, secondLargest.minutes].sort((a, b) => b - a)).toEqual([35, 20]);
+
+    const concurrencyIdx = yml.indexOf('cancel-in-progress: false');
+    const jobTimeoutIdx = yml.search(/\n    timeout-minutes: \d+/);
+    const jobComment = yml.slice(concurrencyIdx, jobTimeoutIdx);
+    expect(jobComment).toContain('already sum to 55');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // artefact-identity — the deploy is pinned to a digest
 // ---------------------------------------------------------------------------
 

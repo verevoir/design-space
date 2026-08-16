@@ -60,12 +60,15 @@ jobs:
     # 90, not 45. The two largest step-level bounds alone — wait-for-green (35) and the image
     # build and push (20) — already sum to 55, more than the previous 45-minute job bound: a
     # healthy run that spent close to its own allowance waiting for other checks, or building a
-    # slow image, could hit the job timeout before it ever got to fail on its own terms. 90
-    # leaves real margin above that 55-minute floor for the rest of the sequence (whose
-    # remaining step bounds sum to roughly 165 more) without matching the full architectural sum
-    # of every step's own ceiling (~220), which would defeat the point of bounding the job at
-    # all. The rollback step below is what makes ANY point at which this fires safe — not the
-    # specific number chosen here.
+    # slow image, could hit the job timeout before it ever got to fail on its own terms. That
+    # 55-minute floor, and the job bound clearing it, are asserted directly by
+    # tests/promote-workflow-shape.test.ts — not restated here as a total, because a hand-summed
+    # total is exactly the kind of claim that drifts silently from the file it describes (this
+    # comment used to carry one, and on re-derivation it did not match). 90 leaves real margin
+    # above the floor for the rest of the sequence without claiming to be the full sum of every
+    # step's own ceiling, which would defeat the point of bounding the job at all. The rollback
+    # step below is what makes ANY point at which this fires safe — not the specific number
+    # chosen here.
     timeout-minutes: 90
     permissions:
       contents: write        # squash-merge writes to the base branch
