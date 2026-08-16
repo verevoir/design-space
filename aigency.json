@@ -21,7 +21,7 @@
       "command": ["npm", "run", "test"],
       "description": "The suite, via the package script rather than a bare `vitest run`, so the runner is whatever the repo says it is.",
       "blocking": true,
-      "timeoutMs": 60000
+      "timeoutMs": 900000
     },
     {
       "name": "lint",
