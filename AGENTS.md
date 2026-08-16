@@ -60,7 +60,7 @@ not repeated.
 
 - **Run the review panel locally before pushing.** PRs otherwise take several rounds; the local
   run exists to bring that number down, not to replace CI. It lives outside this repository, in
-  the capabilities project alongside it, and can be run by hand:
+  the capabilities project alongside it:
 
   ```sh
   PREGATE_PI_CONFIG=<the Claude config file holding your model credentials> \
@@ -73,45 +73,28 @@ not repeated.
   About five minutes and a couple of dollars — cheap against a CI round trip, and it runs the
   same five lenses.
 
-  The declared `pregate` release step in `aigency.json` — driven through `run_release_step`
-  instead of typed by hand — does **not** invoke `../capabilities/scripts/run-pregate.mjs`
-  directly. It invokes `scripts/verified-pregate.mjs`, an in-repo wrapper that hashes the
-  sibling script, compares the digest against the one pinned at `scripts/pregate.sha256`, and
-  refuses — loudly, on stderr, before any credential is passed — on a mismatch or if the sibling
-  script is simply absent. Hand-typing the command above bypasses that verification entirely; it
-  is meant for a developer who already trusts their own working checkout of `../capabilities`.
-  The declared step needs `CLAUDE_CODE_OAUTH_TOKEN` (model credentials, replacing
-  `PREGATE_PI_CONFIG` for that invocation) and `AIGENCY_GUARDRAILS_TOKEN` (reads the provisioned
-  rubric and publishes each lens's verdict). A declaration's `env` list names variables, not
-  values, so both must actually be exported in the runtime's own process and listed in that
-  runtime's `AIGENCY_ALLOWED_ENV` before `aigency.json` naming them has any effect — the file
-  cannot grant an environment variable that was never exported.
+- **The pregate run is bounded by three nested timeouts. This is their one complete derivation —
+  `aigency.json` and `scripts/verified-pregate.mjs` each restate only the ordering that matters
+  to reading their own number, and point back here rather than repeating this.**
 
-  Threat model, stated plainly rather than left implicit: `run-pregate.mjs` lives in a sibling
-  repository, is not versioned with this one, and can change — deliberately or not — without any
-  change landing here. The pin at `scripts/pregate.sha256` closes the part of that gap that
-  matters most for the declared step: an unnoticed change to the sibling script cannot run with
-  this repository's credentials, because the wrapper refuses before spawning anything. It does
-  not make `run-pregate.mjs` itself trustworthy — a legitimate, reviewed change to it still needs
-  the pin updated deliberately, by computing the new digest
-  (`shasum -a 256 ../capabilities/scripts/run-pregate.mjs`, run from this repository's root) and
-  committing it in the same change; `scripts/pregate.sha256`'s own history is the record of when
-  and why the pin moved. No cloud, deploy, or repo-write credential reaches the sibling script
-  either way; that is the entire credential surface, pinned or not.
-
-  The declared step also passes `--lens-timeout 480`, wider than the script's own 180-second
-  default (`correctness` was once seen to exceed 180s and come back with no verdict at all,
-  rather than a slow one). 480 is not a free choice: the panel warms one lens alone, then fans
-  the other four behind it, so worst case is TWO lens deadlines, not five. Preflight (up to
-  three sequential 60s-bounded setup calls) adds 3 minutes, rubric provisioning — bounded by
-  this same lens deadline — adds 8, and two lens deadlines add 16, for 27 minutes against the
-  script's own hardcoded 30-minute inner backstop (`PREGATE_TIMEOUT_MS`'s default). That
-  backstop firing before the declared `timeoutMs` in `aigency.json` is what lets a run report
-  *which* lens hung rather than being killed anonymously — so this flag cannot simply be raised
-  the next time a lens times out; past roughly 500s the 27-minute sum crosses the 30-minute
-  backstop and that property is lost. The real fix for a slow lens is lowering
-  preflight/provisioning overhead, or raising `PREGATE_TIMEOUT_MS` itself (which needs exporting
-  in the runtime's own process and adding to `AIGENCY_ALLOWED_ENV`, not just changing this flag).
+  1. **The panel's own inner backstop** (`PREGATE_TIMEOUT_MS`, default 30 minutes, hardcoded in
+     `../capabilities/scripts/run-pregate.mjs`) fires FIRST by design. `--lens-timeout 480`
+     gives it a worst case of three sequential 60s-bounded setup calls (3 min), rubric
+     provisioning bounded by one lens deadline (8 min), and two lens deadlines run behind it in
+     parallel (16 min) — 3 + 8 + 16 = 27 minutes, inside the 30-minute bound with real margin.
+     Firing first is what lets a run report *which lens* hung.
+  2. **This wrapper's own spawn bound** (`DEFAULT_SPAWN_TIMEOUT_MS`, 35 minutes,
+     `scripts/verified-pregate.mjs`) sits deliberately above layer 1, so the panel's own
+     backstop gets the chance to fire and name a lens before the wrapper gives up on the whole
+     spawn. On firing, the wrapper kills the ENTIRE process group it spawned, not merely the
+     immediate child — a hung run must not keep making paid model calls after the wrapper has
+     already reported failure. `PREGATE_SPAWN_TIMEOUT_MS` / `PREGATE_KILL_GRACE_MS` override the
+     bound and its SIGTERM→SIGKILL escalation grace, for tests.
+  3. **The declared release step's own `timeoutMs`** (`aigency.json`'s `pregate` row, 40
+     minutes) sits deliberately above layer 2, as the final backstop. It is the only layer of
+     the three that gives no diagnostic at all when it fires — the runner simply kills the
+     process — which is exactly why layers 1 and 2 both exist to fire first, each with a
+     message naming what happened.
 
 - **Read the panel's findings from the run artifacts, not the check annotations.** An annotation
   is a one-line summary; the artifact carries the whole finding, with file and line.
