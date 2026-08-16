@@ -34,7 +34,7 @@
     {
       "name": "pregate",
       "kind": "release",
-      "command": ["node", "../capabilities/scripts/run-pregate.mjs", "--base", "main", "--lens-timeout", "480"],
+      "command": ["node", "scripts/verified-pregate.mjs", "--base", "main", "--lens-timeout", "480"],
       "description": "The local antagonistic review panel, run against the working tree's diff from main. ADVISORY: it reports findings and blocks nothing, so a REJECT is a conversation and not a verdict. It runs a script that lives OUTSIDE this repository (../capabilities), so it is not versioned with the code it reviews and can break without this file changing. It COSTS REAL MONEY on every run — several model calls per lens — which is why it is a release step named one at a time rather than a gate that fires on every verification. --lens-timeout 480s: the panel warms one lens alone then fans the other four behind it, so worst case is TWO lens deadlines (16 min), not five; preflight adds up to three sequential 60s-bounded setup calls (3 min) and rubric provisioning is bounded by this same lens deadline (8 min) — 3 + 8 + 16 = 27 min, inside the script's own hardcoded 30-minute inner backstop (PREGATE_TIMEOUT_MS default) with real margin. The 40-minute timeoutMs below is deliberately ABOVE that inner bound: the script's own backstop must fire first so it can report which lens hung, and this row's timeoutMs exists only to catch a wedged script the inner backstop itself failed to kill.",
       "env": ["CLAUDE_CODE_OAUTH_TOKEN", "AIGENCY_GUARDRAILS_TOKEN"],
       "timeoutMs": 2400000
