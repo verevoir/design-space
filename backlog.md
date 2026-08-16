@@ -263,6 +263,18 @@ success for every failure — expired credentials, a network fault, a wrong serv
 the tag routing while the job went green. It now tolerates only an absent tag, judged from
 gcloud's own output naming *this* tag, and fails the job on anything else.
 
+**Known gap, recorded 2026-08-16.** The deploy job's checkout carries no explicit `ref:`, so on
+the `pull_request` event it builds from GitHub's synthetic merge commit, not the PR head, and
+tags the image with `github.sha` — which in that event context is the merge commit's SHA, not
+the head's. The artefact this workflow smoke-tests is therefore not provably the head tree's
+artefact whenever the base has moved since the last push. It also blocks a real optimisation in
+2S.4: today's `promote.yml` builds its own `candidate` image from the head SHA rather than
+reusing this one by digest, which is wasteful and produces a second artefact from the same
+source — exactly what ADR 0007's "the image that served traffic is the image that ships" argues
+against. Known fix: checkout and tag by `head.sha` here, then have `promote.yml` resolve that tag
+first and build only when none exists (a fork PR gets no preview, or the preview may have
+failed). Not yet scheduled as a story.
+
 ### 2S.4 A change reaches `main` only after serving production traffic
 
 **Outcome.** Promotion is: assert the branch fast-forwards onto `main`, deploy a `candidate`
@@ -379,6 +391,13 @@ appearance is no longer in `render`'s module constant; `render` and `gate` type 
 contract package and neither structural copy remains anywhere in the tree; two documents rendered
 from different adapters in one page do not affect each other's styling; and the gate reads a
 token value as data rather than as text.
+
+**Open question, recorded 2026-08-16.** That last clause does not appear to be covered by
+anything else in this story's scope — `packages/gate` never references `adapter.tokens`; the
+only reader of token values today is `render`'s `tokensBlock()`. Either the clause belongs to
+4.1, which is what actually needs the gate's contrast check to read token values as data, and
+was misplaced here, or this story was meant to wire `gate` to `tokens` and has not. Needs an
+operator ruling before this story can be marked done against that clause.
 
 **Writes.** `packages/adapter-contract`, `packages/render`, `packages/gate`,
 `packages/adapter-sketch`.
