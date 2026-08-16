@@ -14,6 +14,7 @@ import {
   killGraceMs,
   stageVerifiedCopy,
   ALLOWED_SPAWN_ENV_VARS,
+  isFixtureLocation,
 } from '../scripts/verified-pregate.mjs';
 
 // verified-pregate.mjs is what carries CLAUDE_CODE_OAUTH_TOKEN and AIGENCY_GUARDRAILS_TOKEN
@@ -458,10 +459,99 @@ describe('verified-pregate.mjs', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Staging the verified copy can fail (a full disk, a read-only directory) — previously
-  // reachable only by luck. stageVerifiedCopy takes an injectable `write`, so this is now a
-  // pure, deterministic test rather than one that depends on the filesystem's own failure modes.
+  // THE SECURITY DEFECT: PREGATE_TARGET_SCRIPT and PREGATE_PIN_FILE are read from this
+  // process's own environment — the same environment carrying the real credentials. Whoever
+  // can set one can set the other, and someone who controls both controls the file being
+  // verified AND the digest it is checked against — a redirect that is its own proof. The
+  // location guard must refuse such a pair even when the pin genuinely matches the target,
+  // because a matching pin proves nothing when the attacker computed it themselves.
   // -------------------------------------------------------------------------
+
+  describe('isFixtureLocation — the boundary itself, not merely its effect', () => {
+    it('accepts a path under the given tmp directory', () => {
+      expect(isFixtureLocation('/tmp/xyz/run-pregate.mjs', { tmpDir: '/tmp', repoRoot: '/repo' })).toBe(true);
+    });
+
+    it('accepts a path under the repo-root test-fixture prefix', () => {
+      expect(
+        isFixtureLocation('/repo/.tmp-verified-pregate-test-pin/pin.sha256', {
+          tmpDir: '/somewhere-else',
+          repoRoot: '/repo',
+        }),
+      ).toBe(true);
+    });
+
+    it('rejects a path that is neither — anywhere else on disk, including elsewhere in the repo', () => {
+      expect(
+        isFixtureLocation('/repo/scripts/run-pregate.mjs', { tmpDir: '/tmp', repoRoot: '/repo' }),
+      ).toBe(false);
+      expect(
+        isFixtureLocation('/some/other/place/run-pregate.mjs', { tmpDir: '/tmp', repoRoot: '/repo' }),
+      ).toBe(false);
+    });
+  });
+
+  it('refuses a PREGATE_TARGET_SCRIPT/PREGATE_PIN_FILE pair pointing OUTSIDE the trusted fixture locations — even though the pin genuinely matches the target', async () => {
+    // Deliberately NOT under os.tmpdir() and NOT under a .tmp-verified-pregate-test- prefix —
+    // this is exactly the shape a real redirect attack takes: a target and a pin the attacker
+    // fully controls, so the digest check alone would pass. Placed inside the repo root, next
+    // to real source, which is where an attacker with write access to this checkout — or
+    // anyone who can set these two env vars for the real credentialed run — could plant one.
+    const repoRoot = dirname(dirname(WRAPPER));
+    const attackerDir = join(repoRoot, '.attacker-planted-fixture-not-a-test-prefix');
+    await mkdir(attackerDir, { recursive: true });
+    try {
+      const target = await fixtureTarget(attackerDir);
+      const pinPath = await pinFor(attackerDir, target); // a genuinely matching pin — attacker-computed
+
+      const r = runWrapper({ PREGATE_TARGET_SCRIPT: target, PREGATE_PIN_FILE: pinPath });
+
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('outside the locations this wrapper trusts');
+      expect(existsSync(join(attackerDir, 'invoked.marker'))).toBe(false);
+    } finally {
+      await rm(attackerDir, { recursive: true, force: true });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // THE CORRECTNESS DEFECT: isMain compared import.meta.url against the literal string
+  // `file://${process.argv[1]}`, which is wrong wherever the path needs percent-encoding (a
+  // space, among others) that import.meta.url applies and a raw argv string does not. The
+  // failure is a SILENT NO-OP: the file loads, does nothing, exits 0 — no refusal, no spawn.
+  // -------------------------------------------------------------------------
+
+  it('runs as the entry point — not a silent no-op — when its own path contains a character needing file:// percent-encoding', async () => {
+    // Placed under REPO_ROOT (matching the .tmp-verified-pregate-test- fixture prefix, so the
+    // location guard above accepts it too), not under os.tmpdir() — tmpdir() on macOS is
+    // itself reached through a /var -> /private/var symlink, which would confound this specific
+    // comparison for a reason having nothing to do with the defect this test targets. A plain
+    // directory in the real checkout, with a space in its name, isolates the one thing being
+    // tested: whether isMain survives a path needing file:// percent-encoding.
+    const repoRoot = dirname(dirname(WRAPPER));
+    const dir = join(repoRoot, '.tmp-verified-pregate-test-space fixture');
+    await mkdir(dir, { recursive: true });
+    try {
+      const copyPath = join(dir, 'verified-pregate-copy.mjs');
+      await writeFile(copyPath, await readFile(WRAPPER));
+
+      const target = await fixtureTarget(dir);
+      const pinPath = await pinFor(dir, target);
+
+      const res = spawnSync(process.execPath, [copyPath], {
+        encoding: 'utf-8',
+        env: { ...process.env, PREGATE_TARGET_SCRIPT: target, PREGATE_PIN_FILE: pinPath },
+      });
+
+      // Under the old, buggy comparison this exits 0 with EMPTY stdout and no marker file — the
+      // whole isMain block silently never runs. Both assertions below fail under that behaviour.
+      expect(res.stderr ?? '').toBe('');
+      expect(res.stdout ?? '').toContain('ran with:');
+      expect(existsSync(join(dir, 'invoked.marker'))).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
   describe('stageVerifiedCopy — pure, so a staging failure never has to be reproduced live', () => {
     it('reports a failure to stage the verified copy, rather than crashing or hanging', () => {
