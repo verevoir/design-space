@@ -76,24 +76,26 @@ RUN addgroup --system studio && adduser --system --ingroup studio studio
 # put code in the runtime image that nothing there can reach.
 COPY --from=builder /app/package.json         ./
 COPY --from=builder /app/package-lock.json    ./
-COPY --from=builder /app/packages/journey-model/package.json  packages/journey-model/
-COPY --from=builder /app/packages/port/package.json            packages/port/
-COPY --from=builder /app/packages/store/package.json           packages/store/
-COPY --from=builder /app/packages/adapter-sketch/package.json  packages/adapter-sketch/
-COPY --from=builder /app/packages/render/package.json          packages/render/
-COPY --from=builder /app/packages/studio/package.json          packages/studio/
+COPY --from=builder /app/packages/journey-model/package.json    packages/journey-model/
+COPY --from=builder /app/packages/port/package.json             packages/port/
+COPY --from=builder /app/packages/store/package.json            packages/store/
+COPY --from=builder /app/packages/adapter-contract/package.json packages/adapter-contract/
+COPY --from=builder /app/packages/adapter-sketch/package.json   packages/adapter-sketch/
+COPY --from=builder /app/packages/render/package.json           packages/render/
+COPY --from=builder /app/packages/studio/package.json           packages/studio/
 
 # Production dependencies only — no devDependencies, no git.
 RUN npm ci --omit=dev
 
 # Compiled artefacts from the builder stage.
-COPY --from=builder /app/packages/journey-model/dist  packages/journey-model/dist
-COPY --from=builder /app/packages/port/dist           packages/port/dist
-COPY --from=builder /app/packages/store/dist          packages/store/dist
-COPY --from=builder /app/packages/adapter-sketch/dist packages/adapter-sketch/dist
-COPY --from=builder /app/packages/render/dist         packages/render/dist
+COPY --from=builder /app/packages/journey-model/dist    packages/journey-model/dist
+COPY --from=builder /app/packages/port/dist             packages/port/dist
+COPY --from=builder /app/packages/store/dist            packages/store/dist
+COPY --from=builder /app/packages/adapter-contract/dist packages/adapter-contract/dist
+COPY --from=builder /app/packages/adapter-sketch/dist   packages/adapter-sketch/dist
+COPY --from=builder /app/packages/render/dist           packages/render/dist
 # studio/dist includes both serve.js and the prerendered document.html.
-COPY --from=builder /app/packages/studio/dist         packages/studio/dist
+COPY --from=builder /app/packages/studio/dist           packages/studio/dist
 
 USER studio
 
