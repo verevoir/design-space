@@ -16,14 +16,11 @@
 # is not "mostly healthy" — this fails closed, the same stance every other decision point in
 # scripts/promote/ takes (assert-authorized.sh, wait-for-green.sh, checks-green.mjs).
 #
-# What this still does NOT prove, stated as plainly as the amendment states it for the
-# single-probe version it replaces: every probe here hits the candidate's OWN tag url, never the
-# blended service url, so this never observes the blend either — it observes the CANDIDATE,
-# repeatedly, for the duration real users are already being served by it. That is a narrowing of
-# the gap the amendment describes, not a closure of it. The true fix recorded in ADR 0007's
-# "Trigger to revisit" — telemetry comparing the canary's error rate and latency against the
-# incumbent's baseline over the same window — still does not exist; this only widens the time a
-# probe-based check gets to notice something a single instant cannot.
+# What this still does NOT prove: every probe hits the candidate's OWN tag url, never the
+# blended service url, so this narrows the gap the ADR 0007 amendment describes rather than
+# closing it. The amendment (2026-08-16) is the one place that states plainly what this does
+# and does not add over the single-probe version it replaces, and names the actual fix
+# ("Trigger to revisit") — read it there rather than here, so the two do not drift apart.
 #
 # Usage:
 #   scripts/promote/observe-canary.sh <TAG_URL>

@@ -264,6 +264,17 @@ describe('traffic-snapshot — which revision a tag names', () => {
     expect(() => revisionForTag(describeJson, 'nope')).toThrow(/no traffic entry carries the tag/);
   });
 
+  it('refuses when the matching tag entry names no resolvable revision', () => {
+    // Distinct from "no entry carries the tag" above: here an entry DOES carry the tag, but has
+    // neither a revisionName nor latestRevision === true — a malformed traffic entry, not a
+    // genuinely untagged revision. Falling through to the "no entry" message here would report
+    // the wrong cause to whoever is reading this during an incident, at the exact moment (the
+    // retag step, after a successful canary) this function's own header calls load-bearing.
+    expect(() =>
+      revisionForTag({ status: { traffic: [{ tag: 'candidate', percent: 0 }] } }, 'candidate'),
+    ).toThrow(/names no resolvable revision/);
+  });
+
   it('refuses to resolve a tag from a describe payload carrying no status.traffic at all', () => {
     // Distinct from "no entry carries the tag" above: this is the case where the whole traffic
     // array is absent, not merely lacking the requested tag. Falling through to the "no entry"

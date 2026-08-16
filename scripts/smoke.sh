@@ -102,13 +102,11 @@ else
   echo "OK    GET /  status 200"
 fi
 
-# EVERY screen of the reference journey must be present, not merely the first.
-#
-# This asserted one hard-coded heading — one screen of five — so a change that rendered only the
-# entry screen, or dropped the last three, passed the gate that ADR 0007 rests its whole merge
-# ordering on. The expectations are DERIVED from the journey document, so a screen added to the
-# journey becomes a screen the smoke requires without anyone remembering to edit a literal here.
-# That is what journey-smoke-coverage asks for.
+# EVERY screen of the reference journey must be present, not merely the first. The expectations
+# are DERIVED from the journey document by journey-expectations.mjs, whose own doc-comment is
+# the one place that states why (a single hard-coded heading used to be the whole check, which
+# journey-smoke-coverage exists to close) — read it there rather than here, so the two do not
+# drift apart.
 JOURNEY="${SMOKE_JOURNEY:-${SCRIPT_DIR}/../examples/journeys/broadband-switch.json}"
 
 if [[ ! -f "$JOURNEY" ]]; then

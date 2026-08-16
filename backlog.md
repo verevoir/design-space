@@ -326,8 +326,9 @@ every step timeout-bounded and a rollback path guarded so it cannot move traffic
 The decision logic lives in `scripts/promote/` with tests rather than in `run:` blocks. The smoke
 now asserts the prompt heading of every screen of the reference journey, derived from the journey
 document — headings only, and a screen carrying no prompt heading fails the derivation rather than
-being skipped past. ADR 0007 is
-amended for the health-check divergence.
+being skipped past. ADR 0007 carries two amendments from this change: the health-check
+divergence (probing the candidate's tag, not the blended service), and the canary dwell
+(repeated probes over a bounded window, not one instant).
 
 Outstanding: the gates have not been run against this change and it has not promoted anything, so
 nothing here is proved. It promotes itself by carrying the `promote` label, and that is the

@@ -214,8 +214,13 @@ packages/
 examples/journeys/  the reference journey the port is induced from.
 docs/               this file, and the ADRs.
 scripts/            logic the workflows call, kept here so it can be tested: the preview
-                    smoke checks, tag removal, gcloud URL extraction, and the PR comment's
-                    update-or-create decision.
+                    smoke checks, tag removal, gcloud URL extraction, the PR comment's
+                    update-or-create decision, and the journey-derived smoke expectations
+                    (journey-expectations.mjs). scripts/promote/ holds the promotion's own
+                    decision logic — the green-gate wait, the ancestry and tree-equality
+                    checks, traffic capture/shift/restore, retagging, and the authorization
+                    check — for the same reason: inline workflow code only runs when its
+                    trigger fires, which for a rollback path can be never until it matters.
 tests/              tests for the review gate and for scripts/ (see below).
 .github/
   workflows/        CI, the antagonistic-review panel, the per-PR preview deploy
