@@ -60,18 +60,21 @@ jobs:
     # 90, not 45. The two largest step-level bounds alone — wait-for-green (35) and the image
     # build and push (20) — already sum to 55, more than the previous 45-minute job bound: a
     # healthy run that spent close to its own allowance waiting for other checks, or building a
-    # slow image, could hit the job timeout before it ever got to fail on its own terms. 90
-    # leaves real margin above that 55-minute floor for the rest of the sequence (whose
-    # remaining step bounds sum to roughly 165 more) without matching the full architectural sum
-    # of every step's own ceiling (~220), which would defeat the point of bounding the job at
-    # all. The rollback step below is what makes ANY point at which this fires safe — not the
-    # specific number chosen here.
+    # slow image, could hit the job timeout before it ever got to fail on its own terms. That
+    # 55-minute floor, and the job bound clearing it, are asserted directly by
+    # tests/promote-workflow-shape.test.ts — not restated here as a total, because a hand-summed
+    # total is exactly the kind of claim that drifts silently from the file it describes (this
+    # comment used to carry one, and on re-derivation it did not match). 90 leaves real margin
+    # above the floor for the rest of the sequence without claiming to be the full sum of every
+    # step's own ceiling, which would defeat the point of bounding the job at all. The rollback
+    # step below is what makes ANY point at which this fires safe — not the specific number
+    # chosen here.
     timeout-minutes: 90
     permissions:
       contents: write        # squash-merge writes to the base branch
       pull-requests: write   # merge the pull request
       id-token: write        # Workload Identity Federation
-      checks: read           # read this commit's check runs
+      checks: read            # read this commit's check runs
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -105,6 +108,20 @@ jobs:
           EOF
 
       # All remaining steps run only on same-repo PRs.
+
+      # ------------------------------------------------------------------
+      # Applying the `promote` label needs only GitHub's `triage` role — narrower than write.
+      # This job moves production traffic and merges to main unattended, so it checks the
+      # stronger bound explicitly rather than trusting the label mechanism's own, weaker one.
+      # ------------------------------------------------------------------
+      - name: Verify the actor holds write access, not just enough to apply a label
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/promote/assert-authorized.sh \
+            "${{ github.repository }}" "${{ github.actor }}"
 
       - name: Wait for every other check on this commit to go green
         if: github.event.pull_request.head.repo.full_name == github.repository
@@ -311,15 +328,26 @@ jobs:
           bash scripts/promote/retag.sh \
             "${{ env.IMAGE_REPO }}" "$IMAGE_DIGEST" "$MERGE_SHA"
 
-      - name: Pin traffic to the promoted revision and drop the candidate tag
+      - name: Drop the candidate tag now that traffic is pinned
         if: github.event.pull_request.head.repo.full_name == github.repository
         timeout-minutes: 10
         run: |
-          # Pinning by name leaves an assignment that still says what it means once the tag is
-          # gone. Tag removal reuses the preview cleanup script, whose three-part tolerance
-          # accepts "already absent" and nothing else.
-          bash scripts/promote/shift-traffic.sh \
-            "${{ env.SERVICE }}" "${{ env.REGION }}" "$CANDIDATE_REVISION" 100
+          # NOT a second traffic cut, deliberately. shift-traffic.sh moves traffic BY REVISION
+          # NAME, never by tag (see its own header) — so "Cut 100% of traffic to the candidate"
+          # above already pinned $CANDIDATE_REVISION to 100% by the only mechanism that exists.
+          # An earlier version of this step re-issued that same call here, on the theory that
+          # the first cut was "by tag" and this one was the real by-name pin; that theory was
+          # checked against shift-traffic.sh directly and does not hold — both calls were
+          # identical. Repeating it added a failure point strictly AFTER the merge, exactly
+          # where the rollback step below is deliberately disabled: a failure there could not
+          # have been rolled back, and had nothing left to accomplish. That is why it is gone,
+          # not why it should be re-added if this step is ever touched again.
+          #
+          # What remains is safe to fail on its own terms: if tag removal fails, production
+          # traffic is already, and remains, correctly pinned to $CANDIDATE_REVISION — only the
+          # now-unused preview tag is left routing alongside it, which is cosmetic debt, not a
+          # production hazard. Tag removal reuses the preview cleanup script, whose three-part
+          # tolerance accepts "already absent" and nothing else.
           bash scripts/remove-preview-tag.sh \
             "${{ env.SERVICE }}" "${{ env.REGION }}" "${{ env.CANDIDATE_TAG }}"
 
@@ -350,6 +378,13 @@ jobs:
       # exists to prevent. This is what implements the ruling on the tree-equality hazard —
       # after a successful merge, traffic STAYS on the canaried revision, which is the proven
       # artefact, and a human decides what happens next.
+      #
+      # That condition is necessary but not sufficient: a step's CONCLUSION is not the same fact
+      # as whether the merge actually happened. `gh pr merge` can succeed on GitHub's side and
+      # then have its OWN step marked `cancelled` by a job-level timeout landing mid-step, in
+      # which case this `if` alone would still let rollback run. rollback.sh is given the repo
+      # and PR number so it can ask GitHub directly — the same question squash-merge.sh already
+      # asks for idempotency — as a second, independent check before it touches any traffic.
       # ------------------------------------------------------------------
       - name: Roll back on failure or timeout
         if: |
@@ -359,5 +394,8 @@ jobs:
           steps.capture.conclusion == 'success' &&
           steps.merge.conclusion != 'success'
         timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          bash scripts/promote/rollback.sh "${{ env.SNAPSHOT_FILE }}" "${{ env.CANDIDATE_TAG }}"
+          bash scripts/promote/rollback.sh "${{ env.SNAPSHOT_FILE }}" "${{ env.CANDIDATE_TAG }}" \
+            "${{ github.repository }}" "${{ github.event.pull_request.number }}"

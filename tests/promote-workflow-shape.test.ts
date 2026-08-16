@@ -82,6 +82,70 @@ describe('promote.yml — everything is time-bounded', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The job bound must exceed the floor its own steps set. 45 vs a derived 55 was a live bug
+// earlier tonight, and nothing caught it — this is what catches it next time.
+// ---------------------------------------------------------------------------
+
+interface StepTimeout {
+  readonly name: string;
+  readonly minutes: number;
+}
+
+/** The job-level timeout-minutes: 4-space indent, distinct from any step's 8-space one. */
+function jobTimeoutMinutes(): number {
+  const m = /\n    timeout-minutes: (\d+)/.exec(yml);
+  if (!m) throw new Error('promote.yml: could not find the job-level timeout-minutes.');
+  return Number(m[1]);
+}
+
+/** Every step's own name and timeout-minutes bound, derived from the file, never hardcoded. */
+function stepTimeouts(): StepTimeout[] {
+  return steps().map((s) => {
+    const timeoutMatch = /timeout-minutes: (\d+)/.exec(s);
+    if (!timeoutMatch) {
+      throw new Error(`promote.yml: a step has no timeout-minutes — ${s.slice(0, 60)}`);
+    }
+    const nameMatch = /name: (.+)/.exec(s);
+    const name = nameMatch ? nameMatch[1]!.trim() : s.slice(0, 60).replace(/\n/g, ' ');
+    return { name, minutes: Number(timeoutMatch[1]) };
+  });
+}
+
+describe('promote.yml — the job bound exceeds the floor its own steps set', () => {
+  const job = jobTimeoutMinutes();
+  const sorted = [...stepTimeouts()].sort((a, b) => b.minutes - a.minutes);
+  const [largest, secondLargest] = sorted;
+  const floor = largest.minutes + secondLargest.minutes;
+
+  it('found real step timeouts to derive a floor from (a trivial list would prove nothing)', () => {
+    expect(sorted.length).toBeGreaterThan(2);
+    expect(floor).toBeGreaterThan(0);
+  });
+
+  it(
+    'exceeds the sum of its own two largest step bounds — below that floor a healthy run, ' +
+      'not a hung one, could be killed by the job timeout before either step got to fail on ' +
+      'its own terms',
+    () => {
+      expect(job).toBeGreaterThan(floor);
+    },
+  );
+
+  it('the job-timeout comment cannot silently drift from the file it describes', () => {
+    // Pins the one number in the comment that is actually load-bearing — the floor itself —
+    // against the derived value. The comment's own "~220" / "roughly 165" figures state their
+    // own approximation and are not chased here; this is the number the bound must clear.
+    expect(floor).toBe(55);
+    expect([largest.minutes, secondLargest.minutes].sort((a, b) => b - a)).toEqual([35, 20]);
+
+    const concurrencyIdx = yml.indexOf('cancel-in-progress: false');
+    const jobTimeoutIdx = yml.search(/\n    timeout-minutes: \d+/);
+    const jobComment = yml.slice(concurrencyIdx, jobTimeoutIdx);
+    expect(jobComment).toContain('already sum to 55');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // artefact-identity — the deploy is pinned to a digest
 // ---------------------------------------------------------------------------
 
@@ -132,8 +196,23 @@ describe('promote.yml — the traffic cut is 10 then 100', () => {
     // the one step in the sequence that observes real traffic on the new revision.
     const percents = [...flat.matchAll(/\$CANDIDATE_REVISION" (\d+)/g)].map((m) => Number(m[1]));
 
-    // 10, then 100 for the cut, then 100 again when traffic is pinned before the tag is dropped.
-    expect(percents).toEqual([10, 100, 100]);
+    // 10, then 100 — and ONLY once each. A prior version of this workflow re-issued the 100%
+    // cut a second time in the tag-drop step, on the mistaken theory that the first cut moved
+    // traffic by tag rather than by name; shift-traffic.sh never moves traffic by tag, so the
+    // second call was a true duplicate, added a failure point after the point where rollback is
+    // deliberately disabled, and was removed. A second 100 reappearing here means that
+    // regressed.
+    expect(percents).toEqual([10, 100]);
+  });
+
+  it('does not re-cut traffic after the merge — only the candidate tag is dropped there', () => {
+    // The step after the merge must not carry its own traffic-shift failure point: past the
+    // merge, rollback.sh's own merge-state guard refuses to move traffic at all, so a failure
+    // in a redundant cut here could never have been recovered automatically.
+    const dropTag = stepContaining('Drop the candidate tag');
+
+    expect(dropTag).toContain('scripts/remove-preview-tag.sh');
+    expect(dropTag).not.toContain('scripts/promote/shift-traffic.sh');
   });
 
   it('smokes the candidate BEFORE any traffic moves', () => {
@@ -264,6 +343,29 @@ describe('promote.yml — fork pull requests cannot promote', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The authorization boundary — applying a label needs only 'triage', which is narrower than
+// what actually moving production traffic and merging to main should require
+// ---------------------------------------------------------------------------
+
+describe('promote.yml — the actor is checked for write access, not just label-apply rights', () => {
+  it('checks the actor before anything else runs, right after the fork guard', () => {
+    const authIdx = yml.indexOf('Verify the actor holds write access');
+    const waitIdx = yml.indexOf('Wait for every other check');
+    const forkIdx = yml.indexOf('Skip promotion for fork pull requests');
+
+    expect(authIdx).toBeGreaterThan(forkIdx);
+    expect(authIdx).toBeLessThan(waitIdx);
+  });
+
+  it('delegates the decision to a tested script, not an inline permission string', () => {
+    const auth = stepContaining('Verify the actor holds write access');
+
+    expect(auth).toContain('scripts/promote/assert-authorized.sh');
+    expect(auth).toMatch(/assert-authorized\.sh[\s\S]*github\.repository[\s\S]*github\.actor/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The gate that decides whether the change is allowed to promote at all
 // ---------------------------------------------------------------------------
 
@@ -338,7 +440,7 @@ describe('promote.yml — history is deep enough to answer the questions asked o
       'Squash-merge the pull request',
       'Assert the merged tree equals the canaried tree',
       'Retag the proven image',
-      'Pin traffic to the promoted revision',
+      'Drop the candidate tag now that traffic is pinned',
     ].map((name) => yml.indexOf(name));
 
     expect(order.every((i) => i >= 0)).toBe(true);
@@ -397,6 +499,19 @@ describe('promote.yml — the rollback path', () => {
 
     expect(rollback).not.toContain('docker build');
     expect(rollback).not.toContain('gcloud run deploy');
+  });
+
+  it('gives rollback.sh the means to verify actual merge state, not just the step conclusion', () => {
+    // steps.merge.conclusion != 'success' is necessary but not sufficient: gh pr merge can
+    // succeed on GitHub's side and then have ITS OWN STEP marked cancelled or failed by a
+    // job-level timeout landing mid-step. The workflow condition alone cannot tell that apart
+    // from a merge that never happened, so rollback.sh is passed the repo and PR number and
+    // asks GitHub directly — the same question squash-merge.sh already asks for idempotency —
+    // as a second, independent check before it moves any traffic.
+    const rollback = stepContaining('Roll back on failure').replace(/\s+/g, ' ');
+
+    expect(rollback).toContain('scripts/promote/rollback.sh');
+    expect(rollback).toMatch(/rollback\.sh[^;]*\$\{\{ github\.repository \}\}[^;]*\$\{\{ github\.event\.pull_request\.number \}\}/);
   });
 });
 
