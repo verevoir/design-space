@@ -275,14 +275,6 @@ export function spawnVerifiedCopy(
       detached: true,
     });
 
-    const finish = (outcome) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutTimer);
-      clearTimeout(killTimer);
-      resolveOutcome(outcome);
-    };
-
     const killGroup = (signal) => {
       if (typeof child.pid !== 'number') return;
       try {
@@ -291,6 +283,54 @@ export function spawnVerifiedCopy(
         // The group may already be gone (everything already exited), or this platform has no
         // process-group semantics at all (Windows) — either way there is nothing further to do.
       }
+    };
+
+    /**
+     * EXTERNAL SIGNALS — the layer ABOVE this wrapper's own timeoutMs, not this wrapper's own
+     * internal bound. THE GAP THIS CLOSES: this wrapper spawns the panel `detached: true` so it
+     * can group-kill the panel and everything nested under it on this wrapper's OWN timeout —
+     * but `detached: true` also makes the panel the leader of a SECOND process group, separate
+     * from this wrapper's own. When something outside this wrapper (the runtime's own runner,
+     * enforcing its own timeoutMs, is the known case) sends SIGTERM to THIS wrapper's group,
+     * that reaches this process — but never the panel's group, since a negative-pid signal to
+     * one group does not reach a different one. Without a handler here, this wrapper dies on
+     * the runner's follow-up SIGKILL and the panel — and everything nested under it — is
+     * orphaned, running on unattended, still making paid model calls. The very detach that
+     * closed the nested-grandchild gap on THIS wrapper's own timeout is what opened this one;
+     * the fix is the same move applied one layer up: forward the signal.
+     *
+     * DELIBERATELY NOT a replay of this wrapper's own SIGTERM-then-wait-then-SIGKILL
+     * escalation. That escalation's own grace period (killGraceMs, 2000ms by default) is the
+     * SAME budget the runner grants THIS wrapper between its SIGTERM and its own SIGKILL —
+     * waiting here would consume that whole budget, and the runner's SIGKILL for this wrapper
+     * would land at essentially the same moment, quite possibly before any follow-up SIGKILL to
+     * the panel had a chance to fire. So: forward SIGTERM to the panel's group immediately, and
+     * let this process exit right away rather than waiting on anything.
+     *
+     * RESIDUAL, stated rather than hidden — same discipline as the TOCTOU window in the file
+     * header: a panel that ignores SIGTERM here gets no guaranteed follow-up SIGKILL before
+     * this wrapper itself is killed by whatever sent the original signal. Narrowed, not closed.
+     */
+    const forwardExternalSignal = (signal) => {
+      killGroup('SIGTERM');
+      // Registering a listener overrides Node's default terminate-on-SIGTERM/SIGINT
+      // disposition, so this handler must exit explicitly rather than relying on it —
+      // immediately, without waiting on the child's own 'exit' event, for the reason above.
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    };
+    const onExternalSigterm = () => forwardExternalSignal('SIGTERM');
+    const onExternalSigint = () => forwardExternalSignal('SIGINT');
+    process.once('SIGTERM', onExternalSigterm);
+    process.once('SIGINT', onExternalSigint);
+
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      process.removeListener('SIGTERM', onExternalSigterm);
+      process.removeListener('SIGINT', onExternalSigint);
+      resolveOutcome(outcome);
     };
 
     timeoutTimer = setTimeout(() => {
