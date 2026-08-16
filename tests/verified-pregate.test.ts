@@ -1,19 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, mkdir, realpath } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { describeSpawnResult, DEFAULT_SPAWN_TIMEOUT_MS, spawnTimeoutMs } from '../scripts/verified-pregate.mjs';
 
 // verified-pregate.mjs is what carries CLAUDE_CODE_OAUTH_TOKEN and AIGENCY_GUARDRAILS_TOKEN
 // into ../capabilities/scripts/run-pregate.mjs, a script that lives outside this repository and
 // is therefore not versioned with the code it reviews. What is tested here is that nothing gets
 // those credentials — nothing is spawned at all — unless the sibling script matches a digest
-// pinned in THIS repository. Every scenario below uses disposable fixtures via
-// PREGATE_TARGET_SCRIPT / PREGATE_PIN_FILE, never the real sibling checkout, so these tests are
-// independent of whatever ../capabilities happens to contain when CI runs.
+// pinned in THIS repository, that what actually runs is a verified COPY rather than the
+// original mutable path, and that a spawn failure or a hang is reported rather than swallowed.
+// Every scenario below uses disposable fixtures via PREGATE_TARGET_SCRIPT / PREGATE_PIN_FILE,
+// never the real sibling checkout, so these tests are independent of whatever ../capabilities
+// happens to contain when CI runs.
 
 const WRAPPER = fileURLToPath(new URL('../scripts/verified-pregate.mjs', import.meta.url));
 
@@ -49,10 +52,11 @@ async function pinFor(dir: string, targetPath: string): Promise<string> {
   return pinPath;
 }
 
-function runWrapper(env: Record<string, string>, args: string[] = []) {
+function runWrapper(env: Record<string, string>, args: string[] = [], cwd?: string) {
   const res = spawnSync(process.execPath, [WRAPPER, ...args], {
     encoding: 'utf-8',
     env: { ...process.env, ...env },
+    cwd,
   });
   return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
 }
@@ -155,9 +159,12 @@ describe('verified-pregate.mjs', () => {
     expect(r.code).toBe(7);
   });
 
-  it('resolves a relative PREGATE_PIN_FILE against the repository root, not cwd', async () => {
+  it('resolves a relative PREGATE_PIN_FILE against the repository root, not cwd — proven by running from elsewhere', async () => {
     // scripts/pregate.sha256 is exactly this shape in real use — a path relative to the repo,
-    // not to wherever the release step happens to be invoked from.
+    // not to wherever the release step happens to be invoked from. The previous version of this
+    // test spawned the wrapper WITHOUT changing cwd away from the repo root, so root-relative
+    // and cwd-relative resolution coincided and the test could not fail under a wrong
+    // implementation. Running from a genuinely different cwd is what makes the two diverge.
     const dir = await tmp('ds-vp-relpin-');
     const target = await fixtureTarget(dir);
     const digest = createHash('sha256').update(await readFile(target)).digest('hex');
@@ -167,15 +174,24 @@ describe('verified-pregate.mjs', () => {
     await mkdir(absDir, { recursive: true });
     await writeFile(join(absDir, 'pin.sha256'), `${digest}\n`, 'utf-8');
 
+    const elsewhere = await tmp('ds-vp-relpin-elsewhere-');
+
     try {
-      const r = runWrapper({
-        PREGATE_TARGET_SCRIPT: target,
-        PREGATE_PIN_FILE: join(relDir, 'pin.sha256'),
-      });
+      // cwd is `elsewhere`, nowhere near repoRoot. A cwd-relative resolution would look for
+      // `elsewhere/.tmp-verified-pregate-test-pin/pin.sha256`, which does not exist, and refuse.
+      const r = runWrapper(
+        {
+          PREGATE_TARGET_SCRIPT: target,
+          PREGATE_PIN_FILE: join(relDir, 'pin.sha256'),
+        },
+        [],
+        elsewhere,
+      );
 
       expect(r.code).toBe(0);
     } finally {
       await rm(absDir, { recursive: true, force: true });
+      await rm(elsewhere, { recursive: true, force: true });
     }
   });
 
@@ -188,5 +204,109 @@ describe('verified-pregate.mjs', () => {
     const pinned = (await readFile(join(repoRoot, 'scripts', 'pregate.sha256'), 'utf-8')).trim();
 
     expect(pinned).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  // -------------------------------------------------------------------------
+  // TOCTOU — what actually gets executed is a verified COPY, never TARGET again
+  // -------------------------------------------------------------------------
+
+  it('executes a copy of the verified bytes in TARGET\'s own directory, never TARGET again — and cleans it up', async () => {
+    const dir = await tmp('ds-vp-toctou-');
+    const target = join(dir, 'run-pregate.mjs');
+    await writeFile(
+      target,
+      [
+        "import { fileURLToPath } from 'node:url';",
+        "console.log('SELF_PATH=' + fileURLToPath(import.meta.url));",
+        'process.exit(0);',
+      ].join('\n'),
+      'utf-8',
+    );
+    const pinPath = await pinFor(dir, target);
+
+    const r = runWrapper({ PREGATE_TARGET_SCRIPT: target, PREGATE_PIN_FILE: pinPath });
+
+    expect(r.code).toBe(0);
+    const selfPathLine = r.out.split('\n').find((l) => l.startsWith('SELF_PATH='));
+    expect(selfPathLine).toBeDefined();
+    const executedPath = selfPathLine!.slice('SELF_PATH='.length);
+
+    // The whole point: what actually ran is NOT the original, still-mutable TARGET path — it is
+    // a fresh copy of the exact bytes already verified. A wrapper that spawned TARGET directly
+    // would fail this.
+    expect(executedPath).not.toBe(target);
+    // But it sits in the SAME directory as TARGET, so run-pregate.mjs's own
+    // dirname(import.meta.url) self-location still resolves to the real sibling checkout.
+    // realpath on both sides: macOS resolves os.tmpdir() through a /var -> /private/var
+    // symlink, which the executed script's own reported path already sees through.
+    expect(dirname(executedPath)).toBe(await realpath(dir));
+    // And it is cleaned up afterward — no stray verified copy left behind.
+    expect(existsSync(executedPath)).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // The credentialed spawn is bounded, and a spawn-level failure is legible
+  // -------------------------------------------------------------------------
+
+  it('kills a hung panel after its own bound and reports the signal, rather than waiting forever', async () => {
+    const dir = await tmp('ds-vp-hang-');
+    // Stays alive indefinitely without ever exiting.
+    const target = await fixtureTarget(dir, 'setInterval(() => {}, 1000);');
+    const pinPath = await pinFor(dir, target);
+
+    const r = runWrapper({
+      PREGATE_TARGET_SCRIPT: target,
+      PREGATE_PIN_FILE: pinPath,
+      PREGATE_SPAWN_TIMEOUT_MS: '300',
+    });
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('did not finish');
+    expect(r.err).toContain("wrapper's own");
+  });
+
+  it('spawnTimeoutMs honours PREGATE_SPAWN_TIMEOUT_MS and falls back on a bad value', () => {
+    expect(spawnTimeoutMs({ PREGATE_SPAWN_TIMEOUT_MS: '1234' })).toBe(1234);
+    expect(spawnTimeoutMs({ PREGATE_SPAWN_TIMEOUT_MS: 'not-a-number' })).toBe(DEFAULT_SPAWN_TIMEOUT_MS);
+    expect(spawnTimeoutMs({})).toBe(DEFAULT_SPAWN_TIMEOUT_MS);
+  });
+
+  describe('describeSpawnResult — pure, so a spawn failure never has to be reproduced live', () => {
+    it('reports a spawn that could not even start, rather than a bare exit(1)', () => {
+      const outcome = describeSpawnResult({ error: new Error('spawn ENOENT'), status: null, signal: null });
+
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.message).toContain('could not start');
+      expect(outcome.message).toContain('spawn ENOENT');
+    });
+
+    it('reports a signal-killed child, naming this wrapper\'s own bound', () => {
+      const outcome = describeSpawnResult({ error: null, status: null, signal: 'SIGTERM' }, 300);
+
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.message).toContain('terminated by signal SIGTERM');
+      expect(outcome.message).toContain('0-minute bound');
+    });
+
+    it('reports spawnSync\'s own ETIMEDOUT distinctly from a could-not-start failure', () => {
+      const err = Object.assign(new Error('spawnSync node ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      const outcome = describeSpawnResult({ error: err, status: null, signal: null }, 300);
+
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.message).toContain('did not finish');
+      expect(outcome.message).toContain("wrapper's own");
+      expect(outcome.message).not.toContain('could not start');
+    });
+
+    it('propagates a normal exit code untouched, with no message', () => {
+      expect(describeSpawnResult({ error: null, status: 0, signal: null })).toEqual({
+        exitCode: 0,
+        message: null,
+      });
+      expect(describeSpawnResult({ error: null, status: 7, signal: null })).toEqual({
+        exitCode: 7,
+        message: null,
+      });
+    });
   });
 });
