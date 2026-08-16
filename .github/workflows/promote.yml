@@ -263,6 +263,25 @@ jobs:
           TOKEN: ${{ steps.invoker_token.outputs.id_token }}
         run: echo "::add-mask::$TOKEN"
 
+      # ------------------------------------------------------------------
+      # The auth action REPLACES the ambient gcloud credential, it does not add to it. Minting
+      # the smoke token above switched every subsequent gcloud call to ds-invoker, which
+      # deliberately holds roles/run.invoker on this one service and nothing else (2S.5).
+      # shift-traffic.sh and rollback.sh both need run.services.get, which ds-invoker does not
+      # carry and must not be granted — that would put run.admin behind a curl again. So the
+      # ambient credential is switched straight back before anything downstream can touch
+      # traffic. The token minted above is unaffected: it is a string already captured in
+      # steps.invoker_token.outputs.id_token, not a live credential, so re-authenticating here
+      # does not invalidate it.
+      # ------------------------------------------------------------------
+      - name: Re-authenticate as the deploy identity before anything touches traffic
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account:            ${{ env.DEPLOYER_SA }}
+
       - name: Smoke the candidate while it carries no traffic
         if: github.event.pull_request.head.repo.full_name == github.repository
         timeout-minutes: 10

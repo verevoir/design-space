@@ -327,6 +327,76 @@ describe('promote.yml — how identity is established', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The invoker identity must never be the one active when traffic is mutated. The auth action
+// REPLACES the ambient gcloud credential rather than adding to it, so once the smoke token is
+// minted as ds-invoker (deliberately invoke-only, holding nothing else — 2S.5) every gcloud
+// call after it inherits that identity until something re-authenticates. This is what actually
+// failed in the first live promotion run: shift-traffic.sh and rollback.sh both need
+// run.services.get, which ds-invoker does not have.
+//
+// This is deliberately NOT pinned to today's single re-auth step. It replays the whole step
+// sequence and tracks which identity was MOST RECENTLY authenticated at each point, then checks
+// every traffic-mutating step against that — so a future step added anywhere after the invoker
+// mint, without re-authenticating, is caught the same way, not just the specific gap fixed here.
+// ---------------------------------------------------------------------------
+
+type Identity = 'NONE' | 'DEPLOYER' | 'INVOKER' | 'UNKNOWN';
+
+// steps() splits on the step boundary alone, so a comment block written ABOVE a step (this
+// file's own convention for explaining the next step) is textually still attached to the END
+// of the PREVIOUS step's slice. Scanning raw step text for a pattern like "shift-traffic.sh"
+// would then also match a prior step whose own comment merely NAMES that script in prose —
+// exactly the false positive this stripping avoids. Only non-comment lines are examined for
+// both the identity marker and the traffic-mutating pattern below.
+function stripComments(s: string): string {
+  return s
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+}
+
+/** The most-recently-authenticated identity at each step, in file order. */
+function identityAtEachStep(): Identity[] {
+  let current: Identity = 'NONE';
+  return steps().map((raw) => {
+    const s = stripComments(raw);
+    if (/uses: google-github-actions\/auth@[0-9a-f]{40}/.test(s)) {
+      if (/service_account:\s*\$\{\{\s*env\.DEPLOYER_SA\s*\}\}/.test(s)) current = 'DEPLOYER';
+      else if (/service_account:\s*\$\{\{\s*env\.INVOKER_SA\s*\}\}/.test(s)) current = 'INVOKER';
+      else current = 'UNKNOWN';
+    }
+    return current;
+  });
+}
+
+/** A step whose run: block could move or restore traffic — by name or by the raw gcloud verb. */
+const TRAFFIC_MUTATING = [/update-traffic/, /shift-traffic\.sh/, /rollback\.sh/];
+
+describe('promote.yml — the invoker identity is never the one active when traffic moves', () => {
+  const all = steps();
+  const identities = identityAtEachStep();
+  const trafficSteps = all
+    .map((s, i) => ({ s: stripComments(s), i }))
+    .filter(({ s }) => TRAFFIC_MUTATING.some((re) => re.test(s)));
+
+  it('found real traffic-mutating steps to check (a trivial list would prove nothing)', () => {
+    expect(trafficSteps.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('is authenticated as the deployer, never the invoker or nothing, at every one of them', () => {
+    const offenders = trafficSteps
+      .filter(({ i }) => identities[i] !== 'DEPLOYER')
+      .map(({ s, i }) => {
+        const m = /name: (.+)/.exec(s);
+        const name = m ? m[1]!.trim() : s.slice(0, 60).replace(/\n/g, ' ');
+        return `${name} (identity: ${identities[i]})`;
+      });
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fork guard
 // ---------------------------------------------------------------------------
 
@@ -443,6 +513,7 @@ describe('promote.yml — history is deep enough to answer the questions asked o
       'Capture the rollback target',
       'Build and push the image',
       'Deploy the candidate revision',
+      'Re-authenticate as the deploy identity before anything touches traffic',
       'Smoke the candidate while it carries no traffic',
       'Cut 10% of traffic',
       'Health-check the candidate under live traffic',
