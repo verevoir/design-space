@@ -141,12 +141,19 @@ jobs:
       - name: Assert the branch is up to date with its base
         if: github.event.pull_request.head.repo.full_name == github.repository
         timeout-minutes: 5
+        env:
+          # BASE_REF is a git branch name, which may legally contain backticks, $() and quotes.
+          # ${{ }} expressions are substituted into the script TEXT before the shell parses it,
+          # so interpolating one directly here would be a script-injection vector in a job that
+          # authenticates via WIF and merges to main unattended. Routed through env: instead —
+          # the same indirection this file already uses for the invoker ID token below.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           # Before anything is deployed: this is the last point at which stopping costs nothing.
           # It is also what makes the tree-equality check after the squash a confirmation.
-          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+          git fetch --no-tags origin "$BASE_REF"
           bash scripts/promote/assert-ancestry.sh \
-            "origin/${{ github.event.pull_request.base.ref }}" \
+            "origin/$BASE_REF" \
             "${{ github.event.pull_request.head.sha }}"
 
       - name: Authenticate to Google Cloud via WIF
@@ -317,11 +324,15 @@ jobs:
       - name: Assert the merged tree equals the canaried tree
         if: github.event.pull_request.head.repo.full_name == github.repository
         timeout-minutes: 10
+        env:
+          # See the "Assert the branch is up to date" step above for why BASE_REF is routed
+          # through env: rather than interpolated directly into the run: block.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           # This cannot be rolled back — the commit is already on the base branch. On failure
           # the script leaves traffic on the canaried revision, refuses to retag, and demands an
           # operator. See its header for why there is no safe automatic recovery.
-          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+          git fetch --no-tags origin "$BASE_REF"
           bash scripts/promote/assert-tree-equal.sh \
             "${{ github.event.pull_request.head.sha }}" "$MERGE_SHA"
 

@@ -581,3 +581,76 @@ describe('promote.yml — the trigger lets this workflow promote its own pull re
     expect(flat).toMatch(/github\.event\.pull_request\.draft == false/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// input-validation — no pull-request context field lands raw in a shell run: block
+//
+// ${{ }} expressions are substituted into the script TEXT before the shell parses it. A git
+// branch name (base.ref, head.ref) or free text (title, body, a label name) may legally contain
+// backticks, $() and quotes, so interpolating one directly opens script injection in a job that
+// authenticates via WIF, mints Cloud Run credentials, and merges to main unattended. This is
+// what a base.ref interpolation in two steps did until this was found and fixed.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every line of every `run:` block's content — both `run: |` blocks and single-line `run:`
+ * steps — with step names, `if:`, `env:` and `with:` blocks excluded. `env:` is exactly where a
+ * pull-request field SHOULD live, so scanning it would defeat the point of the fix.
+ */
+function runBlockLines(): string[] {
+  const lines = yml.split('\n');
+  const collected: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const blockStart = /^(\s+)run: \|\s*$/.exec(line);
+    if (blockStart) {
+      const indent = blockStart[1]!.length;
+      let j = i + 1;
+      while (j < lines.length) {
+        const l = lines[j]!;
+        if (l.trim() === '') {
+          j++;
+          continue;
+        }
+        const lineIndent = l.length - l.trimStart().length;
+        if (lineIndent <= indent) break;
+        collected.push(l);
+        j++;
+      }
+      i = j - 1;
+      continue;
+    }
+    const singleLine = /^\s+run: (.+)$/.exec(line);
+    if (singleLine) {
+      collected.push(singleLine[1]!);
+    }
+  }
+  return collected;
+}
+
+describe('promote.yml — pull-request context fields never land raw in a shell run: block', () => {
+  // Allowlisted BY FIELD, not by trusting "it's from the pull request": both are structurally
+  // constrained regardless of what the PR author chose — head.sha is a 40-hex git SHA computed
+  // by git, and number is a GitHub-assigned integer. Neither can carry a shell metacharacter.
+  // Everything else under github.event.pull_request is free text or attacker-influenced and
+  // MUST be routed through env: — this is a DENYLIST by default, so a field added later, not
+  // just base.ref (the one this pins), is caught without anyone updating this test.
+  const SAFE_PR_FIELDS = ['head.sha', 'number'];
+
+  it('found real run: content to scan (a trivial list would prove nothing)', () => {
+    expect(runBlockLines().length).toBeGreaterThan(50);
+  });
+
+  it('never interpolates an unvetted pull-request field directly into a run: block', () => {
+    const offenders: string[] = [];
+    for (const line of runBlockLines()) {
+      for (const m of line.matchAll(/\$\{\{\s*github\.event\.pull_request\.([a-zA-Z0-9_.]+)\s*\}\}/g)) {
+        const field = m[1]!;
+        if (!SAFE_PR_FIELDS.includes(field)) {
+          offenders.push(`github.event.pull_request.${field}  (in: ${line.trim()})`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
