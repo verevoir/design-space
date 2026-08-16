@@ -708,6 +708,19 @@ describe('squash-merge.sh', () => {
     expect(r.err).toContain('names no merge commit');
   });
 
+  it('fails rather than returning an empty SHA when a FRESH merge reports none, distinct from the already-merged case above', async () => {
+    // The sibling of the test above: that one covers the pre-check MERGED branch's own empty-SHA
+    // guard ('reports MERGED but names no merge commit'). This one is the OTHER copy of the same
+    // guard, reached only after `gh pr merge` itself succeeds (STATE starts OPEN, merge exits 0)
+    // and merge_sha() still comes back empty — a different message ('merged but names no merge
+    // commit') on a code path the test above never reaches, since it starts from STATE=MERGED and
+    // never calls `gh pr merge` at all.
+    const r = run('squash-merge.sh', ['o/r', '7'], await ghStub('OPEN', '', 0));
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('merged but names no merge commit');
+  });
+
   it('still recognises MERGED exactly when gh writes chatter to stderr on an otherwise-successful call', async () => {
     // Merging stderr into STATE (2>&1) would corrupt the exact comparison against "MERGED", and
     // a perfectly-merged PR would be refused as neither MERGED nor OPEN, for the wrong reason.
