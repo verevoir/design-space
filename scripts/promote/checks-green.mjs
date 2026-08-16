@@ -116,7 +116,17 @@ export function describeVerdict(summary) {
  * unwrapped the response is not punished for it.
  */
 export function parseCheckRuns(text) {
-  const parsed = JSON.parse(text);
+  // wait-for-green.sh pipes gh's own response straight into this. A truncated body, an HTML
+  // error page, or empty output would otherwise surface as a bare, unattributed "Unexpected
+  // token" from V8 — legible to nobody, and indistinguishable from every other crash this
+  // process could hit. Matching the payload-shape check below: a real message, thrown, caught
+  // by main()'s own handler, and printed with this module's name attached.
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`could not parse the check-runs response as JSON: ${err.message}`);
+  }
   if (Array.isArray(parsed)) return parsed;
   if (Array.isArray(parsed?.check_runs)) return parsed.check_runs;
   throw new Error('unrecognised check-runs payload: expected an array or {check_runs: [...]}');
