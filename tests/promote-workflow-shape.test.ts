@@ -242,8 +242,18 @@ describe('promote.yml — the health check reaches the candidate specifically', 
     // so a failure there says nothing about the candidate. Recorded divergence from ADR 0007.
     const health = stepContaining('Health-check the candidate under live traffic');
 
-    expect(health).toContain('smoke.sh "$TAG_URL"');
+    expect(health).toContain('observe-canary.sh "$TAG_URL"');
     expect(health).not.toContain('smoke.sh "$SERVICE_URL"');
+    expect(health).not.toContain('observe-canary.sh "$SERVICE_URL"');
+  });
+
+  it('observes the candidate over a bounded dwell rather than a single instantaneous probe', () => {
+    // A single probe fired the instant traffic lands proves only that the candidate answered
+    // once. The dwell is what gives a defect that develops from serving real traffic — a pool
+    // exhausting, memory pressure building — a window to surface before the cut goes to 100%.
+    const health = stepContaining('Health-check the candidate under live traffic');
+
+    expect(health).toContain('scripts/promote/observe-canary.sh');
   });
 
   it('pins the health check to the candidate revision', () => {

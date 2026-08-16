@@ -275,7 +275,7 @@ jobs:
 
       - name: Health-check the candidate under live traffic
         if: github.event.pull_request.head.repo.full_name == github.repository
-        timeout-minutes: 10
+        timeout-minutes: 8
         env:
           SMOKE_ID_TOKEN: ${{ steps.invoker_token.outputs.id_token }}
           SMOKE_EXPECT_REVISION: ${{ env.CANDIDATE_REVISION }}
@@ -285,7 +285,13 @@ jobs:
           # service url would be indistinguishable from a broken candidate. This is a recorded
           # divergence from ADR 0007 — see the amendment, which also states plainly what this
           # does NOT prove: that blended traffic is healthy.
-          bash scripts/smoke.sh "$TAG_URL"
+          #
+          # A SINGLE probe, fired the instant the cut lands, only proves the candidate answered
+          # once. observe-canary.sh repeats the same probe over a bounded dwell (5 probes, 15s
+          # apart — a 60s window) and stops on the FIRST failure rather than averaging one bad
+          # probe away. See the ADR 0007 amendment of 2026-08-16 and the script's own header for
+          # what this does and does not add over the single-probe version it replaces.
+          bash scripts/promote/observe-canary.sh "$TAG_URL"
 
       - name: Cut 100% of traffic to the candidate
         if: github.event.pull_request.head.repo.full_name == github.repository

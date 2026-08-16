@@ -119,6 +119,28 @@ a smoke would report a failed rollback that in fact succeeded. Once the first pr
 the rollback target becomes a revision that does serve `/health`, and the check should be
 strengthened to smoke the restored revision at that point.
 
+## Amendment, 2026-08-16 — the health check observes a dwell, not an instant
+
+The 2026-08-14 amendment fixed WHERE the health check probes (the candidate's tag url). It did
+not fix WHEN: a single request, fired the moment the 10% cut lands, proves only that the
+candidate answered once. Anything that develops from serving real traffic over time — a
+connection pool exhausting, memory pressure building, a slow leak — has no window in which to
+surface before the very next step cuts to 100%.
+
+**What changed.** The health-check step now runs `scripts/promote/observe-canary.sh`, which
+probes the candidate's tag url repeatedly — five times, fifteen seconds apart, a 60-second
+dwell by default — and stops the promotion on the FIRST failed probe. It does not average, and
+it does not retry: a candidate that answers four probes and fails the fifth is not "mostly
+healthy", the same fail-closed stance every other decision point in `scripts/promote/` already
+takes.
+
+**What this does NOT prove, stated as plainly as the previous amendment states it for the
+probe this replaces.** Every probe still hits the candidate's OWN tag url, never the blended
+service url — this still does not observe the blend. It observes the CANDIDATE, repeatedly, for
+longer. That is a narrowing of the gap the 2026-08-14 amendment already described, not a
+closure of it. The trigger-to-revisit below — telemetry against the incumbent's baseline — is
+unchanged by this and remains the actual fix.
+
 ## Trigger to revisit
 
 **Replace the tag-URL health check with telemetry on the canary.** The right check is not a probe

@@ -228,6 +228,19 @@ describe('traffic-snapshot — capturing a restore point', () => {
   it('refuses to build a restore argument from an empty snapshot', () => {
     expect(() => restoreSpec({ assignments: [] })).toThrow(/nothing to restore/);
   });
+
+  it('refuses to snapshot a describe payload carrying no status.traffic at all, rather than treating it as empty traffic', () => {
+    // The function's own doc-comment calls this "the rollback path's whole correctness". A
+    // malformed or truncated `gcloud run services describe` response — no status.traffic array
+    // at all, as opposed to an empty one — must refuse loudly here rather than be read as "no
+    // traffic to restore", which would let a promotion proceed with no real rollback target.
+    expect(() => snapshotFromDescribe({ status: {} }, { service: 's', region: 'r' })).toThrow(
+      /describe payload has no status\.traffic — cannot capture a restore point/,
+    );
+    expect(() => snapshotFromDescribe({}, { service: 's', region: 'r' })).toThrow(
+      /describe payload has no status\.traffic/,
+    );
+  });
 });
 
 describe('traffic-snapshot — which revision a tag names', () => {
@@ -249,6 +262,15 @@ describe('traffic-snapshot — which revision a tag names', () => {
     // Returning latestCreatedRevisionName here would be a guess that races any other deploy,
     // and the wrong answer would pin production traffic to a revision nobody smoked.
     expect(() => revisionForTag(describeJson, 'nope')).toThrow(/no traffic entry carries the tag/);
+  });
+
+  it('refuses to resolve a tag from a describe payload carrying no status.traffic at all', () => {
+    // Distinct from "no entry carries the tag" above: this is the case where the whole traffic
+    // array is absent, not merely lacking the requested tag. Falling through to the "no entry"
+    // branch here would report the wrong reason — a malformed describe response, not a genuinely
+    // untagged revision — which matters when someone is reading this during an incident.
+    expect(() => revisionForTag({ status: {} }, 'candidate')).toThrow(/describe payload has no status\.traffic/);
+    expect(() => revisionForTag({}, 'candidate')).toThrow(/describe payload has no status\.traffic/);
   });
 });
 

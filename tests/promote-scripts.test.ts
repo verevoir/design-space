@@ -891,3 +891,118 @@ describe('wait-for-green.sh', () => {
     expect(r.code).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// observe-canary.sh -- the canary must be watched for a window, not glanced at once
+// ---------------------------------------------------------------------------
+
+// A single instantaneous probe cannot distinguish "healthy" from "answered once, by luck".
+// What matters here is NOT that the script calls the probe -- it is that it calls it MORE THAN
+// ONCE, spaced out, and stops the promotion on the FIRST failure rather than treating a mostly-
+// healthy run as good enough. A test that only checked "the script exits non-zero when the probe
+// fails" would pass under a version that probed once, which is the exact defect this replaces.
+
+describe('observe-canary.sh', () => {
+  /** A stub SMOKE script recording each invocation's TAG_URL argument to `log`, and failing on
+   * call number `failOn` (1-indexed) if given, succeeding otherwise. */
+  async function smokeStub(failOn?: number): Promise<{ path: string; log: string }> {
+    const dir = await tmp('ds-observe-smoke-');
+    const log = join(dir, 'calls.log');
+    const counter = join(dir, 'count');
+    const path = join(dir, 'smoke.sh');
+    await writeFile(counter, '0', 'utf-8');
+    await writeFile(
+      path,
+      [
+        '#!/bin/sh',
+        `n=$(cat "${counter}")`,
+        'n=$((n + 1))',
+        `echo "$n" > "${counter}"`,
+        `echo "call $n: $1" >> "${log}"`,
+        failOn !== undefined ? `if [ "$n" -eq ${failOn} ]; then exit 1; fi` : 'true',
+        'exit 0',
+      ].join('\n'),
+      'utf-8',
+    );
+    await chmod(path, 0o755);
+    return { path, log };
+  }
+
+  function runObserve(smokePath: string, env: Record<string, string> = {}) {
+    const res = spawnSync('bash', [join(SCRIPTS, 'observe-canary.sh'), 'https://tag-url.example'], {
+      encoding: 'utf-8',
+      env: { ...process.env, CANARY_OBSERVE_SMOKE: smokePath, CANARY_OBSERVE_INTERVAL_S: '0', ...env },
+    });
+    return { code: res.status ?? 1, out: res.stdout ?? '', err: res.stderr ?? '' };
+  }
+
+  it('probes MORE THAN ONCE across the dwell when every probe succeeds', async () => {
+    const { path, log } = await smokeStub();
+
+    const r = runObserve(path, { CANARY_OBSERVE_PROBES: '3' });
+
+    expect(r.code).toBe(0);
+    const calls = (await readFile(log, 'utf-8')).trim().split('\n');
+    expect(calls).toHaveLength(3);
+  });
+
+  it('passes the TAG_URL argument through to every probe unchanged', async () => {
+    const { path, log } = await smokeStub();
+
+    runObserve(path, { CANARY_OBSERVE_PROBES: '2' });
+
+    const calls = await readFile(log, 'utf-8');
+    expect(calls).toContain('https://tag-url.example');
+  });
+
+  it('STOPS ON THE FIRST FAILURE rather than continuing through the remaining probes', async () => {
+    // The property that actually matters: a candidate that fails probe 2 of 5 must not be given
+    // probes 3, 4 and 5 to "average out" -- this is a fail-closed gate, not a health score.
+    const { path, log } = await smokeStub(2);
+
+    const r = runObserve(path, { CANARY_OBSERVE_PROBES: '5' });
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('probe 2/5 FAILED');
+    const calls = (await readFile(log, 'utf-8')).trim().split('\n');
+    // Exactly two calls -- the one that passed and the one that failed. Three or more would mean
+    // the script kept probing after a failure; fewer would mean it never reached the failure.
+    expect(calls).toHaveLength(2);
+  });
+
+  it('reports how many probes passed before the failure, not merely that one failed', async () => {
+    const { path } = await smokeStub(4);
+
+    const r = runObserve(path, { CANARY_OBSERVE_PROBES: '5' });
+
+    expect(r.err).toContain('answered 3 probe(s) and failed the next');
+  });
+
+  it('fails a single-probe run exactly like the version this replaces, when the one probe fails', async () => {
+    const { path } = await smokeStub(1);
+
+    const r = runObserve(path, { CANARY_OBSERVE_PROBES: '1' });
+
+    expect(r.code).not.toBe(0);
+  });
+
+  it('refuses a non-positive CANARY_OBSERVE_PROBES rather than silently probing zero times', async () => {
+    const { path } = await smokeStub();
+
+    const r = runObserve(path, { CANARY_OBSERVE_PROBES: '0' });
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('must be a positive integer');
+  });
+
+  it('refuses with no TAG_URL argument at all', async () => {
+    const { path } = await smokeStub();
+    const res = spawnSync('bash', [join(SCRIPTS, 'observe-canary.sh')], {
+      encoding: 'utf-8',
+      env: { ...process.env, CANARY_OBSERVE_SMOKE: path },
+    });
+
+    expect(res.status).not.toBe(0);
+    expect(res.stderr ?? '').toContain('usage:');
+  });
+});
