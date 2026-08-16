@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { describeSpawnResult, DEFAULT_SPAWN_TIMEOUT_MS, spawnTimeoutMs } from '../scripts/verified-pregate.mjs';
+import {
+  describeSpawnResult,
+  DEFAULT_SPAWN_TIMEOUT_MS,
+  spawnTimeoutMs,
+  stageVerifiedCopy,
+  ALLOWED_SPAWN_ENV_VARS,
+} from '../scripts/verified-pregate.mjs';
 
 // verified-pregate.mjs is what carries CLAUDE_CODE_OAUTH_TOKEN and AIGENCY_GUARDRAILS_TOKEN
 // into ../capabilities/scripts/run-pregate.mjs, a script that lives outside this repository and
@@ -195,6 +201,50 @@ describe('verified-pregate.mjs', () => {
     }
   });
 
+  it('resolves a relative PREGATE_TARGET_SCRIPT against the repository root, not cwd — proven by running from elsewhere', async () => {
+    // The asymmetric twin of the PREGATE_PIN_FILE test above: resolveTarget and resolvePinFile
+    // share the exact same `resolve(REPO_ROOT, env.X ?? default)` shape, but only the pin side
+    // had a test that could actually distinguish REPO_ROOT-relative from cwd-relative — the
+    // target side had none at all. Same construction, same reason: running from a genuinely
+    // different cwd than REPO_ROOT is what makes the two resolution strategies diverge.
+    const dir = await tmp('ds-vp-reltarget-');
+    const fixture = await fixtureTarget(dir);
+    const bytes = await readFile(fixture);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+
+    const repoRoot = dirname(dirname(WRAPPER));
+    const relDir = '.tmp-verified-pregate-test-target';
+    const absDir = join(repoRoot, relDir);
+    await mkdir(absDir, { recursive: true });
+    await writeFile(join(absDir, 'run-pregate.mjs'), bytes);
+    // Absolute, so this test isolates TARGET resolution — PIN_FILE resolution is already
+    // covered by the test above and is not what this one is proving.
+    const pinPath = join(absDir, 'pin.sha256');
+    await writeFile(pinPath, `${digest}\n`, 'utf-8');
+
+    const elsewhere = await tmp('ds-vp-reltarget-elsewhere-');
+
+    try {
+      // cwd is `elsewhere`. A cwd-relative resolveTarget would look for
+      // `elsewhere/.tmp-verified-pregate-test-target/run-pregate.mjs`, which does not exist,
+      // and refuse with "does not exist" rather than spawning successfully.
+      const r = runWrapper(
+        {
+          PREGATE_TARGET_SCRIPT: join(relDir, 'run-pregate.mjs'),
+          PREGATE_PIN_FILE: pinPath,
+        },
+        [],
+        elsewhere,
+      );
+
+      expect(r.code).toBe(0);
+      expect(r.err).not.toContain('does not exist');
+    } finally {
+      await rm(absDir, { recursive: true, force: true });
+      await rm(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it("this repository's own committed pin is a well-formed SHA-256 digest", async () => {
     // Not a claim that the pin is CURRENT against the sibling checkout — that comparison is
     // deliberately not made here, or CI (which has no sibling checkout at all) would fail on
@@ -269,6 +319,85 @@ describe('verified-pregate.mjs', () => {
     expect(spawnTimeoutMs({ PREGATE_SPAWN_TIMEOUT_MS: '1234' })).toBe(1234);
     expect(spawnTimeoutMs({ PREGATE_SPAWN_TIMEOUT_MS: 'not-a-number' })).toBe(DEFAULT_SPAWN_TIMEOUT_MS);
     expect(spawnTimeoutMs({})).toBe(DEFAULT_SPAWN_TIMEOUT_MS);
+  });
+
+  // -------------------------------------------------------------------------
+  // The child receives an explicit, minimal environment — never this process's own,
+  // wholesale. Asserted on the child's OWN reported environment, not merely that the tokens
+  // are present, which would pass just as happily under a full-inheritance leak.
+  // -------------------------------------------------------------------------
+
+  it('spawns the target with an explicit, minimal environment — not full inheritance', async () => {
+    const dir = await tmp('ds-vp-envleak-');
+    const target = join(dir, 'run-pregate.mjs');
+    await writeFile(
+      target,
+      "console.log('ENV_JSON=' + JSON.stringify(process.env)); process.exit(0);",
+      'utf-8',
+    );
+    const pinPath = await pinFor(dir, target);
+
+    const r = runWrapper({
+      PREGATE_TARGET_SCRIPT: target,
+      PREGATE_PIN_FILE: pinPath,
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth-test-token',
+      AIGENCY_GUARDRAILS_TOKEN: 'guardrails-test-token',
+      // Not in ALLOWED_SPAWN_ENV_VARS. If this reaches the child, inheritance leaked.
+      THIS_MUST_NOT_LEAK: 'super-secret-should-not-travel',
+    });
+
+    expect(r.code).toBe(0);
+    const line = r.out.split('\n').find((l) => l.startsWith('ENV_JSON='));
+    expect(line).toBeDefined();
+    const childEnv = JSON.parse(line!.slice('ENV_JSON='.length));
+
+    expect(childEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe('oauth-test-token');
+    expect(childEnv.AIGENCY_GUARDRAILS_TOKEN).toBe('guardrails-test-token');
+    expect(childEnv.THIS_MUST_NOT_LEAK).toBeUndefined();
+    // Every key the child received is a member of the allowed set — not merely that the two
+    // tokens are among them, but that NOTHING beyond the declared set travelled at all.
+    //
+    // __CF_USER_TEXT_ENCODING is excluded from that check, empirically rather than assumed: it
+    // showed up here even though it is in neither ALLOWED_SPAWN_ENV_VARS nor anything this test
+    // set, which means macOS/CoreFoundation injects it into a spawned process's own environ
+    // AFTER exec, independent of the envp this wrapper actually passed. It is platform noise
+    // this wrapper does not control and did not forward — unlike THIS_MUST_NOT_LEAK above,
+    // which genuinely would have appeared here had minimalEnv() not filtered it.
+    const PLATFORM_INJECTED_NOISE = ['__CF_USER_TEXT_ENCODING'];
+    const unexpected = Object.keys(childEnv).filter(
+      (k) => !(ALLOWED_SPAWN_ENV_VARS as readonly string[]).includes(k) && !PLATFORM_INJECTED_NOISE.includes(k),
+    );
+    expect(unexpected).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Staging the verified copy can fail (a full disk, a read-only directory) — previously
+  // reachable only by luck. stageVerifiedCopy takes an injectable `write`, so this is now a
+  // pure, deterministic test rather than one that depends on the filesystem's own failure modes.
+  // -------------------------------------------------------------------------
+
+  describe('stageVerifiedCopy — pure, so a staging failure never has to be reproduced live', () => {
+    it('reports a failure to stage the verified copy, rather than crashing or hanging', () => {
+      const failingWrite = () => {
+        throw new Error('ENOSPC: no space left on device');
+      };
+
+      expect(() =>
+        stageVerifiedCopy('/some/dir', Buffer.from('x'), { write: failingWrite }),
+      ).toThrow(/could not stage a verified copy.*ENOSPC/);
+    });
+
+    it('returns a real path inside targetDir when the write succeeds', () => {
+      const written: string[] = [];
+      const recordingWrite = (path: string) => {
+        written.push(path);
+      };
+
+      const copyPath = stageVerifiedCopy('/some/dir', Buffer.from('x'), { write: recordingWrite });
+
+      expect(copyPath.startsWith('/some/dir/')).toBe(true);
+      expect(written).toEqual([copyPath]);
+    });
   });
 
   describe('describeSpawnResult — pure, so a spawn failure never has to be reproduced live', () => {
