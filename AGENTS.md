@@ -73,28 +73,31 @@ not repeated.
   About five minutes and a couple of dollars — cheap against a CI round trip, and it runs the
   same five lenses.
 
-  The same script is also declared as the `pregate` release step in `aigency.json`, so it can be
-  driven through `run_release_step` instead of typed by hand — both paths invoke
-  `../capabilities/scripts/run-pregate.mjs`, and neither replaces the other. The declared step
-  needs `CLAUDE_CODE_OAUTH_TOKEN` (model credentials, replacing `PREGATE_PI_CONFIG` for that
-  invocation) and `AIGENCY_GUARDRAILS_TOKEN` (reads the provisioned rubric and publishes each
-  lens's verdict). A declaration's `env` list names variables, not values, so both must actually
-  be exported in the runtime's own process and listed in that runtime's `AIGENCY_ALLOWED_ENV`
-  before `aigency.json` naming them has any effect — the file cannot grant an environment variable
-  that was never exported.
+  The declared `pregate` release step in `aigency.json` — driven through `run_release_step`
+  instead of typed by hand — does **not** invoke `../capabilities/scripts/run-pregate.mjs`
+  directly. It invokes `scripts/verified-pregate.mjs`, an in-repo wrapper that hashes the
+  sibling script, compares the digest against the one pinned at `scripts/pregate.sha256`, and
+  refuses — loudly, on stderr, before any credential is passed — on a mismatch or if the sibling
+  script is simply absent. Hand-typing the command above bypasses that verification entirely; it
+  is meant for a developer who already trusts their own working checkout of `../capabilities`.
+  The declared step needs `CLAUDE_CODE_OAUTH_TOKEN` (model credentials, replacing
+  `PREGATE_PI_CONFIG` for that invocation) and `AIGENCY_GUARDRAILS_TOKEN` (reads the provisioned
+  rubric and publishes each lens's verdict). A declaration's `env` list names variables, not
+  values, so both must actually be exported in the runtime's own process and listed in that
+  runtime's `AIGENCY_ALLOWED_ENV` before `aigency.json` naming them has any effect — the file
+  cannot grant an environment variable that was never exported.
 
-  Threat model, stated plainly rather than left implicit: `run-pregate.mjs` is not versioned
-  with this repository, is not pinned to a commit, and is not checksummed before it runs — the
-  two tokens above are handed to whatever the sibling checkout happens to contain at call time.
-  No cloud, deploy, or repo-write credential reaches it; that is the entire credential surface.
-  If that checkout were modified between one invocation and the next, both tokens would be
-  exposed to whatever it now did, and nothing here catches that mechanically. This is an
-  accepted trade-off, not a fix: what keeps the exposure to an opt-in, local action rather than
-  something that fires on every commit is that the step stays advisory, non-blocking, and only
-  ever runs when a developer names it deliberately — never inside a gate or CI. Pinning
-  `../capabilities` to a specific commit and verifying it before invocation would close this
-  properly; that is future work this file's shape cannot enforce today, recorded here so it
-  reads as a decision rather than an oversight.
+  Threat model, stated plainly rather than left implicit: `run-pregate.mjs` lives in a sibling
+  repository, is not versioned with this one, and can change — deliberately or not — without any
+  change landing here. The pin at `scripts/pregate.sha256` closes the part of that gap that
+  matters most for the declared step: an unnoticed change to the sibling script cannot run with
+  this repository's credentials, because the wrapper refuses before spawning anything. It does
+  not make `run-pregate.mjs` itself trustworthy — a legitimate, reviewed change to it still needs
+  the pin updated deliberately, by computing the new digest
+  (`shasum -a 256 ../capabilities/scripts/run-pregate.mjs`, run from this repository's root) and
+  committing it in the same change; `scripts/pregate.sha256`'s own history is the record of when
+  and why the pin moved. No cloud, deploy, or repo-write credential reaches the sibling script
+  either way; that is the entire credential surface, pinned or not.
 
   The declared step also passes `--lens-timeout 480`, wider than the script's own 180-second
   default (`correctness` was once seen to exceed 180s and come back with no verdict at all,
