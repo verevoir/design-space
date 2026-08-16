@@ -903,6 +903,29 @@ describe('wait-for-green.sh', () => {
 
     expect(r.code).toBe(0);
   });
+
+  it('reports a legible ::error, not a raw crash, when gh answers 0 but the body is not valid JSON', async () => {
+    // The gap this closes: the gh api call itself SUCCEEDS (exit 0, so the API_RC guard above
+    // never fires), but the body it hands back cannot be parsed as JSON — a truncated response,
+    // an HTML error page from an edge proxy, or similar. Before this test, that body reached an
+    // unguarded `JSON.parse` inside an inline `node -e`, which threw uncaught: a bare,
+    // unattributed V8 stack trace on stderr, indistinguishable from a bug in this tooling,
+    // rather than the ::error-annotated failure every other decision point in this file (and
+    // its siblings in scripts/promote/) produces for a bad payload.
+    const dir = await stub('gh', 'this is not json', 0);
+
+    const r = run('wait-for-green.sh', ['o/r', 'abc123', 'promote'], dir, NOW);
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('::error title=Promotion blocked::could not read the total check count for abc123');
+    // Not just annotated — legible: the underlying reason travels with the annotation rather
+    // than being left on a separate, unattributed line above it.
+    expect(r.err).toContain('could not parse the check-runs response as JSON');
+    // The tell for "this is a raw crash", specifically: an uncaught V8 exception's stack trace
+    // always includes a line reading "at ... (node:...)" or similar internal frame markers.
+    // None of that belongs in this step's log once the parse failure is caught and reported.
+    expect(r.err).not.toContain('    at ');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -976,7 +999,12 @@ describe('observe-canary.sh', () => {
     const r = runObserve(path, { CANARY_OBSERVE_PROBES: '5' });
 
     expect(r.code).not.toBe(0);
-    expect(r.err).toContain('probe 2/5 FAILED');
+    // Not just the message -- the ANNOTATION. A test asserting only the substring
+    // 'probe 2/5 FAILED' would pass identically whether or not this line ever carries an
+    // ::error prefix, which is exactly the legibility gap review (resilience) found in this
+    // script's sibling (wait-for-green.sh's TOTAL parse): a plain echo reads as tooling noise
+    // in a promotion job's log, not as a diagnosable, annotated failure.
+    expect(r.err).toContain("::error title=Canary probe failed::probe 2/5 FAILED");
     const calls = (await readFile(log, 'utf-8')).trim().split('\n');
     // Exactly two calls -- the one that passed and the one that failed. Three or more would mean
     // the script kept probing after a failure; fewer would mean it never reached the failure.
@@ -1005,7 +1033,7 @@ describe('observe-canary.sh', () => {
     const r = runObserve(path, { CANARY_OBSERVE_PROBES: '0' });
 
     expect(r.code).not.toBe(0);
-    expect(r.err).toContain('must be a positive integer');
+    expect(r.err).toContain("::error title=Promotion blocked::CANARY_OBSERVE_PROBES must be a positive integer");
   });
 
   // CANARY_OBSERVE_PROBES had a test for its own validation guard; CANARY_OBSERVE_INTERVAL_S —
@@ -1018,7 +1046,7 @@ describe('observe-canary.sh', () => {
     const r = runObserve(path, { CANARY_OBSERVE_INTERVAL_S: 'ten' });
 
     expect(r.code).not.toBe(0);
-    expect(r.err).toContain('must be a non-negative integer');
+    expect(r.err).toContain("::error title=Promotion blocked::CANARY_OBSERVE_INTERVAL_S must be a non-negative integer");
   });
 
   it('refuses a negative CANARY_OBSERVE_INTERVAL_S rather than accepting it', async () => {

@@ -46,7 +46,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TAG_URL="${1:-}"
 if [[ -z "$TAG_URL" ]]; then
-  echo "usage: $0 <TAG_URL>" >&2
+  echo "::error title=Promotion blocked::usage: $0 <TAG_URL>" >&2
   exit 1
 fi
 
@@ -55,11 +55,11 @@ INTERVAL_S="${CANARY_OBSERVE_INTERVAL_S:-15}"
 SMOKE="${CANARY_OBSERVE_SMOKE:-${SCRIPT_DIR}/../smoke.sh}"
 
 if ! [[ "$PROBES" =~ ^[0-9]+$ ]] || [[ "$PROBES" -lt 1 ]]; then
-  echo "observe-canary: CANARY_OBSERVE_PROBES must be a positive integer, got '${PROBES}'" >&2
+  echo "::error title=Promotion blocked::CANARY_OBSERVE_PROBES must be a positive integer, got '${PROBES}'" >&2
   exit 1
 fi
 if ! [[ "$INTERVAL_S" =~ ^[0-9]+$ ]]; then
-  echo "observe-canary: CANARY_OBSERVE_INTERVAL_S must be a non-negative integer, got '${INTERVAL_S}'" >&2
+  echo "::error title=Promotion blocked::CANARY_OBSERVE_INTERVAL_S must be a non-negative integer, got '${INTERVAL_S}'" >&2
   exit 1
 fi
 
@@ -73,7 +73,7 @@ for (( i=1; i<=PROBES; i++ )); do
   echo "observe-canary: probe ${i}/${PROBES}"
   if ! bash "$SMOKE" "$TAG_URL"; then
     PASSED=$(( i - 1 ))
-    echo "observe-canary: probe ${i}/${PROBES} FAILED — stopping rather than cutting the remaining traffic. A candidate that answered ${PASSED} probe(s) and failed the next is not 'mostly healthy'." >&2
+    echo "::error title=Canary probe failed::probe ${i}/${PROBES} FAILED — stopping rather than cutting the remaining traffic. A candidate that answered ${PASSED} probe(s) and failed the next is not 'mostly healthy'." >&2
     exit 1
   fi
 done

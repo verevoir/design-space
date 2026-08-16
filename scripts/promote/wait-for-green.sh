@@ -51,7 +51,40 @@ while : ; do
     exit 1
   fi
 
-  TOTAL="$(printf '%s' "$BODY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).total_count ?? 0)))')"
+  # As with the gh api call above: stdout and stderr are captured SEPARATELY, and the parse
+  # failure is caught INSIDE node rather than left to crash uncaught. An unguarded JSON.parse
+  # here would print a raw, unattributed V8 stack trace to this step's log and exit — a
+  # promotion job's failure that says nothing is worse than one that says something wrong,
+  # because it reads as a bug in this tooling rather than a diagnosable condition. Every other
+  # decision point in scripts/promote/ answers a bad payload with an ::error annotation naming
+  # what went wrong; this is that same answer for the one parse in this file that did not have
+  # it. checks-green.mjs's own parseCheckRuns guards the identical parse of this same $BODY for
+  # the verdict a few lines below — this mirrors that, for the count.
+  TOTAL_STDERR="$(mktemp)"
+  set +e
+  TOTAL="$(printf '%s' "$BODY" | node -e '
+    let s = "";
+    process.stdin
+      .on("data", (d) => (s += d))
+      .on("end", () => {
+        try {
+          process.stdout.write(String(JSON.parse(s).total_count ?? 0));
+        } catch (err) {
+          process.stderr.write(`could not parse the check-runs response as JSON: ${err.message}\n`);
+          process.exit(1);
+        }
+      });
+  ' 2>"$TOTAL_STDERR")"
+  TOTAL_RC=$?
+  set -e
+  TOTAL_ERR="$(cat "$TOTAL_STDERR")"
+  rm -f "$TOTAL_STDERR"
+
+  if [ "$TOTAL_RC" -ne 0 ]; then
+    echo "::error title=Promotion blocked::could not read the total check count for ${SHA}: ${TOTAL_ERR}" >&2
+    exit 1
+  fi
+
   if [ "$TOTAL" -gt 100 ]; then
     echo "::error title=Promotion blocked::${TOTAL} checks on this commit exceeds the single page this reads; the verdict would be based on a subset." >&2
     exit 1
