@@ -312,10 +312,10 @@ change production is serving, and then lands it:
 | green gate | wait for every other check on the commit to conclude green, excluding this workflow's own check (else it would wait on itself) |
 | ancestry | assert the branch is up to date with its base — the last point at which stopping costs nothing |
 | deploy candidate | build, push, deploy a `candidate` revision **pinned by image digest**, carrying no traffic |
-| canary | smoke the candidate at zero traffic, cut 10%, health-check the candidate tag URL specifically, cut 100% |
+| canary | smoke the candidate at zero traffic, cut 10%, health-check the candidate tag URL specifically, cut 100% — this is where production traffic is pinned to the candidate revision, by name |
 | merge | squash-merge the pull request — only now, after the change has served all of production |
 | verify | assert the merged tree equals the canaried tree |
-| finish | retag the proven digest onto the merge commit, pin traffic to it by name, drop the `candidate` tag |
+| finish | retag the proven digest onto the merge commit, then drop the `candidate` tag — traffic is not touched again here; it was already pinned at the canary step above |
 
 **Rollback.** On failure or cancellation (including the job's own `timeout-minutes` bound, which
 GitHub reports as `cancelled` rather than `failed`) — but only while a restore point exists and

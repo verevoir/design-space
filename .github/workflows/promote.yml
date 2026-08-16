@@ -4,8 +4,9 @@ name: Promote
 #
 # The sequence, and why it is in this order:
 #   guard → wait for green → assert ancestry → auth → capture rollback target → build →
-#   deploy candidate (no traffic) → smoke → cut 10% → health-check → cut 100% → squash-merge →
-#   assert tree equality → retag the proven digest → pin traffic and drop the tag.
+#   deploy candidate (no traffic) → smoke → cut 10% → health-check → cut 100% (traffic is
+#   pinned here, by revision name) → squash-merge → assert tree equality → retag the proven
+#   digest → drop the candidate tag. See docs/architecture.md §9a for the full sequence table.
 #
 # TRIGGER FAMILY. `check_run`, `check_suite` and `workflow_run` all run from the DEFAULT branch.
 # A promotion workflow triggered by any of them could therefore never run from a pull request's

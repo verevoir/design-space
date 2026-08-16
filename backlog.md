@@ -322,9 +322,10 @@ recorded here so the next person does not have to rediscover them.
 
 **Status.** Implemented, not yet verified. `.github/workflows/promote.yml` runs the full sequence
 — wait for the other checks, assert ancestry, capture a rollback target, build, deploy a
-digest-pinned `candidate` revision at zero traffic, smoke, cut 10%, health-check, cut 100%,
-squash-merge, assert tree equality, retag the proven digest, pin traffic and drop the tag — with
-every step timeout-bounded and a rollback path guarded so it cannot move traffic after the merge.
+digest-pinned `candidate` revision at zero traffic, smoke, cut 10%, health-check, cut 100%
+(traffic pinned here), squash-merge, assert tree equality, retag the proven digest, drop the
+tag — with every step timeout-bounded and a rollback path guarded so it cannot move traffic
+after the merge. Full sequence and rationale: docs/architecture.md §9a.
 The decision logic lives in `scripts/promote/` with tests rather than in `run:` blocks. The smoke
 now asserts the prompt heading of every screen of the reference journey, derived from the journey
 document — headings only, and a screen carrying no prompt heading fails the derivation rather than
