@@ -54,6 +54,25 @@
  * PREGATE_SPAWN_TIMEOUT_MS and PREGATE_KILL_GRACE_MS override the wrapper's own spawn bound and
  * its escalation grace period, for the same reason.
  *
+ * SECURITY. Both overrides above are read from THIS PROCESS'S OWN environment — the same
+ * environment that also carries CLAUDE_CODE_OAUTH_TOKEN and AIGENCY_GUARDRAILS_TOKEN into
+ * whatever gets spawned. Whoever can set one can set the other, and someone who controls BOTH
+ * PREGATE_TARGET_SCRIPT and PREGATE_PIN_FILE controls the file being verified AND the digest it
+ * is verified against — the digest check becomes a comparison of an attacker's file to an
+ * attacker's own hash of it, true by construction, while the credentialed spawn still happens.
+ * The pin only means something if the location it can point at is not itself arbitrary, so
+ * resolveTarget/resolvePinFile REFUSE any override that does not resolve inside the OS temp
+ * directory or a `.tmp-verified-pregate-test-` subtree of this repository — see
+ * isFixtureLocation below, and the exact shape every fixture in tests/verified-pregate.test.ts
+ * already uses. RESIDUAL RISK, stated rather than hidden: this narrows the reachable set, it
+ * does not remove attacker control of the environment as a threat. Anyone able to set these two
+ * variables for the real credentialed run and ALSO able to write into the OS temp directory (a
+ * materially weaker bar than modifying this repository or the sibling checkout, but not
+ * nothing) could still stage a matching, self-verifying pair there. Closing that fully would
+ * mean this wrapper honours no override at all in a credentialed run — not done here, because
+ * it would also remove the only way this file's own tests exercise the real CLI entry point,
+ * which is by spawning it as a genuine subprocess against disposable fixtures.
+ *
  * WHAT THE CHILD ACTUALLY RECEIVES. Not this process's own environment, wholesale — an
  * explicit, minimal one, built fresh from ALLOWED_SPAWN_ENV_VARS below. A wrapper whose whole
  * reason to exist is not trusting what it is asked to run must equally not trust that whatever
@@ -63,17 +82,62 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, resolve, join, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..'); // scripts/ -> repo root
 
+/**
+ * Whether ABS_PATH lies inside one of the two locations this wrapper trusts as disposable test
+ * fixtures: the OS temp directory, or a `.tmp-verified-pregate-test-` prefixed subtree directly
+ * under this repository's root — the exact shape every PREGATE_TARGET_SCRIPT / PREGATE_PIN_FILE
+ * override in tests/verified-pregate.test.ts already uses. Exported so the boundary itself is
+ * directly testable, not merely its effect on resolveTarget/resolvePinFile. `tmpDir`/`repoRoot`
+ * are injectable for the same reason the rest of this file prefers injection to reaching for
+ * globals inside test scope.
+ */
+export function isFixtureLocation(absPath, { tmpDir = tmpdir(), repoRoot = REPO_ROOT } = {}) {
+  const t = resolve(tmpDir);
+  const p = resolve(absPath);
+  if (p === t || p.startsWith(t + sep)) return true;
+  const marker = resolve(repoRoot, '.tmp-verified-pregate-test-');
+  return p.startsWith(marker);
+}
+
+function resolveOverridable(env, envVar, defaultRelative, repoRoot, isFixture) {
+  const override = env[envVar];
+  const resolved = resolve(repoRoot, override ?? defaultRelative);
+  if (override !== undefined && !isFixture(resolved)) {
+    throw new Error(
+      `${envVar} redirects verification to ${resolved}, outside the locations this wrapper ` +
+        `trusts as disposable test fixtures (the OS temp directory, or a ` +
+        `.tmp-verified-pregate-test- subtree of this repository). Refusing: a target and its ` +
+        `pin can both be set through the environment, and the digest check only means ` +
+        `something if the location it verifies is not itself redirectable to anywhere on disk.`,
+    );
+  }
+  return resolved;
+}
+
 export function resolveTarget(env = process.env) {
-  return resolve(REPO_ROOT, env.PREGATE_TARGET_SCRIPT ?? '../capabilities/scripts/run-pregate.mjs');
+  return resolveOverridable(
+    env,
+    'PREGATE_TARGET_SCRIPT',
+    '../capabilities/scripts/run-pregate.mjs',
+    REPO_ROOT,
+    isFixtureLocation,
+  );
 }
 
 export function resolvePinFile(env = process.env) {
-  return resolve(REPO_ROOT, env.PREGATE_PIN_FILE ?? 'scripts/pregate.sha256');
+  return resolveOverridable(
+    env,
+    'PREGATE_PIN_FILE',
+    'scripts/pregate.sha256',
+    REPO_ROOT,
+    isFixtureLocation,
+  );
 }
 
 export const PIN_SHAPE = /^[0-9a-f]{64}$/;
@@ -313,12 +377,28 @@ function refuse(message) {
   process.exit(1);
 }
 
-const isMain = process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
+/**
+ * `import.meta.url` percent-encodes characters a raw filesystem path does not (a space becomes
+ * %20, and so on) — this repository's own checkout path could gain one at any time. The
+ * previous version compared against the literal string `file://${process.argv[1]}`, which is
+ * correct only when the path needs no such encoding; anywhere it does, the comparison silently
+ * fails and this file loads, runs its top-level declarations, and does NOTHING — no refusal
+ * message, no spawn, no non-zero exit: a credentialed run that looks complete having reviewed
+ * nothing. pathToFileURL performs the same encoding import.meta.url already carries, so both
+ * sides are compared on equal terms regardless of what characters the path contains.
+ */
+const isMain =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 /* c8 ignore start — the verify-and-spawn shim; the decisions above are what is unit tested. */
 if (isMain) {
-  const TARGET = resolveTarget();
-  const PIN_FILE = resolvePinFile();
+  let TARGET, PIN_FILE;
+  try {
+    TARGET = resolveTarget();
+    PIN_FILE = resolvePinFile();
+  } catch (err) {
+    refuse(err.message);
+  }
 
   if (!existsSync(PIN_FILE)) {
     refuse(`no pin file at ${PIN_FILE}. Nothing can be verified without one.`);
