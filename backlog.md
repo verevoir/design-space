@@ -56,6 +56,20 @@ fails.
 **Writes.** Repository root, every package manifest.
 **Unblocks.** Everything.
 
+**Debt recorded 2026-08-17.** `tests/tsconfig.json`'s `include` list is hand-maintained rather
+than globbed, because a full-glob probe (`npx tsc -b` against every `tests/*.test.ts`) found ten
+pre-existing test files that do not type-check under this project's strict settings: `ci-workflow-shape.test.ts`, `dockerfile-runtime-deps.test.ts`, `exit-contracts.test.ts`,
+`preview-workflow-shape.test.ts`, `promote-decisions.test.ts`, `promote-workflow-shape.test.ts`,
+`service-urls.test.ts`, `smoke-sh.test.ts`, `upsert-preview-comment.test.ts`,
+`verified-pregate.test.ts`. Two error classes account for all ten — implicit `any` from
+importing a sibling `.mjs` script with no declaration file (TS7016, cascading into TS7006 on its
+call sites), and a lookup used without a narrowing check under `noUncheckedIndexedAccess`
+(TS2345/TS2532/TS2322/TS18048). `tests/tsconfig-include-coverage.test.ts` tracks each by name
+with its specific reason and fails if a file is silently dropped from that list or from
+`include` without one. Fixing the ten is not scheduled as a story; picking one up means adding
+the missing narrowing checks or a declaration file for the `.mjs` import, then moving that file
+from the guard's `KNOWN_UNCHECKED` into `tests/tsconfig.json`'s `include`.
+
 **Status.** Done. Nine packages wired with one-way TypeScript project references in dependency
 order; `npm run verify` runs build → test → lint from a clean install on Node 20+. Deep imports
 are blocked by an eslint `no-restricted-imports` pattern over `@design-space/*/**` and by each
