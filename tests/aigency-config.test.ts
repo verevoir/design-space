@@ -10,6 +10,16 @@ import { fileURLToPath } from 'node:url';
 // tree, at time of writing, carries two extra release rows — board-status and rerun-checks —
 // that belong to a different story and must never ship on this one). Asserting structure
 // rather than content is what lets this file hold against either shape.
+//
+// THE RULE EVERY TEST BELOW FOLLOWS: an assertion whose expected value equals what a correct
+// implementation already produces is unverified — it cannot fail, because gutting the predicate
+// to a constant (e.g. always returning []) leaves it green too. This branch's shipped
+// aigency.json is small and entirely well-formed, so a test that checked only it would never
+// exercise the predicate's actual logic. Each test below instead proves its validator against a
+// constructed fixture carrying both a passing and a failing case, and checks the real config
+// only afterward, as one more input rather than the only one. Gut any predicate below to an
+// unconditional `[]` and its fixture assertion goes red; that is what makes each one a real
+// test rather than a vacuous one.
 
 interface Command {
   name?: unknown;
@@ -119,8 +129,6 @@ function blockingReleaseRows(cmds: Command[]): unknown[] {
 
 describe('aigency.json — every declared command is shaped correctly', () => {
   it('declares a name, a kind, and a non-empty command array on every row', () => {
-    // Fixture, not just the shipped config: every row this branch ships is already well-formed,
-    // so a check that only ever saw it would pass vacuously regardless of its logic.
     const fixture: Command[] = [
       { name: 'ok', kind: 'gate', command: ['x'] },
       { name: '', kind: 'gate', command: ['x'] },
@@ -141,8 +149,6 @@ describe('aigency.json — every declared command is shaped correctly', () => {
   });
 
   it('never declares a kind outside bootstrap, gate, or release', () => {
-    // Fixture, not just the shipped config: every row this branch ships already has a known
-    // kind, so a check that only ever saw it would pass vacuously regardless of its logic.
     const fixture: Command[] = [
       { name: 'ok', kind: 'gate' },
       { name: 'bad', kind: 'deploy' },
@@ -153,9 +159,6 @@ describe('aigency.json — every declared command is shaped correctly', () => {
   });
 
   it('bounds every command with a positive integer timeoutMs', () => {
-    // Fixture, not just the shipped config: every row this branch ships already carries a
-    // valid timeoutMs, so a check that only ever saw it would pass vacuously regardless of its
-    // logic.
     const fixture: Command[] = [
       { name: 'ok', timeoutMs: 1000 },
       { name: 'missing' },
@@ -173,10 +176,6 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     // The bug PR #9 exists to fix: an inherited row named a script (`typecheck`) this repo's
     // package.json does not define — `npm run <missing>` fails at the shell, silently, only
     // once the row actually runs. This is the test that would have caught it before it shipped.
-    //
-    // Fixture, not just the shipped config: every npm-run row this branch ships already names a
-    // real script, so a check that only ever saw it would pass vacuously regardless of its
-    // logic.
     const fixture: Command[] = [
       { name: 'build', command: ['npm', 'run', 'build'] },
       { name: 'ghost', command: ['npm', 'run', 'typecheck'] },
@@ -191,9 +190,6 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     // A value here (a literal token, or anything not shaped like SHOUT_CASE) would mean a
     // secret is one accidental paste away from landing in version control instead of being
     // read from the runtime's own environment at call time.
-    //
-    // Fixture, not just the shipped config: this branch's aigency.json has no env-bearing row
-    // at all, so a check that only ever saw it would pass vacuously regardless of its logic.
     const fixture: Command[] = [
       { name: 'ok', kind: 'release', command: ['x'], timeoutMs: 1, env: ['FOO_BAR'] },
       { name: 'not-an-array', kind: 'release', command: ['x'], timeoutMs: 1, env: 'FOO_BAR' },
@@ -202,16 +198,12 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     ];
     expect(badEnvRows(fixture)).toEqual(['not-an-array', 'lower-case', 'non-string-entry']);
 
-    // The shipped config, checked by that same function rather than being the only input to it.
     expect(badEnvRows(commands)).toEqual([]);
   });
 
   it('names only environment variables this repo genuinely expects', () => {
     // Every credentialed release step widens the credential surface a little; naming a
     // variable nobody asked for is exactly how that surface grows without anyone deciding it.
-    //
-    // Fixture, not just the shipped config: this branch's aigency.json has no env-bearing row
-    // at all, so a check that only ever saw it would pass vacuously regardless of its logic.
     const fixture: Command[] = [
       { name: 'known', kind: 'release', command: ['x'], timeoutMs: 1, env: ['CLAUDE_CODE_OAUTH_TOKEN'] },
       { name: 'unknown', kind: 'release', command: ['x'], timeoutMs: 1, env: ['SOME_OTHER_TOKEN'] },
@@ -224,10 +216,6 @@ describe('aigency.json — every declared command is shaped correctly', () => {
   it('embeds nothing credential-shaped inline in a command array', () => {
     // env names a variable to be read at call time; a command array is not the place for the
     // value itself, which would land in this file — and this repo's history — in the clear.
-    //
-    // Fixture, not just the shipped config: no row this branch ships carries anything
-    // credential-shaped, so a check that only ever saw it would pass vacuously regardless of
-    // its logic.
     const fixture: Command[] = [
       { name: 'ok', command: ['npm', 'run', 'build'] },
       { name: 'path-like', command: ['/usr/local/bin/some-long-opaque-token-value'] },
@@ -246,9 +234,6 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     // did would run inside an ordinary verify pass instead of only when named deliberately —
     // silently spending real money (pregate) or moving GitHub state (rerun-checks) on every
     // commit.
-    //
-    // Fixture, not just the shipped config: this branch's aigency.json has no release-kind row
-    // at all, so a check that only ever saw it would pass vacuously regardless of its logic.
     const fixture: Command[] = [
       { name: 'a-gate', kind: 'gate', command: ['x'], timeoutMs: 1, blocking: true },
       { name: 'quiet-release', kind: 'release', command: ['x'], timeoutMs: 1, blocking: false },
