@@ -342,6 +342,7 @@ jobs:
           echo "MERGE_SHA=$MERGE_SHA" >> "$GITHUB_ENV"
 
       - name: Assert the merged tree equals the canaried tree
+        id: tree_equal
         if: github.event.pull_request.head.repo.full_name == github.repository
         timeout-minutes: 10
         env:
@@ -387,6 +388,52 @@ jobs:
           # tolerance accepts "already absent" and nothing else.
           bash scripts/remove-preview-tag.sh \
             "${{ env.SERVICE }}" "${{ env.REGION }}" "${{ env.CANDIDATE_TAG }}"
+
+      # ------------------------------------------------------------------
+      # Why this step exists at all — the GITHUB_TOKEN event-suppression that stops preview.yml's
+      # own cleanup job from firing for a self-promoted merge — is documented once, in
+      # scripts/promote/close-preview-environment.sh's own header comment. Not restated here.
+      #
+      # always() is required for the same reason it is required on the rollback step below:
+      # without it, a step whose own `if` is not always() is skipped once any prior step's
+      # conclusion is not success — and "Drop the candidate tag" above is allowed to fail on its
+      # own terms (cosmetic debt, not a production hazard; see its own comment), which must not
+      # also suppress the branch-and-tag cleanup this step performs.
+      #
+      # steps.merge.conclusion == 'success' is NECESSARY BUT NOT SUFFICIENT. The merge is not the
+      # last correctness assertion in the sequence — "Assert the merged tree equals the canaried
+      # tree" runs AFTER it, and exists precisely because a merge can succeed while producing a
+      # tree that is not what was canaried (a race, a base that moved). That is the incident
+      # where the preview environment matters MOST: main now holds an unproven tree, traffic has
+      # been rolled back onto the canaried revision, and whoever investigates needs the preview
+      # deployment alive to compare against. Gating on merge success alone would close it in
+      # exactly that case. steps.tree_equal.conclusion == 'success' is added for this reason.
+      #
+      # Retag and the candidate-tag drop, both AFTER tree-equality in the sequence, are
+      # deliberately NOT included in this gate. Both are already documented as best-effort:
+      # retag repoints a tag onto a commit whose traffic is already pinned by revision name, not
+      # by that tag, and the candidate-tag drop's own comment calls a failure there "cosmetic
+      # debt, not a production hazard". Neither failing means main describes something
+      # production is not running — the one hazard this gate exists to keep the preview alive
+      # for.
+      # ------------------------------------------------------------------
+      - name: Close the preview environment for the merged pull request
+        if: |
+          always() &&
+          steps.merge.conclusion == 'success' &&
+          steps.tree_equal.conclusion == 'success' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # See "Assert the branch is up to date" above for why a git ref name is routed through
+          # env: rather than interpolated directly into the run: block — head.ref may legally
+          # contain backticks, $() and quotes.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          bash scripts/promote/close-preview-environment.sh \
+            "${{ env.SERVICE }}" "${{ env.REGION }}" "pr-${{ github.event.pull_request.number }}" \
+            "${{ github.repository }}" "$HEAD_REF"
 
       # ------------------------------------------------------------------
       # Rollback fires on failure() OR cancelled(), gated through always().

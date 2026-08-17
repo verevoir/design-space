@@ -316,6 +316,7 @@ change production is serving, and then lands it:
 | merge | squash-merge the pull request — only now, after the change has served all of production |
 | verify | assert the merged tree equals the canaried tree |
 | finish | retag the proven digest onto the merge commit, then drop the `candidate` tag — traffic is not touched again here; it was already pinned at the canary step above |
+| close preview | GitHub suppresses `pull_request: closed` for a merge performed by this workflow's own token, so `preview.yml`'s cleanup job — which only removes the `pr-<n>` tag — never runs for a self-promoted merge. This step restores that tag removal, and additionally deletes the head branch, which no existing job did |
 
 **Rollback.** On failure or cancellation (including the job's own `timeout-minutes` bound, which
 GitHub reports as `cancelled` rather than `failed`) — but only while a restore point exists and

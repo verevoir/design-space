@@ -255,14 +255,18 @@ describe('check-exit-contracts.mjs — CLI entry point (main())', () => {
 });
 
 describe('findUnassertedCodes — the real repository', () => {
-  it('reports no findings: rollback.sh\'s exit 2 and checks-green.mjs\'s 0/1/2 are all precisely asserted', () => {
+  it('reports no findings: rollback.sh\'s exit 2, checks-green.mjs\'s 0/1/2, and close-preview-environment.sh\'s 0/1/2 are all precisely asserted', () => {
     expect(findUnassertedCodes()).toEqual([]);
   });
 
-  it('confirms rollback.sh and checks-green.mjs are exactly the scripts this repository has with a genuine multi-outcome contract', () => {
+  it('confirms rollback.sh, checks-green.mjs, and close-preview-environment.sh are exactly the scripts this repository has with a genuine multi-outcome contract', () => {
     const found = scriptsWithMultiCodeContracts()
       .map((s) => s.relPath)
       .sort();
-    expect(found).toEqual(['scripts/promote/checks-green.mjs', 'scripts/promote/rollback.sh']);
+    expect(found).toEqual([
+      'scripts/promote/checks-green.mjs',
+      'scripts/promote/close-preview-environment.sh',
+      'scripts/promote/rollback.sh',
+    ]);
   });
 });

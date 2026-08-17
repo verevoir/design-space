@@ -51,6 +51,16 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
   order and concurrency; siblings in a wave must not write the same package.
 - **Keep the seams repo-shaped** (ADR 0004). The test of a correct boundary: could this package
   be published and consumed from another repository without moving code?
+- **Cut every branch from current `origin/main`, never from a local `main` that may be stale.**
+  A branch built on a stale base can be missing files the tree it was cut from already had —
+  scripts a workflow calls, tests a suite imports — and the failure surfaces later, as a
+  collection error or a missing-script error, not as an obviously wrong diff. Worse: once that
+  base is squash-merged, the branch cannot be rebased onto the new `main` at all. The squash
+  collapses the base's history into one commit with no ancestor the branch's own commits share,
+  so a rebase sees every file the squashed work created as independently added on both sides —
+  an ADD/ADD conflict on each one, not a content conflict a rebase can resolve. That is a
+  structural fact about squash merges, not a mistake to fix in the rebase; the only way out is a
+  fresh branch cut from the new base.
 
 ## Operating this repo
 

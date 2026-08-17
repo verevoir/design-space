@@ -522,10 +522,72 @@ describe('promote.yml — history is deep enough to answer the questions asked o
       'Assert the merged tree equals the canaried tree',
       'Retag the proven image',
       'Drop the candidate tag now that traffic is pinned',
+      'Close the preview environment for the merged pull request',
     ].map((name) => yml.indexOf(name));
 
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The preview environment is closed on a successful self-promoted merge, because
+// `pull_request: closed` is never delivered for a merge performed as GITHUB_TOKEN.
+// ---------------------------------------------------------------------------
+
+describe('promote.yml — the preview environment is closed after a successful merge', () => {
+  it('exists, after the candidate tag is dropped', () => {
+    const close = stepContaining('Close the preview environment for the merged pull request');
+    const dropIdx = yml.indexOf('Drop the candidate tag now that traffic is pinned');
+    const closeIdx = yml.indexOf('Close the preview environment for the merged pull request');
+
+    expect(close).not.toBe('');
+    expect(closeIdx).toBeGreaterThan(dropIdx);
+  });
+
+  it('runs only when the merge actually succeeded', () => {
+    // If the promotion failed or rolled back, the preview must survive — that is exactly when
+    // an operator needs it.
+    const close = stepContaining('Close the preview environment for the merged pull request');
+
+    expect(close).toMatch(/steps\.merge\.conclusion == 'success'/);
+  });
+
+  it('ALSO requires tree equality — merge success alone is not the last correctness assertion', () => {
+    // "Assert the merged tree equals the canaried tree" runs AFTER the merge and can fail even
+    // though the merge itself succeeded. That is precisely the incident where the preview must
+    // stay up: main holds a tree nobody canaried, and an operator needs the preview deployment
+    // alive to compare against. Gating on merge success alone would close it in exactly that
+    // case — this is the regression test for that gap.
+    const close = stepContaining('Close the preview environment for the merged pull request');
+
+    expect(close).toMatch(/steps\.tree_equal\.conclusion == 'success'/);
+  });
+
+  it('the tree-equality step carries the id this gate depends on', () => {
+    const treeEqual = stepContaining('Assert the merged tree equals the canaried tree');
+
+    expect(treeEqual).toMatch(/id: tree_equal/);
+  });
+
+  it('carries always(), so an earlier non-fatal step failure cannot suppress it', () => {
+    const close = stepContaining('Close the preview environment for the merged pull request');
+
+    expect(close).toContain('always()');
+  });
+
+  it('delegates to a tested script, not an inline run: block', () => {
+    const close = stepContaining('Close the preview environment for the merged pull request');
+
+    expect(close).toContain('scripts/promote/close-preview-environment.sh');
+  });
+
+  it('routes the branch name through env:, never interpolating it directly', () => {
+    // head.ref is a git ref name and may legally contain backticks, $() and quotes — the same
+    // injection hazard BASE_REF is routed around elsewhere in this file.
+    const close = stepContaining('Close the preview environment for the merged pull request');
+
+    expect(close).toMatch(/HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.ref \}\}/);
   });
 });
 
