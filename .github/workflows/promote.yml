@@ -390,14 +390,9 @@ jobs:
             "${{ env.SERVICE }}" "${{ env.REGION }}" "${{ env.CANDIDATE_TAG }}"
 
       # ------------------------------------------------------------------
-      # preview.yml's own cleanup job listens for `pull_request: closed`, but the merge above ran
-      # as GITHUB_TOKEN, and GitHub deliberately does not trigger further workflow runs from
-      # events an Actions token's own calls produce — to prevent recursive workflow loops. That
-      # suppression is invisible: no error, no skipped run, no run at all. So that event is never
-      # delivered for a self-promoted merge, and the cleanup job — correct on its own terms for
-      # the human-closes-a-PR-by-hand case it was built for — never fires for this one. This step
-      # is the promotion's own answer: it already knows the merge happened, so it closes the tag
-      # and the branch directly, without depending on an event GitHub will not send.
+      # Why this step exists at all — the GITHUB_TOKEN event-suppression that stops preview.yml's
+      # own cleanup job from firing for a self-promoted merge — is documented once, in
+      # scripts/promote/close-preview-environment.sh's own header comment. Not restated here.
       #
       # always() is required for the same reason it is required on the rollback step below:
       # without it, a step whose own `if` is not always() is skipped once any prior step's
