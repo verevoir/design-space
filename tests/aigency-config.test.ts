@@ -39,13 +39,60 @@ const ENV_NAME_SHAPE = /^[A-Z][A-Z0-9_]*$/;
 // script paths and short literals (branch names, timeouts) never look like this.
 const CREDENTIAL_SHAPED = /^[A-Za-z0-9_-]{20,}$/;
 
-// The three functions below are the validators the tests actually exercise. Pulling each out
-// lets a test prove the LOGIC — against constructed fixtures, valid and invalid — rather than
-// only checking whatever rows this branch's aigency.json happens to ship. A branch that ships
-// no env-bearing row and no release row (this one) would otherwise let all three checks pass
-// with nothing to reject, which is indistinguishable from a check that cannot fail no matter
-// what it computes. The shipped config is still checked, by calling the same function on it —
-// it is one more input to the validator, not the validator's only input.
+// Every function below is the validator a test actually exercises. Pulling each out lets a
+// test prove the LOGIC — against constructed fixtures, valid and invalid — rather than only
+// checking whatever rows this branch's aigency.json happens to ship. This branch's shipped
+// config is small and entirely well-formed (four rows, no env, no release row), so a check
+// that only ever saw it would pass vacuously regardless of its logic: gutting the predicate to
+// always return an empty array leaves every one of these assertions green, because the real
+// config never has anything to reject in the first place. The shipped config is still checked,
+// by calling the same function on it — it is one more input to the validator, not the
+// validator's only input.
+
+function malformedRows(cmds: Command[]): unknown[] {
+  return cmds
+    .filter(
+      (c) =>
+        typeof c.name !== 'string' ||
+        c.name.length === 0 ||
+        typeof c.kind !== 'string' ||
+        !Array.isArray(c.command) ||
+        c.command.length === 0,
+    )
+    .map((c) => c.name ?? '(unnamed)');
+}
+
+function unknownKindRows(cmds: Command[]): string[] {
+  return cmds
+    .filter((c) => !KNOWN_KINDS.has(c.kind as string))
+    .map((c) => `${String(c.name)}: ${String(c.kind)}`);
+}
+
+function unboundedRows(cmds: Command[]): unknown[] {
+  return cmds
+    .filter(
+      (c) =>
+        !(typeof c.timeoutMs === 'number' && Number.isInteger(c.timeoutMs) && c.timeoutMs > 0),
+    )
+    .map((c) => c.name);
+}
+
+function missingScriptRows(cmds: Command[], scripts: Set<string>): string[] {
+  return cmds
+    .filter(
+      (c) => Array.isArray(c.command) && c.command[0] === 'npm' && c.command[1] === 'run',
+    )
+    .filter((c) => !scripts.has((c.command as string[])[2] ?? ''))
+    .map((c) => `${String(c.name)} -> ${(c.command as string[])[2]}`);
+}
+
+function credentialShapedArgs(cmds: Command[]): string[] {
+  return cmds.flatMap((c) =>
+    (Array.isArray(c.command) ? (c.command as unknown[]) : [])
+      .filter((arg) => typeof arg === 'string' && !arg.includes('/') && CREDENTIAL_SHAPED.test(arg))
+      .map((arg) => `${String(c.name)}: ${String(arg)}`),
+  );
+}
 
 function badEnvRows(cmds: Command[]): unknown[] {
   return cmds
@@ -72,51 +119,72 @@ function blockingReleaseRows(cmds: Command[]): unknown[] {
 
 describe('aigency.json — every declared command is shaped correctly', () => {
   it('declares a name, a kind, and a non-empty command array on every row', () => {
-    const malformed = commands
-      .filter(
-        (c) =>
-          typeof c.name !== 'string' ||
-          c.name.length === 0 ||
-          typeof c.kind !== 'string' ||
-          !Array.isArray(c.command) ||
-          c.command.length === 0,
-      )
-      .map((c) => c.name ?? '(unnamed)');
+    // Fixture, not just the shipped config: every row this branch ships is already well-formed,
+    // so a check that only ever saw it would pass vacuously regardless of its logic.
+    const fixture: Command[] = [
+      { name: 'ok', kind: 'gate', command: ['x'] },
+      { name: '', kind: 'gate', command: ['x'] },
+      { kind: 'gate', command: ['x'] },
+      { name: 'no-kind', command: ['x'] },
+      { name: 'not-array', kind: 'gate', command: 'x' },
+      { name: 'empty-array', kind: 'gate', command: [] },
+    ];
+    expect(malformedRows(fixture)).toEqual([
+      '',
+      '(unnamed)',
+      'no-kind',
+      'not-array',
+      'empty-array',
+    ]);
 
-    expect(malformed).toEqual([]);
+    expect(malformedRows(commands)).toEqual([]);
   });
 
   it('never declares a kind outside bootstrap, gate, or release', () => {
-    const unknown = commands
-      .filter((c) => !KNOWN_KINDS.has(c.kind as string))
-      .map((c) => `${c.name}: ${String(c.kind)}`);
+    // Fixture, not just the shipped config: every row this branch ships already has a known
+    // kind, so a check that only ever saw it would pass vacuously regardless of its logic.
+    const fixture: Command[] = [
+      { name: 'ok', kind: 'gate' },
+      { name: 'bad', kind: 'deploy' },
+    ];
+    expect(unknownKindRows(fixture)).toEqual(['bad: deploy']);
 
-    expect(unknown).toEqual([]);
+    expect(unknownKindRows(commands)).toEqual([]);
   });
 
   it('bounds every command with a positive integer timeoutMs', () => {
-    const unbounded = commands
-      .filter(
-        (c) =>
-          !(typeof c.timeoutMs === 'number' && Number.isInteger(c.timeoutMs) && c.timeoutMs > 0),
-      )
-      .map((c) => c.name);
+    // Fixture, not just the shipped config: every row this branch ships already carries a
+    // valid timeoutMs, so a check that only ever saw it would pass vacuously regardless of its
+    // logic.
+    const fixture: Command[] = [
+      { name: 'ok', timeoutMs: 1000 },
+      { name: 'missing' },
+      { name: 'zero', timeoutMs: 0 },
+      { name: 'negative', timeoutMs: -5 },
+      { name: 'float', timeoutMs: 12.5 },
+      { name: 'string', timeoutMs: '1000' },
+    ];
+    expect(unboundedRows(fixture)).toEqual(['missing', 'zero', 'negative', 'float', 'string']);
 
-    expect(unbounded).toEqual([]);
+    expect(unboundedRows(commands)).toEqual([]);
   });
 
   it('names an npm script package.json actually defines, for every command that invokes one', () => {
     // The bug PR #9 exists to fix: an inherited row named a script (`typecheck`) this repo's
     // package.json does not define — `npm run <missing>` fails at the shell, silently, only
     // once the row actually runs. This is the test that would have caught it before it shipped.
-    const missing = commands
-      .filter(
-        (c) => Array.isArray(c.command) && c.command[0] === 'npm' && c.command[1] === 'run',
-      )
-      .filter((c) => !rootScripts.has((c.command as string[])[2] ?? ''))
-      .map((c) => `${c.name} -> ${(c.command as string[])[2]}`);
+    //
+    // Fixture, not just the shipped config: every npm-run row this branch ships already names a
+    // real script, so a check that only ever saw it would pass vacuously regardless of its
+    // logic.
+    const fixture: Command[] = [
+      { name: 'build', command: ['npm', 'run', 'build'] },
+      { name: 'ghost', command: ['npm', 'run', 'typecheck'] },
+      { name: 'not-npm', command: ['node', 'x.mjs'] },
+    ];
+    expect(missingScriptRows(fixture, rootScripts)).toEqual(['ghost -> typecheck']);
 
-    expect(missing).toEqual([]);
+    expect(missingScriptRows(commands, rootScripts)).toEqual([]);
   });
 
   it('declares env as an array of names, never values', () => {
@@ -156,13 +224,20 @@ describe('aigency.json — every declared command is shaped correctly', () => {
   it('embeds nothing credential-shaped inline in a command array', () => {
     // env names a variable to be read at call time; a command array is not the place for the
     // value itself, which would land in this file — and this repo's history — in the clear.
-    const suspicious = commands.flatMap((c) =>
-      (Array.isArray(c.command) ? (c.command as unknown[]) : [])
-        .filter((arg) => typeof arg === 'string' && !arg.includes('/') && CREDENTIAL_SHAPED.test(arg))
-        .map((arg) => `${String(c.name)}: ${String(arg)}`),
-    );
+    //
+    // Fixture, not just the shipped config: no row this branch ships carries anything
+    // credential-shaped, so a check that only ever saw it would pass vacuously regardless of
+    // its logic.
+    const fixture: Command[] = [
+      { name: 'ok', command: ['npm', 'run', 'build'] },
+      { name: 'path-like', command: ['/usr/local/bin/some-long-opaque-token-value'] },
+      { name: 'leaked', command: ['ghp_abcdefghijklmnopqrstuvwxyz0123456789'] },
+    ];
+    expect(credentialShapedArgs(fixture)).toEqual([
+      'leaked: ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+    ]);
 
-    expect(suspicious).toEqual([]);
+    expect(credentialShapedArgs(commands)).toEqual([]);
   });
 
   it('keeps every release-kind row out of reach of an ordinary gate run', () => {
