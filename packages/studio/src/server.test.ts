@@ -104,6 +104,45 @@ describe('createStudioServer()', () => {
       // the server did not pick up would still fail here.
       expect(body['portVersion']).toBe(PORT_VERSION);
     });
+
+    it('reports the Cloud Run revision that answered, sourced from K_REVISION', async () => {
+      // Why this field exists and what it distinguishes: docs/architecture.md §9a ("`/health`
+      // says which build answered").
+      const orig = process.env['K_REVISION'];
+      process.env['K_REVISION'] = 'design-space-studio-00042-abc';
+      try {
+        const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+        const base = await bindServer(server, register);
+        const res = await fetch(`${base}/health`);
+        const body = await res.json() as Record<string, unknown>;
+        expect(body['revision']).toBe('design-space-studio-00042-abc');
+      } finally {
+        if (orig === undefined) {
+          delete process.env['K_REVISION'];
+        } else {
+          process.env['K_REVISION'] = orig;
+        }
+      }
+    });
+
+    it('reports revision as an explicit null off Cloud Run rather than omitting the field', async () => {
+      // A missing field is ambiguous between "not running on Cloud Run" and "running on a build
+      // too old to report it", and the second is the case a caller must not silently accept.
+      const orig = process.env['K_REVISION'];
+      delete process.env['K_REVISION'];
+      try {
+        const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+        const base = await bindServer(server, register);
+        const res = await fetch(`${base}/health`);
+        const body = await res.json() as Record<string, unknown>;
+        expect(Object.keys(body)).toContain('revision');
+        expect(body['revision']).toBeNull();
+      } finally {
+        if (orig !== undefined) {
+          process.env['K_REVISION'] = orig;
+        }
+      }
+    });
   });
 
   describe('/ endpoint', () => {

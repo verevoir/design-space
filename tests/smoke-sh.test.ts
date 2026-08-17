@@ -2,7 +2,10 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
 import { createServer, Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { expectationsForFile } from '../scripts/journey-expectations.mjs';
 
 // ---------------------------------------------------------------------------
 // Behaviour tests for scripts/smoke.sh
@@ -32,8 +35,17 @@ const SMOKE_SH = resolve(
   '../scripts/smoke.sh',
 );
 
-// Heading and health-body strings smoke.sh asserts on.
-const GOOD_BODY_ROOT   = '<html><body><h1>Choose a new package</h1></body></html>';
+// The reference journey's screen headings, derived the same way smoke.sh derives them rather
+// than restated here. A hand-listed fixture would drift the moment a screen is added: the
+// fixture would keep passing while covering one screen fewer than the journey has.
+const JOURNEY_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../examples/journeys/broadband-switch.json',
+);
+const JOURNEY_HEADINGS = expectationsForFile(JOURNEY_PATH);
+
+// A page that renders every screen — the shape a healthy deployment serves.
+const GOOD_BODY_ROOT = `<html><body>${JOURNEY_HEADINGS.map((h) => `<h1>${h}</h1>`).join('')}</body></html>`;
 const GOOD_HEALTH_BODY = '{"status":"ok","portVersion":"1.0"}';
 
 // ---------------------------------------------------------------------------
@@ -313,7 +325,7 @@ describe('smoke.sh — /health body checks', () => {
         return;
       }
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end('<html>Choose a new package</html>');
+      res.end(GOOD_BODY_ROOT);
     });
     await new Promise<void>((res) => server.listen(0, '127.0.0.1', () => res()));
     const addr = server.address();
@@ -343,6 +355,171 @@ describe('smoke.sh — /health body checks', () => {
     const r = await runSmoke(`http://127.0.0.1:${port}`);
 
     expect(r.exitCode).toBe(0);
+  });
+});
+
+describe('smoke.sh — every screen of the journey, not just the first', () => {
+  let srv4: Server;
+
+  afterEach(async () => {
+    if (srv4) await new Promise<void>((r) => srv4.close(() => r()));
+  });
+
+  async function serveRoot(body: string): Promise<number> {
+    srv4 = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(GOOD_HEALTH_BODY);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(body);
+      }
+    });
+    await new Promise<void>((r) => srv4.listen(0, '127.0.0.1', () => r()));
+    const a = srv4.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('derives more than one expectation from the reference journey', () => {
+    // Guards the guard. If this collapses to one the widening has been undone, and the test
+    // below would still pass while checking nothing the old single-literal check did not.
+    expect(JOURNEY_HEADINGS.length).toBeGreaterThan(1);
+  });
+
+  it('fails when a LATER screen is missing, naming the screen', async () => {
+    // Precisely the page the old check passed: screen one rendered, the rest dropped.
+    const port = await serveRoot(`<html><body><h1>${JOURNEY_HEADINGS[0]}</h1></body></html>`);
+    const r = await runSmoke(`http://127.0.0.1:${port}`);
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain(JOURNEY_HEADINGS[JOURNEY_HEADINGS.length - 1]!);
+  });
+
+  it('passes when every screen heading is present', async () => {
+    const port = await serveRoot(GOOD_BODY_ROOT);
+
+    expect((await runSmoke(`http://127.0.0.1:${port}`)).exitCode).toBe(0);
+  });
+});
+
+describe('smoke.sh — SMOKE_EXPECT_REVISION pins which build answered', () => {
+  let srv5: Server;
+
+  afterEach(async () => {
+    if (srv5) await new Promise<void>((r) => srv5.close(() => r()));
+  });
+
+  async function serveRevision(revision: string | null): Promise<number> {
+    const health = JSON.stringify({ status: 'ok', portVersion: '1.0', revision });
+    srv5 = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(health);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(GOOD_BODY_ROOT);
+      }
+    });
+    await new Promise<void>((r) => srv5.listen(0, '127.0.0.1', () => r()));
+    const a = srv5.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('passes when the expected revision answered', async () => {
+    const port = await serveRevision('design-space-studio-00007');
+    const r = await runSmoke(`http://127.0.0.1:${port}`, {
+      SMOKE_EXPECT_REVISION: 'design-space-studio-00007',
+    });
+
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('fails when a DIFFERENT revision answered', async () => {
+    // The failure this exists for. At a 10% split the incumbent answers most requests, so a
+    // health check that did not pin the revision would happily pass against the old build and
+    // report the candidate healthy without ever reaching it.
+    const port = await serveRevision('design-space-studio-00002');
+    const r = await runSmoke(`http://127.0.0.1:${port}`, {
+      SMOKE_EXPECT_REVISION: 'design-space-studio-00007',
+    });
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/expected revision design-space-studio-00007/);
+  });
+
+  it('fails when the build reports no revision at all', async () => {
+    // A build too old to echo K_REVISION must not read as a match.
+    const port = await serveRevision(null);
+    const r = await runSmoke(`http://127.0.0.1:${port}`, {
+      SMOKE_EXPECT_REVISION: 'design-space-studio-00007',
+    });
+
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  it('asserts nothing about the revision when the variable is unset', async () => {
+    // Preview runs and local containers have no K_REVISION; requiring one would break both.
+    const port = await serveRevision(null);
+
+    expect((await runSmoke(`http://127.0.0.1:${port}`)).exitCode).toBe(0);
+  });
+});
+
+describe('smoke.sh — the two fatal branches around deriving journey expectations', () => {
+  let srv6: Server;
+  const tmpDirs: string[] = [];
+
+  afterEach(async () => {
+    if (srv6) await new Promise<void>((r) => srv6.close(() => r()));
+    await Promise.all(tmpDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  async function tmpJourney(content: string | null): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'ds-smoke-journey-'));
+    tmpDirs.push(dir);
+    const path = join(dir, 'journey.json');
+    if (content !== null) await writeFile(path, content, 'utf-8');
+    return path;
+  }
+
+  async function serveOk(): Promise<number> {
+    srv6 = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(GOOD_HEALTH_BODY);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body>anything</body></html>');
+      }
+    });
+    await new Promise<void>((r) => srv6.listen(0, '127.0.0.1', () => r()));
+    const a = srv6.address();
+    return a && typeof a === 'object' ? a.port : 0;
+  }
+
+  it('fails fatally, naming the path, when SMOKE_JOURNEY points at a file that does not exist', async () => {
+    // Fatal rather than a weaker fallback — a smoke that quietly narrowed its own coverage
+    // while still reporting success is the precise failure journey-smoke-coverage replaced.
+    const port = await serveOk();
+    const missing = await tmpJourney(null); // never written — the path does not exist
+    const r = await runSmoke(`http://127.0.0.1:${port}`, { SMOKE_JOURNEY: missing });
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('journey document not found');
+    expect(r.stderr).toContain(missing);
+  });
+
+  it('fails fatally, surfacing the reason, when the journey document cannot be turned into expectations', async () => {
+    // A journey with zero screens is valid JSON but journey-expectations.mjs refuses it —
+    // exercising the subprocess-failure branch in smoke.sh itself, not just the library
+    // function's own throw (already covered in tests/promote-decisions.test.ts).
+    const port = await serveOk();
+    const empty = await tmpJourney(JSON.stringify({ screens: [] }));
+    const r = await runSmoke(`http://127.0.0.1:${port}`, { SMOKE_JOURNEY: empty });
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('could not derive screen expectations');
+    expect(r.stderr).toContain(empty);
   });
 });
 

@@ -12,11 +12,15 @@ the same time, and hold disjoint write-sets. An increment is a real **barrier** 
 the previous wave lands before the next begins. The numbering states merge order, not branch
 topology.
 
-**Width:** fans to 2 after wave 0, narrows to 1 for 2S.1, then fans to 2 again — the deployment
+**Width:** fans to 2 after wave 0, narrows to 1 for 2S.1, then fans again — the deployment
 chain `2S.2 → 2S.3 → 2S.4` runs alongside wave 2, because it writes `studio`, `Dockerfile` and
-`.github/` while wave 2 writes `port`. Wave 3 then fans to 3.
-**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 3.1 → 4.2 → 5.1 → 6.1` — eight stories, so seven
-edges, each a genuine dependency rather than narrative order. The deployment chain is three
+`.github/` while wave 2 writes `port` and the adapter contract. Wave 2 itself holds two siblings:
+2.1 writes `port`, 2.2 writes `adapter-contract`, `render`, `gate` and `adapter-sketch`. Wave 3
+then fans to 3.
+**Critical path:** `0.1 → 1.1 → 2S.1 → 2.1 → 2.2 → 3.1 → 4.2 → 5.1 → 6.1` — nine stories, so eight
+edges, each a genuine dependency rather than narrative order. 2.2 sits on it because 3.1 reads
+the adapter contract 2.2 widens ("the contract this story needs is widened by 2.2, which lands
+first") — 2.1 alone no longer reaches 3.1 directly. The deployment chain is three
 stories long and is not on that path; it finishes well inside it.
 
 This file is the tracker (see `AGENTS.md`). A story carries a **Status** line once it moves, and
@@ -261,6 +265,18 @@ success for every failure — expired credentials, a network fault, a wrong serv
 the tag routing while the job went green. It now tolerates only an absent tag, judged from
 gcloud's own output naming *this* tag, and fails the job on anything else.
 
+**Known gap, recorded 2026-08-16.** The deploy job's checkout carries no explicit `ref:`, so on
+the `pull_request` event it builds from GitHub's synthetic merge commit, not the PR head, and
+tags the image with `github.sha` — which in that event context is the merge commit's SHA, not
+the head's. The artefact this workflow smoke-tests is therefore not provably the head tree's
+artefact whenever the base has moved since the last push. It also blocks a real optimisation in
+2S.4: today's `promote.yml` builds its own `candidate` image from the head SHA rather than
+reusing this one by digest, which is wasteful and produces a second artefact from the same
+source — exactly what ADR 0007's "the image that served traffic is the image that ships" argues
+against. Known fix: checkout and tag by `head.sha` here, then have `promote.yml` resolve that tag
+first and build only when none exists (a fork PR gets no preview, or the preview may have
+failed). Not yet scheduled as a story.
+
 ### 2S.4 A change reaches `main` only after serving production traffic
 
 **Outcome.** Promotion is: assert the branch fast-forwards onto `main`, deploy a `candidate`
@@ -304,6 +320,23 @@ recorded here so the next person does not have to rediscover them.
 
 ---
 
+**Status.** Implemented, not yet verified. `.github/workflows/promote.yml` runs the full sequence
+— wait for the other checks, assert ancestry, capture a rollback target, build, deploy a
+digest-pinned `candidate` revision at zero traffic, smoke, cut 10%, health-check, cut 100%
+(traffic pinned here), squash-merge, assert tree equality, retag the proven digest, drop the
+tag — with every step timeout-bounded and a rollback path guarded so it cannot move traffic
+after the merge. Full sequence and rationale: docs/architecture.md §9a.
+The decision logic lives in `scripts/promote/` with tests rather than in `run:` blocks. The smoke
+now asserts the prompt heading of every screen of the reference journey, derived from the journey
+document — headings only, and a screen carrying no prompt heading fails the derivation rather than
+being skipped past. ADR 0007 carries two amendments from this change: the health-check
+divergence (probing the candidate's tag, not the blended service), and the canary dwell
+(repeated probes over a bounded window, not one instant).
+
+Outstanding: the gates have not been run against this change and it has not promoted anything, so
+nothing here is proved. It promotes itself by carrying the `promote` label, and that is the
+intended first proof.
+
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
 **Outcome.** Preview and canary smoke tests authenticate as a principal holding
@@ -339,6 +372,42 @@ possible and removing or renaming one within a session is refused.
 **Reads.** `packages/journey-model`, `examples/journeys`.
 **Unblocks.** 3.1, 3.2, 3.3 — this is where the plan fans to three.
 
+### 2.2 An adapter supplies its own presentation, not only its markup
+
+**Outcome.** The adapter contract carries `styles` — a CSS rules string written against
+`var(--ds-*)` — and `tokens` — the token set as structured data — alongside `name` and
+`components`, and it lives in a package of its own. `render`, `gate` and `adapter-sketch` import
+that one contract, and the structural `AdapterLike` copies in `render` and `gate` are gone.
+Component appearance moves out of `render`'s module constant and into the sketch adapter.
+
+**Why.** ADR 0008. As built, `render` owns the `<style>` block, the contract has no way to
+contribute CSS, and `SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — so ADR 0001's central claim,
+that an adapter decides what a component looks like, is unimplemented and 3.1 has no way to give
+the sketch adapter a sketch style. Two things force the shape. 4.1's done-bar requires the
+contrast check to pass for each variant, and an opaque CSS string cannot be contrast-checked,
+which is why `tokens` is structured data. And the two `AdapterLike` copies are *structural*, not
+imports, so widening the contract without deleting them breaks nothing, changes nothing on the
+page, and reads exactly like a fix.
+
+**Done when.** The served page carries the sketch adapter's `--ds-*` properties; an adapter
+supplying different token values changes the rendering without changing any markup; component
+appearance is no longer in `render`'s module constant; `render` and `gate` type against the
+contract package and neither structural copy remains anywhere in the tree; two documents rendered
+from different adapters in one page do not affect each other's styling; and the gate reads a
+token value as data rather than as text.
+
+**Open question, recorded 2026-08-16.** That last clause does not appear to be covered by
+anything else in this story's scope — `packages/gate` never references `adapter.tokens`; the
+only reader of token values today is `render`'s `tokensBlock()`. Either the clause belongs to
+4.1, which is what actually needs the gate's contrast check to read token values as data, and
+was misplaced here, or this story was meant to wire `gate` to `tokens` and has not. Needs an
+operator ruling before this story can be marked done against that clause.
+
+**Writes.** `packages/adapter-contract`, `packages/render`, `packages/gate`,
+`packages/adapter-sketch`.
+**Reads.** `packages/port`.
+**Unblocks.** 3.1, and through it 4.1. Disjoint from 2.1, which writes `port` alone.
+
 ---
 
 ## Wave 3 — three siblings off the port
@@ -348,16 +417,12 @@ against any particular adapter, which is what keeps it a sibling of 3.1 rather t
 
 ### 3.1 The sketch adapter renders every component in the port
 
-**Known gap, found 2026-08-12 by running the container rather than the suite.** `render.ts` owns the
-`<style>` block through a module constant, and the `Adapter` interface has **no way to contribute
-CSS at all**. So every adapter currently renders with identical styling, and
-`SKETCH_CSS_CUSTOM_PROPERTIES` is dead code — defined, exported, pinned by a test file that
-asserts every one of its token values, and referenced by nothing outside that test. The served
-page contains no `--ds-*` properties.
-
-That is ADR 0001's central claim unimplemented: an adapter is supposed to decide what a component
-looks like. **This story must widen the `Adapter` contract to carry presentation**, not only
-markup, or the sketch style cannot exist and 4.1 cannot work.
+**The contract this story needs is widened by 2.2, which lands first.** The gap found 2026-08-12
+— `render` owning the `<style>` block, the adapter contract unable to contribute CSS, and
+`SKETCH_CSS_CUSTOM_PROPERTIES` dead — is 2.2's work, decided in ADR 0008 and taken out of this
+story deliberately: widening a contract that `render` and `gate` both copy structurally is a
+different job from designing a hand-drawn rendering, and doing both here would repeat 2S.1's one
+story, two jobs. This story writes the sketch style *against* that contract.
 
 **Outcome.** A hand-drawn adapter implements the whole port. The rendering reads as provisional
 through typography and colour — handwriting face, warm paper, ink rather than black, one hard
@@ -414,7 +479,7 @@ design system) from a *defect* (a finding about the adapter).
 
 ### 4.1 Token-variant adapters carry the airy-versus-dense conversation
 
-**Blocked on 3.1's adapter-contract widening.** A token-variant adapter changes values over shared
+**Blocked on 2.2, the adapter-contract widening.** A token-variant adapter changes values over shared
 markup (ADR 0001's degenerate case) — which is only meaningful once an adapter can supply those
 values. Today it cannot, so swapping a token set would change nothing on screen.
 

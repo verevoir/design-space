@@ -71,6 +71,16 @@ prop shapes, derived from real journeys rather than designed a priori. An adapte
 it, and may do so with completely different markup: a fixed bottom action bar, a different
 confirmation pattern, its own structural opinions.
 
+What an adapter supplies **is to become markup, styles and tokens** — decided in ADR 0008 and
+scheduled as story 2.2, not yet built: component renderers, a CSS rules string written against
+`var(--ds-*)`, and its token set as structured data rather than an opaque blob — structured
+because the contrast check of §7 will have to read a value, not parse a stylesheet. That contract
+is to live in its own package, `adapter-contract`, and deliberately not in `port`, which may not
+know about rendering.
+
+Until 2.2 lands, the contract is `name` and `components` alone: `render` owns the whole `<style>`
+block, so an adapter cannot contribute CSS and every adapter renders identically.
+
 Two consequences worth stating plainly:
 
 - **Token-only themes are a degenerate adapter.** "Lighter, more airy" reuses the sketch
@@ -193,6 +203,7 @@ flow one way; no deep imports across packages.
 packages/
   journey-model/    schema, types, validation.  Knows nothing about rendering.
   port/             component contracts + extraction from journeys.
+  adapter-contract/ planned (story 2.2): components, styles, structured tokens.
   adapter-sketch/   the reference adapter. Hand-crafted.
   adapter-tokens/   degenerate token-variant adapters over the sketch markup.
   store/            the (object, ref) resolver. Git-backed today.
@@ -203,11 +214,17 @@ packages/
 examples/journeys/  the reference journey the port is induced from.
 docs/               this file, and the ADRs.
 scripts/            logic the workflows call, kept here so it can be tested: the preview
-                    smoke checks, tag removal, gcloud URL extraction, and the PR comment's
-                    update-or-create decision.
+                    smoke checks, tag removal, gcloud URL extraction, the PR comment's
+                    update-or-create decision, and the journey-derived smoke expectations
+                    (journey-expectations.mjs). scripts/promote/ holds the promotion's own
+                    decision logic — the green-gate wait, the ancestry and tree-equality
+                    checks, traffic capture/shift/restore, retagging, and the authorization
+                    check — for the same reason: inline workflow code only runs when its
+                    trigger fires, which for a rollback path can be never until it matters.
 tests/              tests for the review gate and for scripts/ (see below).
 .github/
-  workflows/        CI, the antagonistic-review panel, and the per-PR preview deploy.
+  workflows/        CI, the antagonistic-review panel, the per-PR preview deploy
+                    (`preview.yml`), and the label-triggered promotion (`promote.yml`).
   antagonistic-review/   the panel's scripts. All of them move together.
 ```
 
@@ -281,6 +298,40 @@ because **inline workflow code is only executed when its trigger fires** — and
 undetected in the cleanup step through several green runs for exactly that reason. Every `run:`
 block is now parsed with `bash -n` at test time.
 
+### Promotion (`promote.yml`)
+
+A separate workflow from `preview.yml`, triggered by the `promote` label rather than by every
+push (ADR 0007, story 2S.4). A pull request already has a `pr-<n>` preview from the workflow
+above; labelling it `promote` runs a distinct sequence that turns that same change into the
+change production is serving, and then lands it:
+
+| step | what happens |
+|---|---|
+| guard | fork PRs are skipped, with the reason in the job summary — WIF cannot issue them a credential |
+| authorization | the actor who applied the label is checked for **admin or write** permission via the GitHub API. Applying a label itself needs only GitHub's `triage` role, which is narrower than write — this closes that gap explicitly rather than relying on it |
+| green gate | wait for every other check on the commit to conclude green, excluding this workflow's own check (else it would wait on itself) |
+| ancestry | assert the branch is up to date with its base — the last point at which stopping costs nothing |
+| deploy candidate | build, push, deploy a `candidate` revision **pinned by image digest**, carrying no traffic |
+| canary | smoke the candidate at zero traffic, cut 10%, health-check the candidate tag URL specifically, cut 100% — this is where production traffic is pinned to the candidate revision, by name |
+| merge | squash-merge the pull request — only now, after the change has served all of production |
+| verify | assert the merged tree equals the canaried tree |
+| finish | retag the proven digest onto the merge commit, then drop the `candidate` tag — traffic is not touched again here; it was already pinned at the canary step above |
+
+**Rollback.** On failure or cancellation (including the job's own `timeout-minutes` bound, which
+GitHub reports as `cancelled` rather than `failed`) — but only while a restore point exists and
+only while the merge has not succeeded. That second condition is checked twice: once from the
+workflow's own step conclusion, and independently by asking GitHub directly whether the pull
+request is actually `MERGED`, since a step's conclusion can read `cancelled` even after the
+underlying `gh pr merge` call already succeeded. **After a successful merge, traffic is left on
+the canaried revision** — the proven artefact — and an operator decides; nothing is retagged or
+rolled back automatically, because the commit is already on `main` and cannot be un-merged here.
+
+Auth, identities and the digest pin are shared with the deploy path described above. The
+decision logic — the green-gate wait, the ancestry and tree-equality checks, traffic capture and
+restore, retagging, the authorization check — all live in `scripts/promote/` with tests, for the
+same reason as the preview workflow: inline `run:` code only runs when its trigger fires, which
+for a rollback path can be never until the day it matters.
+
 ### Two identities, and why
 
 | identity | holds | used for |
@@ -293,6 +344,15 @@ The smoke test calls the service; it has no business being able to administer it
 token as the deployer put `run.admin` behind a curl, so a workflow change that leaked the token
 would have leaked an administrative credential. All three are assumable only under the WIF
 provider condition `assertion.repository=='verevoir/design-space'`.
+
+### `/health` says which build answered
+
+It returns `status`, `portVersion` and `revision`. `revision` is Cloud Run's `K_REVISION`, echoed
+back, and is `null` when the container runs anywhere else. It exists because `portVersion` is a
+compile-time constant of the port package, so every build of a given port version reports the same
+value and no caller can tell two of them apart. The promotion's health check needs exactly that
+distinction — at a 10% traffic split the incumbent answers most requests, so a check that could
+not name the revision would pass without ever reaching the candidate.
 
 ### The health endpoint is `/health`
 

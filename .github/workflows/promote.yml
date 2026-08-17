@@ -1,0 +1,438 @@
+name: Promote
+
+# A change reaches `main` only after serving production traffic — ADR 0007.
+#
+# The sequence, and why it is in this order:
+#   guard → wait for green → assert ancestry → auth → capture rollback target → build →
+#   deploy candidate (no traffic) → smoke → cut 10% → health-check → cut 100% (traffic is
+#   pinned here, by revision name) → squash-merge → assert tree equality → retag the proven
+#   digest → drop the candidate tag. See docs/architecture.md §9a for the full sequence table.
+#
+# TRIGGER FAMILY. `check_run`, `check_suite` and `workflow_run` all run from the DEFAULT branch.
+# A promotion workflow triggered by any of them could therefore never run from a pull request's
+# own branch — it would first have to land by the very route it exists to replace. `pull_request`
+# runs from the PR head, so this workflow can promote the pull request that introduces it.
+#
+# It fires on a LABEL rather than on every push, because promotion moves production traffic and
+# merges the PR; every open PR promoting itself the moment it goes green is not a decision that
+# should be implicit. `synchronize` is listed so a labelled PR that is then updated promotes its
+# new head rather than a stale one.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+# Nothing granted at the top level; the single job asks for what it uses.
+permissions: {}
+
+env:
+  PROJECT_ID:   design-space-505306
+  REGION:       europe-west2
+  SERVICE:      design-space-studio
+  REGISTRY:     europe-west2-docker.pkg.dev
+  IMAGE_REPO:   europe-west2-docker.pkg.dev/design-space-505306/design-space/design-space-studio
+  # Holds run.admin + artifactregistry.writer. Authenticated via WIF; no service-account key.
+  DEPLOYER_SA:  ds-deployer@design-space-505306.iam.gserviceaccount.com
+  # Invoke-only, on this one service. The smoke and the health check CALL the revision; minting
+  # their token as the deployer would put run.admin behind a curl (2S.5).
+  INVOKER_SA:   ds-invoker@design-space-505306.iam.gserviceaccount.com
+  WIF_PROVIDER: projects/959702328785/locations/global/workloadIdentityPools/github/providers/github
+  CANDIDATE_TAG: candidate
+  SNAPSHOT_FILE: /tmp/promote-traffic-snapshot.json
+  # The name this workflow's own check appears under. wait-for-green excludes it; without that
+  # the gate waits for a check that cannot complete until the gate finishes — a deadlock.
+  SELF_CHECK_NAME: promote
+
+jobs:
+  promote:
+    name: promote
+    # Draft PRs and unlabelled PRs are not promotion candidates. The fork case is handled by a
+    # step rather than here, so a fork PR gets an explanation instead of a silently skipped job.
+    if: |
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'promote')
+    runs-on: ubuntu-latest
+    # Traffic is global state. Two promotions would fight over it, and the loser would restore a
+    # snapshot the winner had already superseded. cancel-in-progress is false because a
+    # cancelled promotion leaves traffic split with nothing scheduled to finish or undo it —
+    # the same reason the preview cleanup job is never cancelled.
+    concurrency:
+      group: promote-${{ github.repository }}
+      cancel-in-progress: false
+    # 90, not 45. The two largest step-level bounds alone — wait-for-green (35) and the image
+    # build and push (20) — already sum to 55, more than the previous 45-minute job bound: a
+    # healthy run that spent close to its own allowance waiting for other checks, or building a
+    # slow image, could hit the job timeout before it ever got to fail on its own terms. That
+    # 55-minute floor, and the job bound clearing it, are asserted directly by
+    # tests/promote-workflow-shape.test.ts — not restated here as a total, because a hand-summed
+    # total is exactly the kind of claim that drifts silently from the file it describes (this
+    # comment used to carry one, and on re-derivation it did not match). 90 leaves real margin
+    # above the floor for the rest of the sequence without claiming to be the full sum of every
+    # step's own ceiling, which would defeat the point of bounding the job at all. The rollback
+    # step below is what makes ANY point at which this fires safe — not the specific number
+    # chosen here.
+    timeout-minutes: 90
+    permissions:
+      contents: write        # squash-merge writes to the base branch
+      pull-requests: write   # merge the pull request
+      id-token: write        # Workload Identity Federation
+      checks: read            # read this commit's check runs
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 10
+        with:
+          # Ancestry and tree equality are both history questions; a shallow clone cannot answer
+          # either, and would report "not an ancestor" for a branch that is perfectly up to date.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      # ------------------------------------------------------------------
+      # Fork guard. WIF's provider condition is scoped to verevoir/design-space, so a fork's
+      # head can be issued no credential at all — the same restriction that stops the review
+      # panel reaching org secrets. Explaining that beats failing on an opaque auth error.
+      # ------------------------------------------------------------------
+      - name: Skip promotion for fork pull requests
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 5
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Promotion unavailable for fork pull requests
+
+          Promotion deploys to Cloud Run and needs credentials from Workload Identity
+          Federation. The WIF provider condition is scoped to `verevoir/design-space`; a
+          fork's head runs under a different repository name, so no credential can be
+          issued and no revision can be deployed.
+
+          This is intentional, not a bug. A maintainer with write access can push the
+          branch to this repository to promote it.
+          EOF
+
+      # All remaining steps run only on same-repo PRs.
+
+      # ------------------------------------------------------------------
+      # Applying the `promote` label needs only GitHub's `triage` role — narrower than write.
+      # This job moves production traffic and merges to main unattended, so it checks the
+      # stronger bound explicitly rather than trusting the label mechanism's own, weaker one.
+      # ------------------------------------------------------------------
+      - name: Verify the actor holds write access, not just enough to apply a label
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/promote/assert-authorized.sh \
+            "${{ github.repository }}" "${{ github.actor }}"
+
+      - name: Wait for every other check on this commit to go green
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 35
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The exclusion and the "are we green" predicate are pure functions with tests in
+          # scripts/promote/checks-green.mjs. They are not inline because this workflow is
+          # itself a check on the commit it promotes: excluding it wrongly deadlocks the run,
+          # and an empty check list must not read as success.
+          bash scripts/promote/wait-for-green.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            "${{ env.SELF_CHECK_NAME }}"
+
+      - name: Assert the branch is up to date with its base
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        env:
+          # BASE_REF is a git branch name, which may legally contain backticks, $() and quotes.
+          # ${{ }} expressions are substituted into the script TEXT before the shell parses it,
+          # so interpolating one directly here would be a script-injection vector in a job that
+          # authenticates via WIF and merges to main unattended. Routed through env: instead —
+          # the same indirection this file already uses for the invoker ID token below.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # Before anything is deployed: this is the last point at which stopping costs nothing.
+          # It is also what makes the tree-equality check after the squash a confirmation.
+          git fetch --no-tags origin "$BASE_REF"
+          bash scripts/promote/assert-ancestry.sh \
+            "origin/$BASE_REF" \
+            "${{ github.event.pull_request.head.sha }}"
+
+      - name: Authenticate to Google Cloud via WIF
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account:            ${{ env.DEPLOYER_SA }}
+
+      - name: Set up gcloud CLI
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a # v2.1.2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # NOTE ON ORDERING. The brief's sequence captures the pre-state before authenticating.
+      # That is not achievable: reading the traffic assignment IS an authenticated call. What
+      # the requirement actually demands is that the restore point is captured before anything
+      # is MUTATED, and it is — nothing above this step changes any state.
+      - name: Capture the rollback target
+        id: capture
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        run: |
+          bash scripts/promote/capture-traffic.sh \
+            "${{ env.SERVICE }}" "${{ env.REGION }}" "${{ env.SNAPSHOT_FILE }}"
+
+      - name: Configure Docker to authenticate to Artifact Registry
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        run: gcloud auth configure-docker "${{ env.REGISTRY }}" --quiet
+
+      - name: Build and push the image (linux/amd64)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 20
+        run: |
+          # linux/amd64 explicitly — Cloud Run rejects an arm64 image at startup with
+          # "exec format error". See docs/architecture.md §9a.
+          IMAGE_TAGGED="${{ env.IMAGE_REPO }}:${{ github.event.pull_request.head.sha }}"
+          docker build --platform linux/amd64 --tag "$IMAGE_TAGGED" .
+          docker push "$IMAGE_TAGGED"
+          echo "IMAGE_TAGGED=$IMAGE_TAGGED" >> "$GITHUB_ENV"
+
+      - name: Resolve the image digest
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        run: |
+          # Everything downstream is pinned to this digest. A tag is a mutable pointer, so
+          # deploying by tag would mean the artefact that ships is not provably the artefact
+          # that was proven — artefact-identity's whole point.
+          DIGEST="$(gcloud artifacts docker images describe "$IMAGE_TAGGED" \
+            --format='value(image_summary.digest)')"
+          if [ -z "$DIGEST" ]; then
+            echo "::error title=Promotion blocked::could not resolve a digest for ${IMAGE_TAGGED}." >&2
+            exit 1
+          fi
+          echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "IMAGE_PINNED=${{ env.IMAGE_REPO }}@${DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Deploy the candidate revision, carrying no traffic
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 15
+        run: |
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image      "$IMAGE_PINNED" \
+            --region     "${{ env.REGION }}" \
+            --tag        "${{ env.CANDIDATE_TAG }}" \
+            --no-traffic \
+            --quiet
+
+      - name: Resolve the candidate's revision name and URL
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        run: |
+          # One describe, both answers. The revision NAME is what traffic is pinned to and what
+          # the health check asserts came back from /health; reading it from the tag entry is
+          # exact, where latestCreatedRevisionName would race any other deploy.
+          gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.REGION }}" --format json > /tmp/describe.json
+          CANDIDATE_REVISION="$(node scripts/promote/traffic-snapshot.mjs \
+            --revision-for-tag "${{ env.CANDIDATE_TAG }}" < /tmp/describe.json)"
+          echo "CANDIDATE_REVISION=$CANDIDATE_REVISION" >> "$GITHUB_ENV"
+          node scripts/service-urls.mjs "${{ env.CANDIDATE_TAG }}" < /tmp/describe.json >> "$GITHUB_ENV"
+
+      - name: Mint an ID token scoped to the service
+        id: invoker_token
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.INVOKER_SA }}
+          token_format: id_token
+          # The audience is the SERVICE url even though the request goes to the TAG url —
+          # Cloud Run validates the audience against the service, and a token minted for the
+          # per-tag hostname is refused with a bare "Unauthorized".
+          id_token_audience: ${{ env.SERVICE_URL }}
+          id_token_include_email: true
+
+      - name: Mask the token so it cannot appear in log output
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        env:
+          TOKEN: ${{ steps.invoker_token.outputs.id_token }}
+        run: echo "::add-mask::$TOKEN"
+
+      # ------------------------------------------------------------------
+      # The auth action REPLACES the ambient gcloud credential, it does not add to it. Minting
+      # the smoke token above switched every subsequent gcloud call to ds-invoker, which
+      # deliberately holds roles/run.invoker on this one service and nothing else (2S.5).
+      # shift-traffic.sh and rollback.sh both need run.services.get, which ds-invoker does not
+      # carry and must not be granted — that would put run.admin behind a curl again. So the
+      # ambient credential is switched straight back before anything downstream can touch
+      # traffic. The token minted above is unaffected: it is a string already captured in
+      # steps.invoker_token.outputs.id_token, not a live credential, so re-authenticating here
+      # does not invalidate it.
+      # ------------------------------------------------------------------
+      - name: Re-authenticate as the deploy identity before anything touches traffic
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 5
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account:            ${{ env.DEPLOYER_SA }}
+
+      - name: Smoke the candidate while it carries no traffic
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        env:
+          SMOKE_ID_TOKEN: ${{ steps.invoker_token.outputs.id_token }}
+          SMOKE_EXPECT_REVISION: ${{ env.CANDIDATE_REVISION }}
+        run: |
+          # Zero traffic: production is untouched whether this passes or fails. That ordering is
+          # the point of ADR 0007. The smoke asserts the prompt heading of every screen of the documented journey — headings only, and a screen carrying no prompt heading fails the derivation rather than being skipped.
+          bash scripts/smoke.sh "$TAG_URL"
+
+      - name: Cut 10% of traffic to the candidate
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        run: |
+          bash scripts/promote/shift-traffic.sh \
+            "${{ env.SERVICE }}" "${{ env.REGION }}" "$CANDIDATE_REVISION" 10
+
+      - name: Health-check the candidate under live traffic
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 8
+        env:
+          SMOKE_ID_TOKEN: ${{ steps.invoker_token.outputs.id_token }}
+          SMOKE_EXPECT_REVISION: ${{ env.CANDIDATE_REVISION }}
+        run: |
+          # The CANDIDATE TAG url, not the blended service url. At a 10% split roughly nine
+          # requests in ten reach the incumbent, which 404s /health, so a failure against the
+          # service url would be indistinguishable from a broken candidate. This is a recorded
+          # divergence from ADR 0007 — see the amendment, which also states plainly what this
+          # does NOT prove: that blended traffic is healthy.
+          #
+          # A SINGLE probe, fired the instant the cut lands, only proves the candidate answered
+          # once. observe-canary.sh repeats the same probe over a bounded dwell (5 probes, 15s
+          # apart — a 60s window) and stops on the FIRST failure rather than averaging one bad
+          # probe away. See the ADR 0007 amendment of 2026-08-16 and the script's own header for
+          # what this does and does not add over the single-probe version it replaces.
+          bash scripts/promote/observe-canary.sh "$TAG_URL"
+
+      - name: Cut 100% of traffic to the candidate
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        run: |
+          bash scripts/promote/shift-traffic.sh \
+            "${{ env.SERVICE }}" "${{ env.REGION }}" "$CANDIDATE_REVISION" 100
+
+      - name: Squash-merge the pull request
+        id: merge
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Only now, after the change has served all of production. Already-merged detection
+          # lives in the script so a re-run after a lost answer is a success, not a false
+          # "not mergeable".
+          MERGE_SHA="$(bash scripts/promote/squash-merge.sh \
+            "${{ github.repository }}" "${{ github.event.pull_request.number }}")"
+          echo "MERGE_SHA=$MERGE_SHA" >> "$GITHUB_ENV"
+
+      - name: Assert the merged tree equals the canaried tree
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        env:
+          # See the "Assert the branch is up to date" step above for why BASE_REF is routed
+          # through env: rather than interpolated directly into the run: block.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # This cannot be rolled back — the commit is already on the base branch. On failure
+          # the script leaves traffic on the canaried revision, refuses to retag, and demands an
+          # operator. See its header for why there is no safe automatic recovery.
+          git fetch --no-tags origin "$BASE_REF"
+          bash scripts/promote/assert-tree-equal.sh \
+            "${{ github.event.pull_request.head.sha }}" "$MERGE_SHA"
+
+      - name: Retag the proven image onto the merged commit
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        run: |
+          # Retag, never rebuild. Rebuilding from the merged commit would ship an artefact
+          # nothing verified, which discards the point of canarying first.
+          bash scripts/promote/retag.sh \
+            "${{ env.IMAGE_REPO }}" "$IMAGE_DIGEST" "$MERGE_SHA"
+
+      - name: Drop the candidate tag now that traffic is pinned
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 10
+        run: |
+          # NOT a second traffic cut, deliberately. shift-traffic.sh moves traffic BY REVISION
+          # NAME, never by tag (see its own header) — so "Cut 100% of traffic to the candidate"
+          # above already pinned $CANDIDATE_REVISION to 100% by the only mechanism that exists.
+          # An earlier version of this step re-issued that same call here, on the theory that
+          # the first cut was "by tag" and this one was the real by-name pin; that theory was
+          # checked against shift-traffic.sh directly and does not hold — both calls were
+          # identical. Repeating it added a failure point strictly AFTER the merge, exactly
+          # where the rollback step below is deliberately disabled: a failure there could not
+          # have been rolled back, and had nothing left to accomplish. That is why it is gone,
+          # not why it should be re-added if this step is ever touched again.
+          #
+          # What remains is safe to fail on its own terms: if tag removal fails, production
+          # traffic is already, and remains, correctly pinned to $CANDIDATE_REVISION — only the
+          # now-unused preview tag is left routing alongside it, which is cosmetic debt, not a
+          # production hazard. Tag removal reuses the preview cleanup script, whose three-part
+          # tolerance accepts "already absent" and nothing else.
+          bash scripts/remove-preview-tag.sh \
+            "${{ env.SERVICE }}" "${{ env.REGION }}" "${{ env.CANDIDATE_TAG }}"
+
+      # ------------------------------------------------------------------
+      # Rollback fires on failure() OR cancelled(), gated through always().
+      #
+      # `failure()` alone does not cover this job's own timeout-minutes bound. When the JOB
+      # timeout fires, GitHub marks the job's status `cancelled`, not `failed` — `failure()`
+      # only becomes true for an explicit step failure, so a run killed by its own bound would
+      # skip this step by default and leave traffic split with nothing scheduled to restore it.
+      # That is the exact state ADR 0007 exists to prevent, produced by the bound meant to
+      # prevent it.
+      #
+      # `always()` is required too, and separately from `cancelled()`: without it, a step whose
+      # `if` is not itself `always()` is skipped outright once the job's status is `cancelled`,
+      # before its own condition is even evaluated. `always()` is what lets this step still be
+      # considered; `cancelled()` (alongside `failure()`) is what then decides it should run.
+      #
+      # Rollback, on two further conditions.
+      #
+      # `steps.capture.conclusion == 'success'` — without a restore point there is nothing to
+      # roll back TO, and running anyway would fail confusingly during whatever incident is
+      # already underway.
+      #
+      # `steps.merge.conclusion != 'success'` — once the change is merged it is on the base
+      # branch and cannot be un-merged here, so restoring traffic to the previous revision would
+      # leave `main` describing something production is not running: the exact state ADR 0007
+      # exists to prevent. This is what implements the ruling on the tree-equality hazard —
+      # after a successful merge, traffic STAYS on the canaried revision, which is the proven
+      # artefact, and a human decides what happens next.
+      #
+      # That condition is necessary but not sufficient: a step's CONCLUSION is not the same fact
+      # as whether the merge actually happened. `gh pr merge` can succeed on GitHub's side and
+      # then have its OWN step marked `cancelled` by a job-level timeout landing mid-step, in
+      # which case this `if` alone would still let rollback run. rollback.sh is given the repo
+      # and PR number so it can ask GitHub directly — the same question squash-merge.sh already
+      # asks for idempotency — as a second, independent check before it touches any traffic.
+      # ------------------------------------------------------------------
+      - name: Roll back on failure or timeout
+        if: |
+          always() &&
+          (failure() || cancelled()) &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          steps.capture.conclusion == 'success' &&
+          steps.merge.conclusion != 'success'
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/promote/rollback.sh "${{ env.SNAPSHOT_FILE }}" "${{ env.CANDIDATE_TAG }}" \
+            "${{ github.repository }}" "${{ github.event.pull_request.number }}"
