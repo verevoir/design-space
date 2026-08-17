@@ -7,7 +7,7 @@
  * silently unchecked.
  *
  * This does not remove the hand-maintained list. A glob (`*.test.ts`) was tried first and
- * rejected: probed directly against a temporary full-glob build, it pulls in ten pre-existing
+ * rejected: probed directly against a temporary full-glob build, it pulls in nine pre-existing
  * test files that fail to type-check under this project's strict settings for reasons that have
  * nothing to do with any single change — implicit `any` from importing an untyped `.mjs` script
  * with no declaration file, and `noUncheckedIndexedAccess` violations. Landing that glob would
@@ -19,6 +19,15 @@
  * exists to close, and fails loudly, naming the file. A file in KNOWN_UNCHECKED with an empty or
  * missing reason is refused too — the reason is the whole point of the list; without it, "known"
  * is a lie, and it would be exactly as silent as omission.
+ *
+ * A second, opposite direction is guarded too, added after a first version of this list shipped
+ * a fabricated KNOWN_UNCHECKED entry (`verified-pregate.test.ts`, naming a file that does not
+ * exist anywhere in this repository) that the disk→covered check above cannot catch, because real
+ * disk files already satisfied coverage without that entry's contribution — `expect(missing).
+ * toEqual([])` passed identically whether or not it was there. `phantomEntries` below checks the
+ * reverse: every name in `include` or `KNOWN_UNCHECKED` must correspond to a real file on disk. A
+ * name that does not is exactly as false a claim as an omission is a silent gap, and is refused
+ * the same way.
  *
  * The file set is read from disk (`readdirSync('tests')`), not hardcoded here, and
  * tests/tsconfig.json's `include` array is read and parsed, not duplicated as a literal — a test
@@ -42,7 +51,7 @@ interface UncheckedEntry {
 // Every currently-unchecked test file, with why. A file lands here only because it genuinely
 // fails to type-check under tests/tsconfig.json's strict settings when included — verified
 // directly against a temporary full-glob build, not assumed. Two error classes account for all
-// ten; see backlog.md's 0.1 entry for the class and a pointer to pick it up deliberately.
+// nine; see backlog.md's 0.1 entry for the class and a pointer to pick it up deliberately.
 const KNOWN_UNCHECKED: UncheckedEntry[] = [
   {
     file: 'ci-workflow-shape.test.ts',
@@ -88,11 +97,6 @@ const KNOWN_UNCHECKED: UncheckedEntry[] = [
     reason:
       "implicit-any: imports '../scripts/upsert-preview-comment.mjs', which has no declaration file (TS7016).",
   },
-  {
-    file: 'verified-pregate.test.ts',
-    reason:
-      "implicit-any: imports '../scripts/verified-pregate.mjs', which has no declaration file (TS7016).",
-  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -114,6 +118,23 @@ export function unreasonedEntries(knownUnchecked: UncheckedEntry[]): string[] {
   return knownUnchecked
     .filter((e) => typeof e.reason !== 'string' || e.reason.trim().length === 0)
     .map((e) => e.file);
+}
+
+/**
+ * The reverse direction of uncoveredTestFiles: every name in `includeList` or `knownUnchecked`
+ * must correspond to a real file in `diskFiles`. A name that does not is a phantom entry — a
+ * claim about a file that isn't there, which is exactly what let `verified-pregate.test.ts` ship
+ * in KNOWN_UNCHECKED once: real disk files already satisfied disk→covered coverage without it,
+ * so nothing above this function would ever have caught it.
+ */
+export function phantomEntries(
+  diskFiles: string[],
+  includeList: string[],
+  knownUnchecked: UncheckedEntry[],
+): string[] {
+  const disk = new Set(diskFiles);
+  const named = [...includeList, ...knownUnchecked.map((e) => e.file)];
+  return named.filter((f) => !disk.has(f)).sort();
 }
 
 describe('uncoveredTestFiles', () => {
@@ -152,6 +173,30 @@ describe('unreasonedEntries', () => {
   });
 });
 
+describe('phantomEntries', () => {
+  it('flags an include entry that names a file not on disk — the fabricated-entry defect', () => {
+    expect(phantomEntries(['a.test.ts'], ['a.test.ts', 'ghost.test.ts'], [])).toEqual(['ghost.test.ts']);
+  });
+
+  it('flags a knownUnchecked entry that names a file not on disk — the exact original defect', () => {
+    expect(
+      phantomEntries(['a.test.ts'], ['a.test.ts'], [{ file: 'ghost.test.ts', reason: 'invented' }]),
+    ).toEqual(['ghost.test.ts']);
+  });
+
+  it('accepts entries that all correspond to real disk files', () => {
+    expect(
+      phantomEntries(['a.test.ts', 'b.test.ts'], ['a.test.ts'], [{ file: 'b.test.ts', reason: 'debt' }]),
+    ).toEqual([]);
+  });
+
+  it('reports every phantom entry, not just the first', () => {
+    expect(
+      phantomEntries([], ['a.test.ts'], [{ file: 'b.test.ts', reason: 'x' }, { file: 'c.test.ts', reason: 'y' }]),
+    ).toEqual(['a.test.ts', 'b.test.ts', 'c.test.ts']);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The real repository, right now — one more input to the same functions above, not the only one.
 // ---------------------------------------------------------------------------
@@ -186,6 +231,16 @@ describe('every tests/*.test.ts file is either type-checked or a documented, rea
       missing,
       `Not type-checked and not declared as known debt: ${missing.join(', ')}. ` +
         `Add each to tests/tsconfig.json's "include", or to KNOWN_UNCHECKED here with a reason.`,
+    ).toEqual([]);
+  });
+
+  it('every include or KNOWN_UNCHECKED entry names a file that actually exists on disk', () => {
+    const phantoms = phantomEntries(testFilesOnDisk(), realInclude(), KNOWN_UNCHECKED);
+    expect(
+      phantoms,
+      `Named in tsconfig.json's "include" or in KNOWN_UNCHECKED but not present on disk: ` +
+        `${phantoms.join(', ')}. A name with no file behind it is a false claim, not a real ` +
+        `exception — remove it or correct it to the real filename.`,
     ).toEqual([]);
   });
 });

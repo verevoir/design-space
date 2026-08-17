@@ -37,11 +37,8 @@ RUN npm ci
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages/ packages/
 COPY examples/ examples/
-# tsconfig.json's project references include `tests` (tests/aigency-config.test.ts is
-# type-checked as part of the build) — without this, tsc -b fails with TS5083: Cannot read
-# file '/app/tests/tsconfig.json'. See tests/dockerfile-project-references.test.ts, which
-# guards every tsconfig project reference against the builder's COPY set generically, so a
-# future reference cannot go uncopied silently the way this one did.
+# Required by tsc -b's `tests` project reference — see tests/dockerfile-project-references.test.ts
+# for why (TS5083) and the guard against a future reference going uncopied the same way.
 COPY tests/ tests/
 
 # Build every package (tsc -b then postbuild scripts).
