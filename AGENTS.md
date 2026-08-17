@@ -49,17 +49,18 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
   that bypasses it leaves the shared cache stale for the rest of the session.
 - **One story, one wave, disjoint write-sets.** The wave numbering in `backlog.md` states merge
   order and concurrency; siblings in a wave must not write the same package.
-- **Cut every branch from current `origin/main`, right before starting.** After a squash merge,
-  the old base and the new `main` share no history for the squashed PR's files — a rebase of a
-  stale-based branch fails with an ADD/ADD conflict on every one of them, because git sees each
-  as independently added on both sides. This is structural, not a merge accident: **that branch
-  cannot be rebased, ever — it can only be re-cut from `origin/main`, with the work reapplied.**
-  A stale base also silently makes the local review panel unusable: its diff against the wrong
-  merge-base carries the whole of the already-merged PR alongside the real change, which can
-  exceed the size cap and time out every lens at once. Refresh remote refs and confirm the
-  merge-base is `origin/main`'s current head before trusting either a rebase or a panel run.
 - **Keep the seams repo-shaped** (ADR 0004). The test of a correct boundary: could this package
   be published and consumed from another repository without moving code?
+- **Cut every branch from current `origin/main`, never from a local `main` that may be stale.**
+  A branch built on a stale base can be missing files the tree it was cut from already had —
+  scripts a workflow calls, tests a suite imports — and the failure surfaces later, as a
+  collection error or a missing-script error, not as an obviously wrong diff. Worse: once that
+  base is squash-merged, the branch cannot be rebased onto the new `main` at all. The squash
+  collapses the base's history into one commit with no ancestor the branch's own commits share,
+  so a rebase sees every file the squashed work created as independently added on both sides —
+  an ADD/ADD conflict on each one, not a content conflict a rebase can resolve. That is a
+  structural fact about squash merges, not a mistake to fix in the rebase; the only way out is a
+  fresh branch cut from the new base.
 
 ## Operating this repo
 
@@ -81,29 +82,6 @@ not repeated.
 
   About five minutes and a couple of dollars — cheap against a CI round trip, and it runs the
   same five lenses.
-
-- **The pregate run is bounded by three nested timeouts. This is their one complete derivation —
-  `aigency.json` and `scripts/verified-pregate.mjs` each restate only the ordering that matters
-  to reading their own number, and point back here rather than repeating this.**
-
-  1. **The panel's own inner backstop** (`PREGATE_TIMEOUT_MS`, default 30 minutes, hardcoded in
-     `../capabilities/scripts/run-pregate.mjs`) fires FIRST by design. `--lens-timeout 480`
-     gives it a worst case of three sequential 60s-bounded setup calls (3 min), rubric
-     provisioning bounded by one lens deadline (8 min), and two lens deadlines run behind it in
-     parallel (16 min) — 3 + 8 + 16 = 27 minutes, inside the 30-minute bound with real margin.
-     Firing first is what lets a run report *which lens* hung.
-  2. **This wrapper's own spawn bound** (`DEFAULT_SPAWN_TIMEOUT_MS`, 35 minutes,
-     `scripts/verified-pregate.mjs`) sits deliberately above layer 1, so the panel's own
-     backstop gets the chance to fire and name a lens before the wrapper gives up on the whole
-     spawn. On firing, the wrapper kills the ENTIRE process group it spawned, not merely the
-     immediate child — a hung run must not keep making paid model calls after the wrapper has
-     already reported failure. `PREGATE_SPAWN_TIMEOUT_MS` / `PREGATE_KILL_GRACE_MS` override the
-     bound and its SIGTERM→SIGKILL escalation grace, for tests.
-  3. **The declared release step's own `timeoutMs`** (`aigency.json`'s `pregate` row, 40
-     minutes) sits deliberately above layer 2, as the final backstop. It is the only layer of
-     the three that gives no diagnostic at all when it fires — the runner simply kills the
-     process — which is exactly why layers 1 and 2 both exist to fire first, each with a
-     message naming what happened.
 
 - **Read the panel's findings from the run artifacts, not the check annotations.** An annotation
   is a one-line summary; the artifact carries the whole finding, with file and line.
