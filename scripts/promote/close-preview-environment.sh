@@ -3,15 +3,16 @@
 # Close the preview environment for a merged pull request: remove its pr-<N> tag from the Cloud
 # Run service, then delete its head branch from the remote.
 #
-# preview.yml's own cleanup job exists for exactly this, triggered by `pull_request: closed`.
-# But the merge two steps earlier in promote.yml runs as GITHUB_TOKEN, and GitHub deliberately
+# preview.yml's own cleanup job removes the pr-<N> tag, triggered by `pull_request: closed` —
+# that is the whole of what it does; it has never deleted a branch, for any PR, human-closed or
+# not. The merge two steps earlier in promote.yml runs as GITHUB_TOKEN, and GitHub deliberately
 # does not trigger further workflow runs from events an Actions token's own calls produce — to
 # prevent recursive workflow loops. That suppression is invisible: no error, no skipped run, no
 # run at all. So `pull_request: closed` is never delivered for a self-promoted merge, and the
 # cleanup job — correct on its own terms for the human-closes-a-PR-by-hand case it was built for
-# — never fires for this one. This script is promote.yml's own answer: it already knows the
-# merge happened, so it closes the tag and the branch directly, without depending on an event
-# GitHub will not send.
+# — never fires for this one. This script restores that tag removal for a self-promoted merge,
+# and additionally deletes the head branch — behaviour no existing job performs at all, added
+# here because a self-promoted merge is the one case nothing else closes out.
 #
 #   usage: close-preview-environment.sh <service> <region> <tag> <owner/repo> <branch>
 #
