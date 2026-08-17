@@ -49,6 +49,15 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
   that bypasses it leaves the shared cache stale for the rest of the session.
 - **One story, one wave, disjoint write-sets.** The wave numbering in `backlog.md` states merge
   order and concurrency; siblings in a wave must not write the same package.
+- **Cut every branch from current `origin/main`, right before starting.** After a squash merge,
+  the old base and the new `main` share no history for the squashed PR's files — a rebase of a
+  stale-based branch fails with an ADD/ADD conflict on every one of them, because git sees each
+  as independently added on both sides. This is structural, not a merge accident: **that branch
+  cannot be rebased, ever — it can only be re-cut from `origin/main`, with the work reapplied.**
+  A stale base also silently makes the local review panel unusable: its diff against the wrong
+  merge-base carries the whole of the already-merged PR alongside the real change, which can
+  exceed the size cap and time out every lens at once. Refresh remote refs and confirm the
+  merge-base is `origin/main`'s current head before trusting either a rebase or a panel run.
 - **Keep the seams repo-shaped** (ADR 0004). The test of a correct boundary: could this package
   be published and consumed from another repository without moving code?
 
