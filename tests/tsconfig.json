@@ -15,6 +15,7 @@
     "resolve-merge-base.test.ts",
     "stamp-diff-hash.test.ts",
     "workflow-shape.test.ts",
-    "tsconfig-include-coverage.test.ts"
+    "tsconfig-include-coverage.test.ts",
+    "close-preview-environment.test.ts"
   ]
 }
