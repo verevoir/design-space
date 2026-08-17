@@ -17,6 +17,7 @@ interface Command {
   command?: unknown;
   timeoutMs?: unknown;
   blocking?: unknown;
+  env?: unknown;
 }
 
 const raw = readFileSync(fileURLToPath(new URL('../aigency.json', import.meta.url)), 'utf8');
@@ -37,6 +38,37 @@ const ENV_NAME_SHAPE = /^[A-Z][A-Z0-9_]*$/;
 // A real credential value: a long opaque run of characters with no path separator. Flags,
 // script paths and short literals (branch names, timeouts) never look like this.
 const CREDENTIAL_SHAPED = /^[A-Za-z0-9_-]{20,}$/;
+
+// The three functions below are the validators the tests actually exercise. Pulling each out
+// lets a test prove the LOGIC — against constructed fixtures, valid and invalid — rather than
+// only checking whatever rows this branch's aigency.json happens to ship. A branch that ships
+// no env-bearing row and no release row (this one) would otherwise let all three checks pass
+// with nothing to reject, which is indistinguishable from a check that cannot fail no matter
+// what it computes. The shipped config is still checked, by calling the same function on it —
+// it is one more input to the validator, not the validator's only input.
+
+function badEnvRows(cmds: Command[]): unknown[] {
+  return cmds
+    .filter((c) => c.env !== undefined)
+    .filter(
+      (c) =>
+        !Array.isArray(c.env) ||
+        !(c.env as unknown[]).every((e) => typeof e === 'string' && ENV_NAME_SHAPE.test(e)),
+    )
+    .map((c) => c.name);
+}
+
+function unexpectedEnvVars(cmds: Command[]): string[] {
+  return cmds
+    .filter((c) => Array.isArray(c.env))
+    .flatMap((c) =>
+      (c.env as string[]).filter((e) => !KNOWN_ENV_VARS.has(e)).map((e) => `${String(c.name)}: ${e}`),
+    );
+}
+
+function blockingReleaseRows(cmds: Command[]): unknown[] {
+  return cmds.filter((c) => c.kind === 'release' && c.blocking === true).map((c) => c.name);
+}
 
 describe('aigency.json — every declared command is shaped correctly', () => {
   it('declares a name, a kind, and a non-empty command array on every row', () => {
@@ -91,28 +123,34 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     // A value here (a literal token, or anything not shaped like SHOUT_CASE) would mean a
     // secret is one accidental paste away from landing in version control instead of being
     // read from the runtime's own environment at call time.
-    const bad = commands
-      .filter((c) => c.env !== undefined)
-      .filter(
-        (c) =>
-          !Array.isArray(c.env) ||
-          !(c.env as unknown[]).every((e) => typeof e === 'string' && ENV_NAME_SHAPE.test(e)),
-      )
-      .map((c) => c.name);
+    //
+    // Fixture, not just the shipped config: this branch's aigency.json has no env-bearing row
+    // at all, so a check that only ever saw it would pass vacuously regardless of its logic.
+    const fixture: Command[] = [
+      { name: 'ok', kind: 'release', command: ['x'], timeoutMs: 1, env: ['FOO_BAR'] },
+      { name: 'not-an-array', kind: 'release', command: ['x'], timeoutMs: 1, env: 'FOO_BAR' },
+      { name: 'lower-case', kind: 'release', command: ['x'], timeoutMs: 1, env: ['foo_bar'] },
+      { name: 'non-string-entry', kind: 'release', command: ['x'], timeoutMs: 1, env: [42] },
+    ];
+    expect(badEnvRows(fixture)).toEqual(['not-an-array', 'lower-case', 'non-string-entry']);
 
-    expect(bad).toEqual([]);
+    // The shipped config, checked by that same function rather than being the only input to it.
+    expect(badEnvRows(commands)).toEqual([]);
   });
 
   it('names only environment variables this repo genuinely expects', () => {
     // Every credentialed release step widens the credential surface a little; naming a
     // variable nobody asked for is exactly how that surface grows without anyone deciding it.
-    const unexpected = commands
-      .filter((c) => Array.isArray(c.env))
-      .flatMap((c) =>
-        (c.env as string[]).filter((e) => !KNOWN_ENV_VARS.has(e)).map((e) => `${String(c.name)}: ${e}`),
-      );
+    //
+    // Fixture, not just the shipped config: this branch's aigency.json has no env-bearing row
+    // at all, so a check that only ever saw it would pass vacuously regardless of its logic.
+    const fixture: Command[] = [
+      { name: 'known', kind: 'release', command: ['x'], timeoutMs: 1, env: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+      { name: 'unknown', kind: 'release', command: ['x'], timeoutMs: 1, env: ['SOME_OTHER_TOKEN'] },
+    ];
+    expect(unexpectedEnvVars(fixture)).toEqual(['unknown: SOME_OTHER_TOKEN']);
 
-    expect(unexpected).toEqual([]);
+    expect(unexpectedEnvVars(commands)).toEqual([]);
   });
 
   it('embeds nothing credential-shaped inline in a command array', () => {
@@ -133,10 +171,16 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     // did would run inside an ordinary verify pass instead of only when named deliberately —
     // silently spending real money (pregate) or moving GitHub state (rerun-checks) on every
     // commit.
-    const reachable = commands
-      .filter((c) => c.kind === 'release' && c.blocking === true)
-      .map((c) => c.name);
+    //
+    // Fixture, not just the shipped config: this branch's aigency.json has no release-kind row
+    // at all, so a check that only ever saw it would pass vacuously regardless of its logic.
+    const fixture: Command[] = [
+      { name: 'a-gate', kind: 'gate', command: ['x'], timeoutMs: 1, blocking: true },
+      { name: 'quiet-release', kind: 'release', command: ['x'], timeoutMs: 1, blocking: false },
+      { name: 'loud-release', kind: 'release', command: ['x'], timeoutMs: 1, blocking: true },
+    ];
+    expect(blockingReleaseRows(fixture)).toEqual(['loud-release']);
 
-    expect(reachable).toEqual([]);
+    expect(blockingReleaseRows(commands)).toEqual([]);
   });
 });
