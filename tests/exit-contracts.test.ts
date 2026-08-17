@@ -265,8 +265,8 @@ describe('findUnassertedCodes — the real repository', () => {
       .sort();
     expect(found).toEqual([
       'scripts/promote/checks-green.mjs',
-      'scripts/promote/rollback.sh',
       'scripts/promote/close-preview-environment.sh',
+      'scripts/promote/rollback.sh',
     ]);
   });
 });
