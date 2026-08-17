@@ -37,6 +37,9 @@ RUN npm ci
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages/ packages/
 COPY examples/ examples/
+# Required by tsc -b's `tests` project reference — see tests/dockerfile-project-references.test.ts
+# for why (TS5083) and the guard against a future reference going uncopied the same way.
+COPY tests/ tests/
 
 # Build every package (tsc -b then postbuild scripts).
 RUN npm run build

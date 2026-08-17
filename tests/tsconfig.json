@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../dist/tests",
+    "noEmit": false
+  },
+  "include": [
+    "aigency-config.test.ts",
+    "dockerfile-project-references.test.ts",
+    "aggregate.test.ts",
+    "panel-memory.test.ts",
+    "promote-scripts.test.ts",
+    "remove-preview-tag.test.ts",
+    "resolve-merge-base.test.ts",
+    "stamp-diff-hash.test.ts",
+    "workflow-shape.test.ts",
+    "tsconfig-include-coverage.test.ts",
+    "close-preview-environment.test.ts"
+  ]
+}
