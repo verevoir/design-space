@@ -263,6 +263,10 @@ describe('findUnassertedCodes — the real repository', () => {
     const found = scriptsWithMultiCodeContracts()
       .map((s) => s.relPath)
       .sort();
-    expect(found).toEqual(['scripts/promote/checks-green.mjs', 'scripts/promote/rollback.sh']);
+    expect(found).toEqual([
+      'scripts/promote/checks-green.mjs',
+      'scripts/promote/close-preview-environment.sh',
+      'scripts/promote/rollback.sh',
+    ]);
   });
 });
