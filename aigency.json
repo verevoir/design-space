@@ -1,0 +1,35 @@
+{
+  "commands": [
+    {
+      "name": "install",
+      "kind": "bootstrap",
+      "command": ["npm", "ci"],
+      "description": "Install dependencies exactly as the lockfile pins them, across the workspaces.",
+      "timeoutMs": 600000
+    },
+    {
+      "name": "build",
+      "kind": "gate",
+      "command": ["npm", "run", "build"],
+      "description": "`tsc -b` across the workspaces, then each package's postbuild. This is where typechecking happens — there is deliberately no separate `typecheck` script to keep one answer to 'do the types hold'. It is the first gate because `verify` runs it first and the suite reads built output.",
+      "blocking": true,
+      "timeoutMs": 300000
+    },
+    {
+      "name": "test",
+      "kind": "gate",
+      "command": ["npm", "run", "test"],
+      "description": "The suite, via the package script rather than a bare `vitest run`, so the runner is whatever the repo says it is.",
+      "blocking": true,
+      "timeoutMs": 900000
+    },
+    {
+      "name": "lint",
+      "kind": "gate",
+      "command": ["npm", "run", "lint"],
+      "description": "ESLint. Blocking because a worker can fix it by editing its own output, which is the line between a gate that teaches and one that nags.",
+      "blocking": true,
+      "timeoutMs": 60000
+    }
+  ]
+}
