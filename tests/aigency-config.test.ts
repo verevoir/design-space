@@ -49,15 +49,11 @@ const ENV_NAME_SHAPE = /^[A-Z][A-Z0-9_]*$/;
 // script paths and short literals (branch names, timeouts) never look like this.
 const CREDENTIAL_SHAPED = /^[A-Za-z0-9_-]{20,}$/;
 
-// Every function below is the validator a test actually exercises. Pulling each out lets a
-// test prove the LOGIC — against constructed fixtures, valid and invalid — rather than only
-// checking whatever rows this branch's aigency.json happens to ship. This branch's shipped
-// config is small and entirely well-formed (four rows, no env, no release row), so a check
-// that only ever saw it would pass vacuously regardless of its logic: gutting the predicate to
-// always return an empty array leaves every one of these assertions green, because the real
-// config never has anything to reject in the first place. The shipped config is still checked,
-// by calling the same function on it — it is one more input to the validator, not the
-// validator's only input.
+// Every function below is the validator a test actually exercises, pulled out so each test can
+// prove the LOGIC against constructed fixtures rather than only checking whatever rows this
+// branch's aigency.json happens to ship. See "THE RULE EVERY TEST BELOW FOLLOWS" in the file
+// header above for why that matters and how the real config is still checked — as one more
+// input to the validator, not the validator's only input.
 
 function malformedRows(cmds: Command[]): unknown[] {
   return cmds

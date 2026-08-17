@@ -100,9 +100,10 @@ const KNOWN_UNCHECKED: UncheckedEntry[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Pure logic — proven against fixtures, not just the real repository, so gutting either
-// predicate to an unconditional pass would go red here even on a shipped config too small to
-// exercise it on its own.
+// Pure logic — proven against fixtures, not just the real repository. See
+// tests/aigency-config.test.ts's file header ("THE RULE EVERY TEST BELOW FOLLOWS") for why that
+// matters generally; specifically here, this shipped config is too small on its own to exercise
+// a gutted predicate — an unconditional pass would go undetected against it alone.
 // ---------------------------------------------------------------------------
 
 export function uncoveredTestFiles(

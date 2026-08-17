@@ -33,10 +33,11 @@ interface TsconfigShape {
 }
 
 // ---------------------------------------------------------------------------
-// Pure logic — proven against fixtures, not just the real repository. A check that only ever
-// saw this repository's own, already-correct files would pass vacuously regardless of its
-// logic: the real config's references have always been copied by the time either function ever
-// runs against them for real, so a gutted predicate would look identical on that one input.
+// Pure logic — proven against fixtures rather than only this repository's own, already-correct
+// files. See tests/aigency-config.test.ts's file header ("THE RULE EVERY TEST BELOW FOLLOWS")
+// for why that matters generally; specifically here, the real config's references have always
+// been copied by the time either function runs against them for real, so a gutted predicate
+// would look identical on that one input.
 // ---------------------------------------------------------------------------
 
 /**
