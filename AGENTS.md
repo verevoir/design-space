@@ -62,6 +62,13 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
   structural fact about squash merges, not a mistake to fix in the rebase; the only way out is a
   fresh branch cut from the new base.
 
+## Testing discipline
+
+An assertion whose expected value equals what a correct implementation already produces is
+unverified — the expected value and the bug-free value are the same, so the predicate is never
+exercised. Gut it to a constant and confirm the suite goes red before trusting it. Worked
+example: `tests/aigency-config.test.ts`'s file header.
+
 ## Operating this repo
 
 How to *run* things here. Platform facts — the service, the identities, why the image must be
