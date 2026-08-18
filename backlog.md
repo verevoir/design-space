@@ -383,10 +383,12 @@ back without traffic reaching it and without merging" and "a candidate that pass
 fails the health check at 10% is rolled back before the remaining traffic moves" have never been
 exercised against the real service. Both real runs succeeded, so `rollback.sh` correctly
 evaluated to `skipped` both times — it has never actually restored traffic. Its three-way exit
-contract (restored / already-absent / real-failure) is covered by unit tests against a stubbed
-`gcloud` and was mutation-checked in both directions, which proves the *decision logic* — which
-exit path is chosen given a state — not that the mechanism moves real traffic when called for
-real.
+contract — 0 (traffic restored), 2 (the pull request is already merged, so the split-brain guard
+refuses to touch traffic at all and leaves it on the canaried revision for an operator to decide),
+and any other code (the restore itself failed, an incident) — is covered by unit tests against a
+stubbed `gcloud` and was mutation-checked in both directions, which proves the *decision logic* —
+which exit path is chosen given a state — not that the mechanism moves real traffic when called
+for real.
 
 **How this could be proved**, recorded rather than scheduled: inject a deliberate failure after
 the candidate deploys but before the 100% cut — a forced non-zero exit or a broken smoke
