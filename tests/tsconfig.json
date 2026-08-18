@@ -16,6 +16,9 @@
     "stamp-diff-hash.test.ts",
     "workflow-shape.test.ts",
     "tsconfig-include-coverage.test.ts",
-    "close-preview-environment.test.ts"
+    "close-preview-environment.test.ts",
+    "service-urls.test.ts",
+    "exit-contracts.test.ts",
+    "upsert-preview-comment.test.ts"
   ]
 }

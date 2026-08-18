@@ -64,11 +64,6 @@ const KNOWN_UNCHECKED: UncheckedEntry[] = [
       'possibly-undefined: TS2532/TS2345/TS2322 across four call sites — indexed/optional lookups used without narrowing.',
   },
   {
-    file: 'exit-contracts.test.ts',
-    reason:
-      "implicit-any: imports '../scripts/check-exit-contracts.mjs', which has no declaration file (TS7016), cascading into two TS7006 parameters.",
-  },
-  {
     file: 'preview-workflow-shape.test.ts',
     reason:
       'possibly-undefined: TS2345/TS2532 — an indexed/optional lookup used without a narrowing check.',
@@ -84,18 +79,9 @@ const KNOWN_UNCHECKED: UncheckedEntry[] = [
       "possibly-undefined: four TS18048 errors ('largest'/'secondLargest' possibly undefined) under noUncheckedIndexedAccess.",
   },
   {
-    file: 'service-urls.test.ts',
-    reason: "implicit-any: imports '../scripts/service-urls.mjs', which has no declaration file (TS7016).",
-  },
-  {
     file: 'smoke-sh.test.ts',
     reason:
       "implicit-any: imports '../scripts/journey-expectations.mjs' (TS7016), cascading into one TS7006 parameter.",
-  },
-  {
-    file: 'upsert-preview-comment.test.ts',
-    reason:
-      "implicit-any: imports '../scripts/upsert-preview-comment.mjs', which has no declaration file (TS7016).",
   },
 ];
 
