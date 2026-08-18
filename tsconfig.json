@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/adapter-contract" },
     { "path": "packages/journey-model" },
     { "path": "packages/store" },
     { "path": "packages/port" },
