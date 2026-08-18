@@ -354,20 +354,21 @@ recorded here so the next person does not have to rediscover them.
 
 ---
 
-**Status.** Done. `.github/workflows/promote.yml` runs the full sequence — wait for the other
-checks, assert ancestry, capture a rollback target, build, deploy a digest-pinned `candidate`
-revision at zero traffic, smoke, cut 10%, health-check, cut 100% (traffic pinned here),
-squash-merge, assert tree equality, retag the proven digest, drop the tag — with every step
-timeout-bounded and a rollback path guarded so it cannot move traffic after the merge. Full
-sequence and rationale: docs/architecture.md §9a. The decision logic lives in `scripts/promote/`
-with tests rather than in `run:` blocks. The smoke asserts the prompt heading of every screen of
-the reference journey, derived from the journey document — headings only, and a screen carrying
-no prompt heading fails the derivation rather than being skipped past. ADR 0007 carries two
-amendments from this change: the health-check divergence (probing the candidate's tag, not the
-blended service), and the canary dwell (repeated probes over a bounded window, not one instant).
+**Status.** Open — the promotion path is proved in production; rollback-on-failure is not.
+`.github/workflows/promote.yml` runs the full sequence — wait for the other checks, assert
+ancestry, capture a rollback target, build, deploy a digest-pinned `candidate` revision at zero
+traffic, smoke, cut 10%, health-check, cut 100% (traffic pinned here), squash-merge, assert tree
+equality, retag the proven digest, drop the tag — with every step timeout-bounded and a rollback
+path guarded so it cannot move traffic after the merge. Full sequence and rationale:
+docs/architecture.md §9a. The decision logic lives in `scripts/promote/` with tests rather than
+in `run:` blocks. The smoke asserts the prompt heading of every screen of the reference journey,
+derived from the journey document — headings only, and a screen carrying no prompt heading fails
+the derivation rather than being skipped past. ADR 0007 carries two amendments from this change:
+the health-check divergence (probing the candidate's tag, not the blended service), and the
+canary dwell (repeated probes over a bounded window, not one instant).
 
-**Proved 2026-08-17, twice.** PR #13 carried the `promote` label first and ran the sequence to
-completion: rollback target `design-space-studio-00071-daf` captured, candidate
+**Proved in production, 2026-08-17, twice.** PR #13 carried the `promote` label first and ran the
+sequence to completion: rollback target `design-space-studio-00071-daf` captured, candidate
 `design-space-studio-00082-duq` deployed at zero traffic, smoked, cut to 10% then 100%,
 squash-merged, tree asserted equal, retagged. `/health` on the traffic-serving revision returned
 200 for the first time — production had served stale code (revision `-00002`, predating the
@@ -376,6 +377,22 @@ run. PR #11 then ran the same sequence independently — rollback target `-00082
 `design-space-studio-00091-pip`, five canary probes over the dwell window all `200` and naming
 the candidate revision, cut to 100%, squash-merged — proving the sequence works for an ordinary
 change and not only the one whose own run first exercised it.
+
+**Not proved — two rollback clauses.** The done-bar's "a deliberately broken candidate is rolled
+back without traffic reaching it and without merging" and "a candidate that passes smoke but
+fails the health check at 10% is rolled back before the remaining traffic moves" have never been
+exercised against the real service. Both real runs succeeded, so `rollback.sh` correctly
+evaluated to `skipped` both times — it has never actually restored traffic. Its three-way exit
+contract (restored / already-absent / real-failure) is covered by unit tests against a stubbed
+`gcloud` and was mutation-checked in both directions, which proves the *decision logic* — which
+exit path is chosen given a state — not that the mechanism moves real traffic when called for
+real.
+
+**How this could be proved**, recorded rather than scheduled: inject a deliberate failure after
+the candidate deploys but before the 100% cut — a forced non-zero exit or a broken smoke
+assertion — and confirm `rollback.sh` restores traffic to the captured rollback-target revision
+against the live service. This carries real production risk (a live traffic cut during the test)
+and is an operator decision to run deliberately; it is not planned or scheduled here.
 
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
