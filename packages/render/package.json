@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@design-space/port": "*",
-    "@design-space/journey-model": "*"
+    "@design-space/journey-model": "*",
+    "@design-space/adapter-contract": "*"
   }
 }

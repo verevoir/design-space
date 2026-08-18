@@ -1,14 +1,15 @@
 import { type JourneyDocument, type Screen, type Block, type Action } from '@design-space/journey-model';
 import { getContract } from '@design-space/port';
+import { type Adapter, assertAdapter } from '@design-space/adapter-contract';
 
 /**
- * An adapter component map. Typed loosely so render is not bound to a specific
- * adapter package — any object with the right shape satisfies it.
+ * An adapter component map, plus presentation (ADR 0008). Kept as a type
+ * alias of the shared `Adapter` contract rather than a structural copy — the
+ * package used to declare its own `{ name, components }` interface here,
+ * which is exactly the kind of duplicate that let the contract widen without
+ * either `render` or `gate` noticing. There is now one definition, imported.
  */
-export interface AdapterLike {
-  readonly name: string;
-  readonly components: Readonly<Record<string, (props: unknown) => string>>;
-}
+export type AdapterLike = Adapter;
 
 /** A block that fell through because the adapter has no renderer for it. */
 export interface GapRecord {
@@ -140,6 +141,18 @@ ${actionsSection}
 // Document assembly
 // ---------------------------------------------------------------------------
 
+/**
+ * Document chrome only: reset, layout of a screen and its actions, and the
+ * gap element's visual shape. Component appearance (`.ds-prompt*`,
+ * `.ds-action--*`) used to live here too — ADR 0008 moved it into the
+ * adapter's own `styles`, because `render` owning it meant every adapter
+ * rendered identically and a token swap could change nothing on screen.
+ *
+ * `.ds-screen` and `.ds-gap` stay here — they are document-owned layout, not
+ * a port component's appearance — but their border *colour* is read through
+ * `var(--ds-*)` with a literal fallback, so an adapter can still recolour
+ * them via tokens without owning the rule.
+ */
 const PAGE_CSS = `
 :root { box-sizing: border-box; }
 *, *::before, *::after { box-sizing: inherit; }
@@ -154,7 +167,7 @@ body {
   max-width: 36rem;
   margin: 0 auto 4rem;
   padding: 2rem;
-  border: 1px solid #ddd;
+  border: 1px solid var(--ds-border-color, #ddd);
   border-radius: 6px;
 }
 .ds-screen + .ds-screen { border-top: none; }
@@ -164,22 +177,9 @@ body {
   flex-wrap: wrap;
   gap: 0.75rem;
 }
-.ds-action {
-  display: inline-block;
-  padding: 0.5rem 1.25rem;
-  border-radius: 4px;
-  text-decoration: none;
-  font-weight: 600;
-  border: 2px solid currentColor;
-  color: #1a6fb5;
-}
-.ds-action--primary { background: #1a6fb5; color: #fff; border-color: #1a6fb5; }
-.ds-action--secondary { background: transparent; color: #1a6fb5; }
-.ds-action--destructive { background: transparent; color: #c0392b; border-color: #c0392b; }
-.ds-action--escape { background: transparent; color: #555; border-color: #aaa; }
 /* Gap: visible box naming the missing component */
 .ds-gap {
-  border: 2px dashed #e74c3c;
+  border: 2px dashed var(--ds-gap-border, #e74c3c);
   border-radius: 4px;
   padding: 1rem;
   margin: 0.75rem 0;
@@ -204,11 +204,19 @@ body {
   font-family: monospace;
   font-size: 0.9rem;
 }
-/* prompt component */
-.ds-prompt { margin-bottom: 1.5rem; }
-.ds-prompt__heading { margin: 0 0 0.5rem; font-size: 1.5rem; }
-.ds-prompt__explain { margin: 0; color: #444; }
 `.trim();
+
+/**
+ * Wraps an adapter's structured tokens as a `:root { --name: value; }`
+ * block, so a token-only variant reaches the page as real custom properties
+ * (ADR 0008) rather than staying inert data nothing reads.
+ */
+function tokensBlock(tokens: Readonly<Record<string, string>>): string {
+  const entries = Object.entries(tokens)
+    .map(([name, value]) => `  --${name}: ${value};`)
+    .join('\n');
+  return `:root {\n${entries}\n}`;
+}
 
 function buildDocument(journey: JourneyDocument, adapter: AdapterLike, body: string): string {
   return `<!DOCTYPE html>
@@ -219,6 +227,8 @@ function buildDocument(journey: JourneyDocument, adapter: AdapterLike, body: str
 <title>${escapeHtml(journey.title)}</title>
 <style>
 ${PAGE_CSS}
+${tokensBlock(adapter.tokens)}
+${adapter.styles}
 </style>
 </head>
 <body>
@@ -243,8 +253,12 @@ ${body}
  * Blocks whose component the adapter does not implement produce a visible,
  * labelled gap element in the output and are recorded in `result.gaps`. The
  * document is always complete — a missing component is never a crash.
+ *
+ * Rejects an adapter that does not carry `styles` and `tokens` (ADR 0008) —
+ * see `assertAdapter`.
  */
 export function render(journey: JourneyDocument, adapter: AdapterLike): RenderResult {
+  assertAdapter(adapter, 'render()');
   const gaps: GapRecord[] = [];
   const allScreenIds = new Set(journey.screens.map((s) => s.id));
 

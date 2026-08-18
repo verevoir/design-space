@@ -1,5 +1,6 @@
 import { PORT_COMPONENTS, type ComponentName } from '@design-space/port';
-import type { AdapterLike, GapRecord } from './adapter-like.js';
+import { type AdapterLike, assertAdapter } from '@design-space/adapter-contract';
+import type { GapRecord } from '@design-space/render';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,11 +61,17 @@ export interface CoverageReport {
  *
  * Gaps (missing renderer) are distinguished from defects (renderer threw).
  * A gap is a finding about the adapter's completeness; a defect is a bug.
+ *
+ * Rejects an adapter that does not carry `styles` and `tokens` (ADR 0008) —
+ * see `assertAdapter`. `GapRecord` is imported from `@design-space/render`
+ * rather than a structural copy — it is render's own result type, and this
+ * package already consumed it as a parameter shape without importing it.
  */
 export function check(
   adapter: AdapterLike,
   renderGaps: readonly GapRecord[],
 ): CoverageReport {
+  assertAdapter(adapter, 'gate.check()');
   const portNames = Object.keys(PORT_COMPONENTS) as ComponentName[];
 
   const implemented = portNames.filter(
