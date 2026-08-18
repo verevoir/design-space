@@ -222,7 +222,7 @@ figure, not as "cheap".
 **Writes.** `packages/studio` (entry point), `Dockerfile`, deployment configuration.
 **Unblocks.** 2S.3.
 
-**Status.** Mostly done, one clause outstanding.
+**Status.** Done.
 
 Delivered: `serve.ts` wires `prerender`'s output to the server and is what the container runs;
 a two-stage `Dockerfile` pinned by digest, non-root, carrying no git, no devDependencies and no
@@ -230,8 +230,16 @@ source; the service deployed to Cloud Run in `europe-west2` at `min-instances=0`
 only, running as an identity with no permissions. The deployed URL serves the journey — the
 `prompt` block rendered, five labelled gaps, 5689 bytes.
 
-**Outstanding: the idle cost as a number.** The done-bar asks for a figure rather than the word
-"cheap", and only a billing read supplies one. Not estimated on purpose.
+**Idle cost, measured 2026-08-17 — a point-in-time count, already stale by the time anyone reads
+it.** The service held 69 revisions, of which 65 carried neither a tag nor any traffic
+allocation, and **zero held a warm instance** — Cloud Run scales every untagged,
+untraffic'd revision to zero, and this service has no revision-retention setting to age old ones
+out on its own. So the answer to the done-bar's question is *clutter, not a standing charge*: no
+revision costs anything while idle, but revisions accumulate indefinitely because nothing removes
+one that carries neither a tag nor traffic — the close-preview step (2S.6) removes a PR's *tag*
+on promotion, not the revision underneath it. Separate and **not sized here**: each of those 69
+revisions' container images remains in Artifact Registry, which does carry a storage cost — an
+unmeasured tail, recorded so it is not mistaken for zero.
 
 Two things the deployment caught that nothing else had. The image built on Apple Silicon is
 `arm64` and Cloud Run rejects it with `exec format error` at the startup probe — a passing suite
@@ -341,22 +349,28 @@ recorded here so the next person does not have to rediscover them.
 
 ---
 
-**Status.** Implemented, not yet verified. `.github/workflows/promote.yml` runs the full sequence
-— wait for the other checks, assert ancestry, capture a rollback target, build, deploy a
-digest-pinned `candidate` revision at zero traffic, smoke, cut 10%, health-check, cut 100%
-(traffic pinned here), squash-merge, assert tree equality, retag the proven digest, drop the
-tag — with every step timeout-bounded and a rollback path guarded so it cannot move traffic
-after the merge. Full sequence and rationale: docs/architecture.md §9a.
-The decision logic lives in `scripts/promote/` with tests rather than in `run:` blocks. The smoke
-now asserts the prompt heading of every screen of the reference journey, derived from the journey
-document — headings only, and a screen carrying no prompt heading fails the derivation rather than
-being skipped past. ADR 0007 carries two amendments from this change: the health-check
-divergence (probing the candidate's tag, not the blended service), and the canary dwell
-(repeated probes over a bounded window, not one instant).
+**Status.** Done. `.github/workflows/promote.yml` runs the full sequence — wait for the other
+checks, assert ancestry, capture a rollback target, build, deploy a digest-pinned `candidate`
+revision at zero traffic, smoke, cut 10%, health-check, cut 100% (traffic pinned here),
+squash-merge, assert tree equality, retag the proven digest, drop the tag — with every step
+timeout-bounded and a rollback path guarded so it cannot move traffic after the merge. Full
+sequence and rationale: docs/architecture.md §9a. The decision logic lives in `scripts/promote/`
+with tests rather than in `run:` blocks. The smoke asserts the prompt heading of every screen of
+the reference journey, derived from the journey document — headings only, and a screen carrying
+no prompt heading fails the derivation rather than being skipped past. ADR 0007 carries two
+amendments from this change: the health-check divergence (probing the candidate's tag, not the
+blended service), and the canary dwell (repeated probes over a bounded window, not one instant).
 
-Outstanding: the gates have not been run against this change and it has not promoted anything, so
-nothing here is proved. It promotes itself by carrying the `promote` label, and that is the
-intended first proof.
+**Proved 2026-08-17, twice.** PR #13 carried the `promote` label first and ran the sequence to
+completion: rollback target `design-space-studio-00071-daf` captured, candidate
+`design-space-studio-00082-duq` deployed at zero traffic, smoked, cut to 10% then 100%,
+squash-merged, tree asserted equal, retagged. `/health` on the traffic-serving revision returned
+200 for the first time — production had served stale code (revision `-00002`, predating the
+endpoint) through twenty-four built-and-smoke-tested-but-never-promoted revisions before this
+run. PR #11 then ran the same sequence independently — rollback target `-00082-duq`, candidate
+`design-space-studio-00091-pip`, five canary probes over the dwell window all `200` and naming
+the candidate revision, cut to 100%, squash-merged — proving the sequence works for an ordinary
+change and not only the one whose own run first exercised it.
 
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
@@ -372,6 +386,33 @@ redeploy or delete the thing it was meant to curl.
 **no project-level grant at all**, and is assumable only under the same WIF condition as the
 deployer. The preview workflow mints the smoke token as that identity; a shape test asserts the
 minting step names the invoker and never the deployer, so the arrangement cannot quietly revert.
+
+### 2S.6 A promotion closes its own preview environment
+
+**Outcome.** After a promotion's squash-merge, the PR's preview tag is removed from the service
+and its branch is deleted from origin — the same cleanup a human closing the PR triggers, without
+needing a human to close it.
+
+**Why.** A promotion's merge is not a human closing the PR. `preview.yml`'s cleanup job listens
+for GitHub's `pull_request: closed` event, and that event is never delivered when the merge is
+performed with the default `GITHUB_TOKEN`: GitHub suppresses workflow triggers produced by events
+an Actions-authored `GITHUB_TOKEN` causes, specifically so workflows cannot chain into each other
+unbounded. So the cleanup job for a promoted PR is not skipped and does not fail — no run is ever
+created for it at all. `preview.yml`'s cleanup job is unchanged and remains correct: it still
+fires and works exactly as designed on a human close, which does deliver the event. The gap is
+specific to the promotion path, so `promote.yml` now closes its own preview as its last step
+rather than depending on an event its own merge suppresses.
+
+**Status.** Done, proved twice, 2026-08-17. PR #13 introduced the close-preview step and was the
+first to exercise it, in the same run that shipped the fix: tag `pr-13` removed, branch
+`2S.5-close-preview-final` deleted, `pr-8` — which predates the fix and which nothing else
+sweeps — left untouched in the traffic snapshot the step itself printed one line earlier. That is
+the control that makes the removal mean something rather than a service-wide sweep. PR #11 then
+exercised the step as an ordinary consumer that never touched its code: tag `pr-11` removed,
+branch `gate-declaration` deleted, `pr-8` still present in both the before- and after-removal
+traffic snapshots the step prints. That is the regression test, not only the demonstration.
+
+**Writes.** `.github/workflows/promote.yml`, `scripts/promote/close-preview-environment.sh`.
 
 ## Wave 2 — the second contract
 
