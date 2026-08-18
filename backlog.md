@@ -222,7 +222,7 @@ figure, not as "cheap".
 **Writes.** `packages/studio` (entry point), `Dockerfile`, deployment configuration.
 **Unblocks.** 2S.3.
 
-**Status.** Done.
+**Status.** Open — one clause of the done-bar remains unmet.
 
 Delivered: `serve.ts` wires `prerender`'s output to the server and is what the container runs;
 a two-stage `Dockerfile` pinned by digest, non-root, carrying no git, no devDependencies and no
@@ -230,16 +230,21 @@ source; the service deployed to Cloud Run in `europe-west2` at `min-instances=0`
 only, running as an identity with no permissions. The deployed URL serves the journey — the
 `prompt` block rendered, five labelled gaps, 5689 bytes.
 
-**Idle cost, measured 2026-08-17 — a point-in-time count, already stale by the time anyone reads
-it.** The service held 69 revisions, of which 65 carried neither a tag nor any traffic
-allocation, and **zero held a warm instance** — Cloud Run scales every untagged,
-untraffic'd revision to zero, and this service has no revision-retention setting to age old ones
-out on its own. So the answer to the done-bar's question is *clutter, not a standing charge*: no
+**The idle-cost clause is answered for compute, measured 2026-08-17 — a point-in-time count,
+already stale by the time anyone reads it.** The service held 69 revisions, of which 65 carried
+neither a tag nor any traffic allocation, and **zero held a warm instance** — Cloud Run scales
+every untagged, untraffic'd revision to zero, and this service has no revision-retention setting
+to age old ones out on its own. So compute at idle is genuinely zero, not an estimate: no
 revision costs anything while idle, but revisions accumulate indefinitely because nothing removes
 one that carries neither a tag nor traffic — the close-preview step (2S.6) removes a PR's *tag*
-on promotion, not the revision underneath it. Separate and **not sized here**: each of those 69
-revisions' container images remains in Artifact Registry, which does carry a storage cost — an
-unmeasured tail, recorded so it is not mistaken for zero.
+on promotion, not the revision underneath it.
+
+**The clause is not answered for storage, and that is what keeps this story open.** Each of
+those 69 revisions' container images remains in Artifact Registry, which does carry a standing
+storage cost, and it has never been measured — a real billing read is the only thing that
+supplies that figure, and none has been taken. `docs/architecture.md` §9a is reconciled to say
+the same thing rather than continuing to say "not yet a measured figure" about a number half of
+which now exists.
 
 Two things the deployment caught that nothing else had. The image built on Apple Silicon is
 `arm64` and Cloud Run rejects it with `exec format error` at the startup probe — a passing suite

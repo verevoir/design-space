@@ -268,13 +268,19 @@ the startup probe. Where no cross-builder is available, `gcloud builds submit` b
 ### Idle cost
 
 `min-instances=0` means no instance runs when nothing is being served, so **compute at idle is
-zero** — Cloud Run bills per request and per instance-second. The standing cost is Artifact
-Registry storage for the pushed images.
+zero** — Cloud Run bills per request and per instance-second, and a revision carrying neither a
+tag nor traffic is scaled to zero instances rather than left running. **Measured 2026-08-17**
+(a point-in-time count, not a current one — see backlog.md 2S.2): 69 revisions existed, 65
+carried neither a tag nor traffic, and **zero of those held a warm instance**. So the compute
+figure is a structural fact of Cloud Run's scaling model, confirmed by counting, rather than an
+estimate.
 
-*Not yet a measured figure.* Story 2S.2's done-bar asks for a number rather than the word "cheap",
-and a real billing read is the only thing that supplies one. Recorded as outstanding rather than
-estimated, because an arithmetic guess dressed as a measurement is the failure this project keeps
-finding.
+**The standing cost is Artifact Registry storage for the pushed images, and that figure remains
+unmeasured.** Story 2S.2's done-bar asks for the idle cost as a number rather than the word
+"cheap"; the compute half is answered above, and the storage half is outstanding — a real billing
+read is the only thing that supplies it, and none has been taken. Recorded as outstanding rather
+than estimated, because an arithmetic guess dressed as a measurement is the failure this project
+keeps finding.
 
 ### Per-PR preview deployments
 
