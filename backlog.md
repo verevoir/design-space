@@ -412,6 +412,12 @@ exercised the step as an ordinary consumer that never touched its code: tag `pr-
 branch `gate-declaration` deleted, `pr-8` still present in both the before- and after-removal
 traffic snapshots the step prints. That is the regression test, not only the demonstration.
 
+**Naming note.** The branch this shipped on (`2S.5-close-preview-final`) and PR #13's own body
+call this work 2S.5 throughout. That number was already taken by the invoker-identity story
+above; 2S.6 is correct and this entry uses it. The merged commit history cannot be renamed, so
+someone searching for "2S.5" from that branch name or PR text will land on the invoker story
+instead — this note exists so that lands as a correction rather than a mystery.
+
 **Writes.** `.github/workflows/promote.yml`, `scripts/promote/close-preview-environment.sh`.
 
 ## Wave 2 — the second contract
