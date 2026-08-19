@@ -56,20 +56,23 @@ fails.
 **Writes.** Repository root, every package manifest.
 **Unblocks.** Everything.
 
-**Debt recorded 2026-08-17, corrected 2026-08-17.** `tests/tsconfig.json`'s `include` list is
-hand-maintained rather than globbed, because a full-glob probe (`npx tsc -b` against every
-`tests/*.test.ts`) found nine pre-existing test files that do not type-check under this
-project's strict settings: `ci-workflow-shape.test.ts`, `dockerfile-runtime-deps.test.ts`,
-`exit-contracts.test.ts`, `preview-workflow-shape.test.ts`, `promote-decisions.test.ts`,
-`promote-workflow-shape.test.ts`, `service-urls.test.ts`, `smoke-sh.test.ts`,
-`upsert-preview-comment.test.ts`. Two error classes account for all nine — implicit `any` from
-importing a sibling `.mjs` script with no declaration file (TS7016, cascading into TS7006 on its
-call sites), and a lookup used without a narrowing check under `noUncheckedIndexedAccess`
-(TS2345/TS2532/TS2322/TS18048). `tests/tsconfig-include-coverage.test.ts` tracks each by name
-with its specific reason and fails if a file is silently dropped from that list or from
-`include` without one. Fixing the nine is not scheduled as a story; picking one up means adding
-the missing narrowing checks or a declaration file for the `.mjs` import, then moving that file
-from the guard's `KNOWN_UNCHECKED` into `tests/tsconfig.json`'s `include`.
+**Debt recorded 2026-08-17, corrected 2026-08-17, three closed 2026-08-19.** `tests/tsconfig.json`'s
+`include` list is hand-maintained rather than globbed, because a full-glob probe (`npx tsc -b`
+against every `tests/*.test.ts`) originally found nine pre-existing test files that did not
+type-check under this project's strict settings. Two error classes account for all of them —
+implicit `any` from importing a sibling `.mjs` script with no declaration file (TS7016,
+cascading into TS7006 on its call sites), and a lookup used without a narrowing check under
+`noUncheckedIndexedAccess` (TS2345/TS2532/TS2322/TS18048). Three implicit-any cases are now
+fixed rather than narrowed away: `service-urls.test.ts`, `exit-contracts.test.ts` and
+`upsert-preview-comment.test.ts` each gained a colocated `.d.mts` declaration for its `.mjs`
+import — honest signatures, not `any` — and moved into `include`. **Six remain, as of this
+edit** — the same two classes, no longer nine files' worth. Rather than hand-count and re-list
+them here (the exact mistake this correction fixes), `tests/tsconfig-include-coverage.test.ts`'s
+`KNOWN_UNCHECKED` array is the authoritative current list and count going forward — read it
+rather than trusting a number in this paragraph, which would be exactly as stale as this one was
+the next time an entry moves. Picking one up means adding the missing narrowing checks or a
+declaration file for the `.mjs` import, then moving that file from `KNOWN_UNCHECKED` into
+`tests/tsconfig.json`'s `include`.
 
 This entry originally listed a tenth file, `verified-pregate.test.ts`, which does not exist
 anywhere in this repository — a fabricated entry that three independent review lenses caught

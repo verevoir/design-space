@@ -50,8 +50,11 @@ interface UncheckedEntry {
 
 // Every currently-unchecked test file, with why. A file lands here only because it genuinely
 // fails to type-check under tests/tsconfig.json's strict settings when included — verified
-// directly against a temporary full-glob build, not assumed. Two error classes account for all
-// nine; see backlog.md's 0.1 entry for the class and a pointer to pick it up deliberately.
+// directly against a temporary full-glob build, not assumed. Two error classes account for
+// what remains here (implicit-any from an undeclared .mjs import, and possibly-undefined under
+// noUncheckedIndexedAccess); see backlog.md's 0.1 entry for a pointer to pick it up
+// deliberately. Deliberately no count stated here — a number beside a list goes stale exactly
+// as silently as the debt itself; the array's own length is the count, always current.
 const KNOWN_UNCHECKED: UncheckedEntry[] = [
   {
     file: 'ci-workflow-shape.test.ts',
@@ -62,11 +65,6 @@ const KNOWN_UNCHECKED: UncheckedEntry[] = [
     file: 'dockerfile-runtime-deps.test.ts',
     reason:
       'possibly-undefined: TS2532/TS2345/TS2322 across four call sites — indexed/optional lookups used without narrowing.',
-  },
-  {
-    file: 'exit-contracts.test.ts',
-    reason:
-      "implicit-any: imports '../scripts/check-exit-contracts.mjs', which has no declaration file (TS7016), cascading into two TS7006 parameters.",
   },
   {
     file: 'preview-workflow-shape.test.ts',
@@ -84,18 +82,9 @@ const KNOWN_UNCHECKED: UncheckedEntry[] = [
       "possibly-undefined: four TS18048 errors ('largest'/'secondLargest' possibly undefined) under noUncheckedIndexedAccess.",
   },
   {
-    file: 'service-urls.test.ts',
-    reason: "implicit-any: imports '../scripts/service-urls.mjs', which has no declaration file (TS7016).",
-  },
-  {
     file: 'smoke-sh.test.ts',
     reason:
       "implicit-any: imports '../scripts/journey-expectations.mjs' (TS7016), cascading into one TS7006 parameter.",
-  },
-  {
-    file: 'upsert-preview-comment.test.ts',
-    reason:
-      "implicit-any: imports '../scripts/upsert-preview-comment.mjs', which has no declaration file (TS7016).",
   },
 ];
 

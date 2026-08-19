@@ -40,6 +40,12 @@ COPY examples/ examples/
 # Required by tsc -b's `tests` project reference — see tests/dockerfile-project-references.test.ts
 # for why (TS5083) and the guard against a future reference going uncopied the same way.
 COPY tests/ tests/
+# Required because several now-type-checked test files import `.mjs` scripts under scripts/ —
+# both the runtime module itself and its colocated .d.mts declaration. Without this, tsc -b
+# fails with TS2307 ("Cannot find module") even though the same build passes locally, where a
+# full checkout has scripts/ on disk. Different failure mode from the tests/ omission above
+# (TS2307 vs TS5083), same root class: a path the build reaches was not COPY'd.
+COPY scripts/ scripts/
 
 # Build every package (tsc -b then postbuild scripts).
 RUN npm run build
