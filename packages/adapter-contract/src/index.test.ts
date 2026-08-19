@@ -35,6 +35,11 @@ describe('assertAdapter()', () => {
     expect(() => assertAdapter(wrong, 'test')).toThrow(/tokens/);
   });
 
+  it('throws when tokens is null', () => {
+    const wrong = { name: 'x', components: {}, styles: '', tokens: null } as unknown as Adapter;
+    expect(() => assertAdapter(wrong, 'test')).toThrow(/tokens/);
+  });
+
   it('names the adapter and the calling context in the error message', () => {
     const incomplete = { name: 'my-adapter', components: {}, tokens: {} } as unknown as Adapter;
     expect(() => assertAdapter(incomplete, 'render()')).toThrow(/my-adapter/);

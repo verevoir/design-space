@@ -16,6 +16,7 @@ COPY package.json package-lock.json ./
 COPY packages/journey-model/package.json packages/journey-model/
 COPY packages/port/package.json           packages/port/
 COPY packages/store/package.json          packages/store/
+COPY packages/adapter-contract/package.json packages/adapter-contract/
 COPY packages/adapter-sketch/package.json packages/adapter-sketch/
 COPY packages/render/package.json         packages/render/
 COPY packages/gate/package.json           packages/gate/
