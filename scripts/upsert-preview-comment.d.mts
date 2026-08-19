@@ -1,10 +1,8 @@
 /**
- * Type declaration for upsert-preview-comment.mjs, which has no declarations of its own (TS7016)
- * — the script stays plain JS/JSDoc; this file exists only so tests/tsconfig.json's strict
- * settings can type-check its imports. Kept in sync with the JSDoc in the script by hand: the
- * two are not generated from a shared source, so a signature change to the script that doesn't
- * update this file would go undetected until the next edit here — same failure mode as any
- * hand-written declaration, not specific to this one.
+ * Type declaration for upsert-preview-comment.mjs — TS7016, hand-maintained against the script's
+ * own JSDoc. Same reasoning as every sibling declaration in this directory (why this pattern
+ * exists, what "kept in sync by hand" means and risks): see scripts/service-urls.d.mts's file
+ * header, stated once there rather than repeated here.
  */
 
 export declare const MARKER: string;
