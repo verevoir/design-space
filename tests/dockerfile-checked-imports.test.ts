@@ -112,6 +112,36 @@ export function findUncopiedDirs(builderSection: string, dirs: Set<string>): str
   return missing.sort();
 }
 
+/**
+ * Pure: parses raw tsconfig.json text and returns its `include` array, or throws if `include`
+ * is absent or not an array. Split out from realIncludeList() below so the error branch can be
+ * fixture-tested without needing a malformed file on disk.
+ */
+export function parseIncludeList(raw: string): string[] {
+  const parsed = JSON.parse(raw) as { include?: unknown };
+  if (!Array.isArray(parsed.include)) {
+    throw new Error('tests/tsconfig.json: "include" is missing or not an array.');
+  }
+  return parsed.include as string[];
+}
+
+/**
+ * Pure: extracts the text between the "AS builder" and "AS runtime" markers from raw Dockerfile
+ * text, or throws if either marker is absent. Split out from builderStageSection() below so
+ * both error branches can be fixture-tested without editing the real Dockerfile.
+ */
+export function extractBuilderStageSection(dockerfileContent: string): string {
+  const startIdx = dockerfileContent.indexOf('AS builder');
+  if (startIdx === -1) {
+    throw new Error('Dockerfile: could not find the builder stage (no "AS builder" marker).');
+  }
+  const endIdx = dockerfileContent.indexOf('AS runtime', startIdx);
+  if (endIdx === -1) {
+    throw new Error('Dockerfile: could not find the runtime stage marker to bound the builder stage.');
+  }
+  return dockerfileContent.slice(startIdx, endIdx);
+}
+
 describe('relativeImportSpecifiers', () => {
   it('extracts a brace-clause relative import', () => {
     expect(relativeImportSpecifiers("import { x } from '../scripts/x.mjs';")).toEqual([
@@ -155,6 +185,20 @@ describe('relativeImportSpecifiers', () => {
         "import { a } from '../scripts/a.mjs';\nimport { b } from '../scripts/b.mjs';",
       ),
     ).toEqual(['../scripts/a.mjs', '../scripts/b.mjs']);
+  });
+
+  it('extracts an export-from relative specifier', () => {
+    expect(relativeImportSpecifiers("export { x } from '../scripts/x.mjs';")).toEqual([
+      '../scripts/x.mjs',
+    ]);
+  });
+
+  it('ignores an import-like string inside a block comment — proves the false positive the stripping exists to prevent does not occur', () => {
+    expect(
+      relativeImportSpecifiers(
+        "/* import { x } from '../scripts/x.mjs'; */\nimport { describe } from 'vitest';",
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -205,17 +249,57 @@ describe('findUncopiedDirs', () => {
   });
 });
 
+describe('parseIncludeList', () => {
+  it('throws when include is absent', () => {
+    expect(() => parseIncludeList('{}')).toThrow(
+      'tests/tsconfig.json: "include" is missing or not an array.',
+    );
+  });
+
+  it('throws when include is present but not an array', () => {
+    expect(() => parseIncludeList('{"include": "foo.ts"}')).toThrow(
+      'tests/tsconfig.json: "include" is missing or not an array.',
+    );
+  });
+
+  it('returns the include array on the happy path', () => {
+    expect(parseIncludeList('{"include": ["a.test.ts"]}')).toEqual(['a.test.ts']);
+  });
+});
+
+describe('extractBuilderStageSection', () => {
+  it('throws when the builder stage marker is absent', () => {
+    expect(() => extractBuilderStageSection('FROM node:20 AS runtime\n')).toThrow(
+      'Dockerfile: could not find the builder stage (no "AS builder" marker).',
+    );
+  });
+
+  it('throws when the runtime stage marker is absent', () => {
+    expect(() => extractBuilderStageSection('FROM node:20 AS builder\nCOPY . .\n')).toThrow(
+      'Dockerfile: could not find the runtime stage marker to bound the builder stage.',
+    );
+  });
+
+  it('extracts the section between the two markers on the happy path', () => {
+    // The slice runs up to (not including) "AS runtime" itself, so it still carries whatever
+    // precedes that marker on its own line ("FROM node:20 " here) — exactly what
+    // findUncopiedDirs's COPY-line regex needs present, since a COPY line always sits before
+    // the next FROM.
+    expect(
+      extractBuilderStageSection(
+        'FROM node:20 AS builder\nCOPY scripts/ scripts/\nFROM node:20 AS runtime\n',
+      ),
+    ).toBe('AS builder\nCOPY scripts/ scripts/\nFROM node:20 ');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The real repository, right now — one more input to the same functions above, not the only one.
 // ---------------------------------------------------------------------------
 
 function realIncludeList(): string[] {
   const raw = readFileSync(path.join(TESTS_DIR, 'tsconfig.json'), 'utf8');
-  const parsed = JSON.parse(raw) as { include?: unknown };
-  if (!Array.isArray(parsed.include)) {
-    throw new Error('tests/tsconfig.json: "include" is missing or not an array.');
-  }
-  return parsed.include as string[];
+  return parseIncludeList(raw);
 }
 
 function realSourceByFile(includedFiles: string[]): Record<string, string> {
@@ -230,15 +314,7 @@ function realSourceByFile(includedFiles: string[]): Record<string, string> {
 
 function builderStageSection(): string {
   const dockerfile = readFileSync(path.join(REPO_ROOT, 'Dockerfile'), 'utf-8');
-  const startIdx = dockerfile.indexOf('AS builder');
-  if (startIdx === -1) {
-    throw new Error('Dockerfile: could not find the builder stage (no "AS builder" marker).');
-  }
-  const endIdx = dockerfile.indexOf('AS runtime', startIdx);
-  if (endIdx === -1) {
-    throw new Error('Dockerfile: could not find the runtime stage marker to bound the builder stage.');
-  }
-  return dockerfile.slice(startIdx, endIdx);
+  return extractBuilderStageSection(dockerfile);
 }
 
 /**
