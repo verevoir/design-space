@@ -520,7 +520,7 @@ this story or to 4.1 (which is what actually needs the gate to read a token valu
 operator ruling.
 
 **Writes.** `packages/adapter-contract`, `packages/render`, `packages/gate`,
-`packages/adapter-sketch`.
+`packages/adapter-sketch`, `Dockerfile`, `tsconfig.json`, `package-lock.json`.
 **Reads.** `packages/port`.
 **Unblocks.** 3.1, and through it 4.1. Disjoint from 2.1, which writes `port` alone.
 
