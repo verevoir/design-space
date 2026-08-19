@@ -50,17 +50,73 @@ export interface Adapter {
 export type AdapterLike = Adapter;
 
 /**
+ * Thrown when an adapter's `styles` or `tokens` *content* — not its shape —
+ * would corrupt the document `render`'s `<style>` block is built from. Kept
+ * distinct from the `TypeError`s above: "you forgot a field" is a developer
+ * mistake against a known shape, "what you supplied would break out of the
+ * block" is a rejection of untrusted input at the boundary ADR 0008 opens
+ * for a phase-3 externally-published adapter, and a caller may reasonably
+ * want to handle those two differently.
+ */
+export class AdapterContentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AdapterContentError';
+  }
+}
+
+/**
+ * The one real escape vector for `styles`: HTML's raw-text parsing rule ends
+ * a `<style>` element the instant it sees this literal sequence, regardless
+ * of what CSS otherwise legitimately contains — comments, quoted `content`,
+ * `@media` blocks are all fine and stay unrestricted. Case-insensitive
+ * because HTML tag matching is.
+ */
+const STYLE_CLOSE_PATTERN = /<\/style/i;
+
+/** Token names follow the `ds-*` convention already in use throughout. */
+const TOKEN_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * Token values are interpolated as `--name: value;` inside a `:root { }`
+ * block — a stricter context than `styles`: `}` closes the block early,
+ * `;` opens a sibling declaration, and `<` still eventually reaches
+ * `</style`. Tokens were never meant to hold arbitrary CSS — they are meant
+ * to be looked up as data (ADR 0008's contrast-check rationale) — so this is
+ * an allowlist, not a denylist: colours, lengths, keywords, quoted font
+ * stacks, and calc() with all four arithmetic operators.
+ */
+const TOKEN_VALUE_PATTERN = /^[a-zA-Z0-9#%.,'"+*/\s()-]+$/;
+
+/**
+ * `+`, `-`, `*` and `/` are all admitted above for calc() — leaving one
+ * arithmetic operator unsupported next to its three siblings is the kind of
+ * asymmetry that reads as a bug. But a slash next to an asterisk can also
+ * open a CSS comment, which would swallow every declaration that follows
+ * until the comment is closed — including the adapter's own `styles` block,
+ * concatenated right after — so that specific two-character sequence is
+ * checked for and rejected separately, rather than solved by removing the
+ * operator. (Written out to avoid the sequence closing this very comment:
+ * slash-star and star-slash.)
+ */
+const COMMENT_SEQUENCE_PATTERN = /\/\*|\*\//;
+
+/**
  * Runtime guard: throws unless `adapter` actually carries `styles` (a
- * string) and `tokens` (a plain record) — the two fields ADR 0008 added.
+ * string) and `tokens` (a plain record) — the two fields ADR 0008 added —
+ * and, beyond shape, that their *content* cannot break out of the `<style>`
+ * block or the `:root { }` rule `render` builds from them.
  *
  * This exists because TypeScript's structural typing erases at runtime: a
  * caller holding an object built against the old `{ name, components }`
  * shape compiles against `Adapter` with no error if nothing checks the two
  * new fields, and the widening becomes silent no-op that reads like a fix
  * (ADR 0008's second rationale). `render()` and `gate.check()` both call
- * this first, so an incomplete adapter is rejected at the one place both
- * of them accept one, not left to whichever CSS rule happens to reference
- * the missing token.
+ * this first, so an incomplete or unsafe adapter is rejected at the one
+ * place both of them accept one, not left to whichever CSS rule happens to
+ * reference the missing token — and not left to every future caller
+ * (including phase-3 externally-published adapters, ADR 0008) to remember
+ * to escape on their own.
  */
 export function assertAdapter(adapter: Adapter, context: string): void {
   const name = typeof adapter?.name === 'string' ? adapter.name : String(adapter?.name);
@@ -77,5 +133,24 @@ export function assertAdapter(adapter: Adapter, context: string): void {
     throw new TypeError(
       `${context}: adapter "${name}" must supply "tokens" as a structured record (ADR 0008); got ${typeof adapter.tokens}.`,
     );
+  }
+
+  if (STYLE_CLOSE_PATTERN.test(adapter.styles)) {
+    throw new AdapterContentError(
+      `${context}: adapter "${name}"'s "styles" contains "</style" — this would end the document's <style> block early, letting whatever follows run as arbitrary markup.`,
+    );
+  }
+
+  for (const [tokenName, tokenValue] of Object.entries(adapter.tokens)) {
+    if (!TOKEN_NAME_PATTERN.test(tokenName)) {
+      throw new AdapterContentError(
+        `${context}: adapter "${name}"'s token name "${tokenName}" is not a valid custom-property name (expected lowercase letters, digits, hyphens — e.g. "ds-accent").`,
+      );
+    }
+    if (!TOKEN_VALUE_PATTERN.test(tokenValue) || COMMENT_SEQUENCE_PATTERN.test(tokenValue)) {
+      throw new AdapterContentError(
+        `${context}: adapter "${name}"'s token "${tokenName}" has a value that is not a plain CSS value (letters, digits, #%.,'"+*/-, spaces, parentheses; no "/*" or "*/") — got ${JSON.stringify(tokenValue)}.`,
+      );
+    }
   }
 }
