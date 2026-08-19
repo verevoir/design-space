@@ -117,8 +117,22 @@ const COMMENT_SEQUENCE_PATTERN = /\/\*|\*\//;
  * reference the missing token — and not left to every future caller
  * (including phase-3 externally-published adapters, ADR 0008) to remember
  * to escape on their own.
+ *
+ * An adapter that is entirely absent (`null`/`undefined`) is rejected as a
+ * distinct failure from one that is present but incomplete: the former
+ * reads as a wiring problem — nothing resolved to an adapter object — the
+ * latter as an implementation gap in an adapter that does exist. A phase-3
+ * caller integrating an external adapter will want to tell those apart, so
+ * this guard runs first and throws its own message rather than falling
+ * through to a property access on `null`/`undefined`, which would throw an
+ * engine `TypeError` with no context at all — the crash this fixes.
  */
 export function assertAdapter(adapter: Adapter, context: string): void {
+  if (adapter === null || typeof adapter === 'undefined') {
+    throw new TypeError(
+      `${context}: no adapter was provided (got ${adapter === null ? 'null' : 'undefined'}) — this looks like a wiring problem (nothing resolved to an adapter), not an adapter that is present but incomplete.`,
+    );
+  }
   const name = typeof adapter?.name === 'string' ? adapter.name : String(adapter?.name);
   if (typeof adapter.styles !== 'string') {
     throw new TypeError(

@@ -40,6 +40,19 @@ describe('assertAdapter()', () => {
     expect(() => assertAdapter(incomplete, 'render()')).toThrow(/my-adapter/);
     expect(() => assertAdapter(incomplete, 'render()')).toThrow(/render\(\)/);
   });
+
+  it('throws its own message, not a crash, when the adapter itself is null', () => {
+    expect(() => assertAdapter(null as unknown as Adapter, 'test')).toThrow(/no adapter was provided/);
+  });
+
+  it('throws its own message, not a crash, when the adapter itself is undefined', () => {
+    expect(() => assertAdapter(undefined as unknown as Adapter, 'test')).toThrow(/no adapter was provided/);
+  });
+
+  it('distinguishes an entirely-missing adapter from one that is present but incomplete', () => {
+    expect(() => assertAdapter(null as unknown as Adapter, 'test')).not.toThrow(/must supply/);
+    expect(() => assertAdapter({} as unknown as Adapter, 'test')).toThrow(/must supply/);
+  });
 });
 
 describe('assertAdapter() content validation', () => {
