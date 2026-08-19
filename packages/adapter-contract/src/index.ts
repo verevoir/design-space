@@ -116,10 +116,12 @@ const COMMENT_SEQUENCE_PATTERN = /\/\*|\*\//;
  * fetch, including ones that do not exist yet (`image-set()` was not
  * always a fetching function; browsers add these over time). Tokens were
  * never meant to hold arbitrary CSS in the first place (ADR 0008's
- * contrast-check rationale), so the allowlist costs little — these are the
- * functions the shipped token set actually uses (arithmetic and colour),
- * and a function CSS adds later is rejected by default instead of needing
- * someone to notice and add it to a denylist.
+ * contrast-check rationale), so the allowlist costs little — the shipped
+ * token set uses no functions at all today, and this allowlist names the
+ * arithmetic and colour functions a token value could legitimately need,
+ * so that anything else — including a CSS function that does not exist
+ * yet — is rejected by default instead of needing someone to notice and
+ * add it to a denylist.
  */
 const SAFE_TOKEN_FUNCTIONS = new Set(['calc', 'rgb', 'rgba', 'hsl', 'hsla']);
 

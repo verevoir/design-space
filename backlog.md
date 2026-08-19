@@ -487,19 +487,13 @@ page, and reads exactly like a fix.
 **Done when.** The served page carries the sketch adapter's `--ds-*` properties; an adapter
 supplying different token values changes the rendering without changing any markup; component
 appearance is no longer in `render`'s module constant; `render` and `gate` type against the
-contract package and neither structural copy remains anywhere in the tree; two documents rendered
-from different adapters in one page do not affect each other's styling; and the gate reads a
-token value as data rather than as text.
+contract package and neither structural copy remains anywhere in the tree; and two documents
+rendered from different adapters in one page do not affect each other's styling.
 
-**Open question, recorded 2026-08-16.** That last clause does not appear to be covered by
-anything else in this story's scope — `packages/gate` never references `adapter.tokens`; the
-only reader of token values today is `render`'s `tokensBlock()`. Either the clause belongs to
-4.1, which is what actually needs the gate's contrast check to read token values as data, and
-was misplaced here, or this story was meant to wire `gate` to `tokens` and has not. Needs an
-operator ruling before this story can be marked done against that clause.
+**Ruling, 2026-08-19.** The operator ruled: the clause belongs to 4.1, not 2.2 — it was
+misplaced here. Moved to 4.1's done-bar; it is no longer a bar on this story.
 
-**Status.** Mostly done — one clause of the done-bar remains open, deliberately not closed by
-inference. Delivered: `@design-space/adapter-contract` exists, carrying `Adapter` with
+**Status.** Done. Delivered: `@design-space/adapter-contract` exists, carrying `Adapter` with
 `styles: string` and structured `tokens: Readonly<Record<string,string>>`, plus `assertAdapter()`,
 which validates both shape and content at the boundary (ADR 0008; the content rules and the
 CSS-exfiltration accepted-risk note are recorded in `docs/architecture.md` §3). `render` no
@@ -508,16 +502,6 @@ longer hardcodes component appearance — `PAGE_CSS` carries no component rules,
 custom-property block. `render` and `gate` both type against the one contract package; the
 structural `AdapterLike`/`GapRecord` duplicates that lived in `gate`'s own `adapter-like.ts` are
 gone — that file is deleted.
-
-**The open question above is not resolved by this work, checked against the code on this branch
-rather than assumed either way: it stays open.** `packages/gate/src/gate.ts` calls
-`assertAdapter()`, which confirms `tokens` exists and is a well-shaped, well-formed record — a
-presence/shape check, not a read of any particular value for any purpose `gate` itself has. The
-only code anywhere that reads a token's *value* is `render`'s `tokensBlock()`, and it does so to
-emit CSS, not to check anything — a different job from a contrast check reading token values as
-data. So the done-bar's last clause is genuinely unmet, and the question of whether it belongs to
-this story or to 4.1 (which is what actually needs the gate to read a token value) still needs an
-operator ruling.
 
 **Writes.** `packages/adapter-contract`, `packages/render`, `packages/gate`,
 `packages/adapter-sketch`, `Dockerfile`, `tsconfig.json`, `package-lock.json`.
@@ -608,7 +592,12 @@ token set. They render visibly unfinished — not shipped-looking.
 real spacing — that have not been made.
 
 **Done when.** Both variants pass the wave 3.3 gate with full coverage and no escape hatches;
-switching between them changes no markup; the contrast check passes for each.
+switching between them changes no markup; the contrast check passes for each; and the gate reads
+a token value as data rather than as text when running that check.
+
+**Moved here by ruling, 2026-08-19.** That last clause originated in 2.2's done-bar and was
+misplaced there — this story, not 2.2, is what needs the gate's contrast check to read token
+values as data. The operator moved it here.
 
 **Writes.** `packages/adapter-tokens`.
 
