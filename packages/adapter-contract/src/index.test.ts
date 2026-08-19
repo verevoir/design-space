@@ -124,4 +124,46 @@ describe('assertAdapter() content validation', () => {
     };
     expect(() => assertAdapter(adapter, 'test')).not.toThrow();
   });
+
+  it('accepts rgb, rgba, hsl and hsla alongside calc()', () => {
+    const adapter = {
+      ...COMPLETE_ADAPTER,
+      tokens: {
+        'ds-a': 'rgb(0, 0, 0)',
+        'ds-b': 'rgba(0, 0, 0, .5)',
+        'ds-c': 'hsl(0, 0%, 0%)',
+        'ds-d': 'hsla(0, 0%, 0%, .5)',
+      },
+    };
+    expect(() => assertAdapter(adapter, 'test')).not.toThrow();
+  });
+
+  it('rejects a token value calling url() to fetch a remote resource', () => {
+    const adapter = {
+      ...COMPLETE_ADAPTER,
+      tokens: { 'ds-x': 'url(https://evil.example/beacon.png)' },
+    };
+    expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
+  });
+
+  it('rejects a token value calling url() with a protocol-relative host', () => {
+    const adapter = {
+      ...COMPLETE_ADAPTER,
+      tokens: { 'ds-x': 'url(//evil.example/beacon.png)' },
+    };
+    expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
+  });
+
+  it('rejects any CSS function that is not on the token safe list', () => {
+    const adapter = {
+      ...COMPLETE_ADAPTER,
+      tokens: { 'ds-x': 'image-set(url(x.png) 1x)' },
+    };
+    expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
+  });
+
+  it('stringifies a non-string name in the error message rather than crashing', () => {
+    const adapter = { name: 42, components: {}, styles: '' } as unknown as Adapter;
+    expect(() => assertAdapter(adapter, 'test')).toThrow(/"42"/);
+  });
 });

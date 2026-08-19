@@ -102,6 +102,31 @@ const TOKEN_VALUE_PATTERN = /^[a-zA-Z0-9#%.,'"+*/\s()-]+$/;
 const COMMENT_SEQUENCE_PATTERN = /\/\*|\*\//;
 
 /**
+ * `TOKEN_VALUE_PATTERN` admits `(` and `/` so calc() can use all four
+ * arithmetic operators — but that same character class also admits
+ * `url(`, `image-set(`, `-webkit-image-set(`, `element(`, `src(`, and any
+ * other CSS function that fetches a resource, none of which a character
+ * class can rule out without also ruling out `calc(`. A token whose value
+ * calls one of those functions can beacon or load remote content the
+ * instant the document renders — a fetch, not a break-out, so neither the
+ * `styles` denylist nor `COMMENT_SEQUENCE_PATTERN` addresses it at all.
+ *
+ * Handled as an allowlist of function *names*, not a denylist of fetching
+ * ones: a denylist has to be kept current with every CSS function that can
+ * fetch, including ones that do not exist yet (`image-set()` was not
+ * always a fetching function; browsers add these over time). Tokens were
+ * never meant to hold arbitrary CSS in the first place (ADR 0008's
+ * contrast-check rationale), so the allowlist costs little — these are the
+ * functions the shipped token set actually uses (arithmetic and colour),
+ * and a function CSS adds later is rejected by default instead of needing
+ * someone to notice and add it to a denylist.
+ */
+const SAFE_TOKEN_FUNCTIONS = new Set(['calc', 'rgb', 'rgba', 'hsl', 'hsla']);
+
+/** Matches a CSS function name immediately preceding `(`, without consuming the `(`. */
+const FUNCTION_NAME_PATTERN = /[a-zA-Z_-]+(?=\()/g;
+
+/**
  * Runtime guard: throws unless `adapter` actually carries `styles` (a
  * string) and `tokens` (a plain record) — the two fields ADR 0008 added —
  * and, beyond shape, that their *content* cannot break out of the `<style>`
@@ -165,6 +190,15 @@ export function assertAdapter(adapter: Adapter, context: string): void {
       throw new AdapterContentError(
         `${context}: adapter "${name}"'s token "${tokenName}" has a value that is not a plain CSS value (letters, digits, #%.,'"+*/-, spaces, parentheses; no "/*" or "*/") — got ${JSON.stringify(tokenValue)}.`,
       );
+    }
+
+    const functionCalls = tokenValue.match(FUNCTION_NAME_PATTERN) ?? [];
+    for (const fn of functionCalls) {
+      if (!SAFE_TOKEN_FUNCTIONS.has(fn.toLowerCase())) {
+        throw new AdapterContentError(
+          `${context}: adapter "${name}"'s token "${tokenName}" calls "${fn}(...)", which is not one of the CSS functions a token value may use (${[...SAFE_TOKEN_FUNCTIONS].join(', ')}) — got ${JSON.stringify(tokenValue)}.`,
+        );
+      }
     }
   }
 }
