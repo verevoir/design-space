@@ -493,15 +493,40 @@ rendered from different adapters in one page do not affect each other's styling.
 **Ruling, 2026-08-19.** The operator ruled: the clause belongs to 4.1, not 2.2 — it was
 misplaced here. Moved to 4.1's done-bar; it is no longer a bar on this story.
 
-**Status.** Done. Delivered: `@design-space/adapter-contract` exists, carrying `Adapter` with
-`styles: string` and structured `tokens: Readonly<Record<string,string>>`, plus `assertAdapter()`,
-which validates both shape and content at the boundary (ADR 0008; the content rules and the
-CSS-exfiltration accepted-risk note are recorded in `docs/architecture.md` §3). `render` no
-longer hardcodes component appearance — `PAGE_CSS` carries no component rules, and
-`adapter.styles`/`adapter.tokens` are injected into the served document, `tokens` as a `:root`
-custom-property block. `render` and `gate` both type against the one contract package; the
-structural `AdapterLike`/`GapRecord` duplicates that lived in `gate`'s own `adapter-like.ts` are
-gone — that file is deleted.
+**Status.** Done, with per-clause evidence below rather than an unqualified assertion — a docs
+review on this branch flagged that "Done" had been asserted without citing where each done-bar
+clause is proved, and that is fair to answer directly rather than paper over.
+
+- *The served page carries the sketch adapter's `--ds-*` properties*, and *component appearance is
+  no longer in `render`'s module constant*: `PAGE_CSS` (`packages/render/src/render.ts`) carries no
+  component rules any more, and `buildDocument()` injects `adapter.styles` and
+  `tokensBlock(adapter.tokens)` into the document's `<style>` block. Proved by `render.test.ts`'s
+  "tokens are emitted as a :root block", "adapter styles reach the document" and "render's own CSS
+  no longer defines .ds-action--primary" cases.
+- *An adapter supplying different token values changes the rendering without changing any
+  markup*: proved directly by `render.test.ts`'s "token-only variants change CSS but never markup"
+  pair — two adapters differing only in `tokens` produce different CSS, and byte-identical markup
+  once the `<style>` block is stripped.
+- *`render` and `gate` type against the contract package and neither structural copy remains
+  anywhere in the tree*: `@design-space/adapter-contract` exists, carrying `Adapter` with
+  `styles: string` and structured `tokens: Readonly<Record<string,string>>`, plus
+  `assertAdapter()`, which validates both shape and content at the boundary (ADR 0008; the content
+  rules and the CSS-exfiltration accepted-risk note are recorded in `docs/architecture.md` §3).
+  `render` and `gate` both import `Adapter`/`AdapterLike` from it; the structural
+  `AdapterLike`/`GapRecord` duplicates that lived in `gate`'s own `adapter-like.ts` are gone — that
+  file is deleted.
+- *Two documents rendered from different adapters in one page do not affect each other's
+  styling*: this story delivers the mechanism the clause rests on, not a test of the clause as
+  literally stated. `render()` always produces one complete, self-contained document — its own
+  `<!DOCTYPE html>`, its own `<head>`, one `<style>` block scoping the adapter's tokens inside a
+  `:root { }` rule local to that document alone — which is what stops one document's CSS from
+  reaching another once documents are actually placed together. That mechanism is real and tested
+  (the DOCTYPE, inline-`<style>`-block and tokensBlock-wrapping cases cited above). What this story
+  does **not** supply is a test of two such documents actually composed onto one page — no code in
+  the tree does that composition yet. That composition, and the test that two of them do not
+  interfere, is 3.2's own identically-worded done-bar clause (ADR 0008 says as much: "scoped so
+  that two documents from different adapters on one page do not affect each other's styling, which
+  3.2's done-bar already requires") — not a second copy of proof this story already owns.
 
 **Writes.** `packages/adapter-contract`, `packages/render`, `packages/gate`,
 `packages/adapter-sketch`, `Dockerfile`, `tsconfig.json`, `package-lock.json`.

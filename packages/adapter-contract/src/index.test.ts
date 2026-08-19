@@ -162,6 +162,48 @@ describe('assertAdapter() content validation', () => {
     expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
   });
 
+  it('rejects a non-allowlisted CSS function whose name ends in a digit right before "("', () => {
+    // Regression: FUNCTION_NAME_PATTERN's character class used to omit 0-9, so the run of
+    // matchable characters immediately before "(" in "evil2(" was empty, no function name was
+    // extracted, the allowlist loop never ran, and this value passed silently.
+    const adapter = {
+      ...COMPLETE_ADAPTER,
+      tokens: { 'ds-x': 'evil2(1)' },
+    };
+    expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
+    expect(() => assertAdapter(adapter, 'test')).toThrow(/evil2/);
+  });
+
+  it('rejects a non-allowlisted digit-bearing function nested inside an allowlisted one', () => {
+    // The same bypass, reached through a value that also contains a legitimately-allowlisted
+    // function, so a fix that only special-cases a bare top-level value would still miss it.
+    const adapter = {
+      ...COMPLETE_ADAPTER,
+      tokens: { 'ds-x': 'calc(1px + evil2(1))' },
+    };
+    expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
+    expect(() => assertAdapter(adapter, 'test')).toThrow(/evil2/);
+  });
+
+  it('extracts a digit-bearing legitimate function name in full, not truncated to its last letter', () => {
+    // translate3d/rotate3d/matrix3d are not on SAFE_TOKEN_FUNCTIONS, so this is correctly
+    // rejected either way — but the old, digit-blind pattern would match only the trailing "d"
+    // (the run of [a-zA-Z_-] immediately before "(" once the "3" breaks it), and reject that
+    // for the wrong reason. The error must name the function actually called, in full.
+    const adapter = {
+      ...COMPLETE_ADAPTER,
+      tokens: { 'ds-x': 'translate3d(1px, 1px, 0)' },
+    };
+    let message = '';
+    try {
+      assertAdapter(adapter, 'test');
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('"translate3d(...)"');
+    expect(message).not.toContain('"d(...)"');
+  });
+
   it('stringifies a non-string name in the error message rather than crashing', () => {
     const adapter = { name: 42, components: {}, styles: '' } as unknown as Adapter;
     expect(() => assertAdapter(adapter, 'test')).toThrow(/"42"/);

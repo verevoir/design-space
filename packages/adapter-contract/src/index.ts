@@ -125,8 +125,18 @@ const COMMENT_SEQUENCE_PATTERN = /\/\*|\*\//;
  */
 const SAFE_TOKEN_FUNCTIONS = new Set(['calc', 'rgb', 'rgba', 'hsl', 'hsla']);
 
-/** Matches a CSS function name immediately preceding `(`, without consuming the `(`. */
-const FUNCTION_NAME_PATTERN = /[a-zA-Z_-]+(?=\()/g;
+/**
+ * Matches a CSS function name immediately preceding `(`, without consuming the `(`. Includes
+ * `0-9` in the character class deliberately — CSS function names can carry digits (`translate3d`,
+ * `rotate3d`, `matrix3d`), and omitting them does not just mis-scope those legitimate names, it
+ * breaks detection outright: without `0-9`, the run of matchable characters immediately before
+ * `(` in a name like `evil2(` is empty (`2` is not in the class and breaks the run), so the
+ * pattern matches nothing, `functionCalls` comes back `[]`, and the allowlist loop below never
+ * runs at all — a disallowed function is silently accepted, not rejected. `TOKEN_VALUE_PATTERN`
+ * above already admits `0-9` for exactly this reason; this pattern has to match it or it
+ * under-detects what that one lets through.
+ */
+const FUNCTION_NAME_PATTERN = /[a-zA-Z0-9_-]+(?=\()/g;
 
 /**
  * Runtime guard: throws unless `adapter` actually carries `styles` (a
