@@ -498,6 +498,27 @@ only reader of token values today is `render`'s `tokensBlock()`. Either the clau
 was misplaced here, or this story was meant to wire `gate` to `tokens` and has not. Needs an
 operator ruling before this story can be marked done against that clause.
 
+**Status.** Mostly done — one clause of the done-bar remains open, deliberately not closed by
+inference. Delivered: `@design-space/adapter-contract` exists, carrying `Adapter` with
+`styles: string` and structured `tokens: Readonly<Record<string,string>>`, plus `assertAdapter()`,
+which validates both shape and content at the boundary (ADR 0008; the content rules and the
+CSS-exfiltration accepted-risk note are recorded in `docs/architecture.md` §3). `render` no
+longer hardcodes component appearance — `PAGE_CSS` carries no component rules, and
+`adapter.styles`/`adapter.tokens` are injected into the served document, `tokens` as a `:root`
+custom-property block. `render` and `gate` both type against the one contract package; the
+structural `AdapterLike`/`GapRecord` duplicates that lived in `gate`'s own `adapter-like.ts` are
+gone — that file is deleted.
+
+**The open question above is not resolved by this work, checked against the code on this branch
+rather than assumed either way: it stays open.** `packages/gate/src/gate.ts` calls
+`assertAdapter()`, which confirms `tokens` exists and is a well-shaped, well-formed record — a
+presence/shape check, not a read of any particular value for any purpose `gate` itself has. The
+only code anywhere that reads a token's *value* is `render`'s `tokensBlock()`, and it does so to
+emit CSS, not to check anything — a different job from a contrast check reading token values as
+data. So the done-bar's last clause is genuinely unmet, and the question of whether it belongs to
+this story or to 4.1 (which is what actually needs the gate to read a token value) still needs an
+operator ruling.
+
 **Writes.** `packages/adapter-contract`, `packages/render`, `packages/gate`,
 `packages/adapter-sketch`.
 **Reads.** `packages/port`.
