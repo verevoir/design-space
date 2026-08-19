@@ -13,40 +13,39 @@ describe('SKETCH_CSS_CUSTOM_PROPERTIES', () => {
     expect(Object.keys(SKETCH_CSS_CUSTOM_PROPERTIES).length).toBeGreaterThan(0);
   });
 
-  it('declares the warm paper background ds-paper as #f0eee9', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-paper']).toBe('#f0eee9');
-  });
-
-  it('declares the ink colour ds-ink as #2b2b2b', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-ink']).toBe('#2b2b2b');
-  });
-
-  it('declares the accent colour ds-accent as #1a6fb5', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-accent']).toBe('#1a6fb5');
-  });
-
-  it('declares ds-font-body with Patrick Hand as the first family', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-font-body']).toContain("'Patrick Hand'");
-  });
-
-  it('declares ds-font-annotation with Caveat as the first family', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-font-annotation']).toContain("'Caveat'");
-  });
-
-  it('declares ds-font-weight-body as 400', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-font-weight-body']).toBe('400');
-  });
-
-  it('declares ds-font-weight-annotation as 600', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-font-weight-annotation']).toBe('600');
-  });
-
-  it('declares ds-radius as 6px', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-radius']).toBe('6px');
-  });
-
-  it('declares ds-shadow as the hard-offset ink shadow 3px 3px 0', () => {
-    expect(SKETCH_CSS_CUSTOM_PROPERTIES['ds-shadow']).toBe('3px 3px 0 #2b2b2b');
+  // A single whole-object assertion, deliberately, rather than one
+  // assertion per token: per-token assertions (the previous shape of this
+  // block) only catch a change to a token already named in a test — they
+  // say nothing about a token added to the record with no matching
+  // assertion, which is exactly how six of fifteen values shipped unpinned
+  // in the PR this test now closes. Asserting the whole record against a
+  // literal expected object means an addition, a removal, or an edited
+  // value all fail this one test, not just a value's own dedicated line.
+  //
+  // This is deliberately brittle: any deliberate token change requires
+  // editing the expected object below too. That is the point, not a
+  // drawback — the header comment above says a token change is "a design
+  // decision, not a refactor," so the suite is meant to notice every one.
+  // Do not loosen this back to per-key assertions or a subset check; that
+  // reopens the exact hole it exists to close.
+  it('pins every current token to its exact value, so no value can change or be added without a test noticing', () => {
+    expect(SKETCH_CSS_CUSTOM_PROPERTIES).toEqual({
+      'ds-paper': '#f0eee9',
+      'ds-ink': '#2b2b2b',
+      'ds-accent': '#1a6fb5',
+      'ds-destructive': '#c0392b',
+      'ds-escape': '#555555',
+      'ds-escape-border': '#aaaaaa',
+      'ds-explain': '#444444',
+      'ds-border-color': '#dddddd',
+      'ds-gap-border': '#e74c3c',
+      'ds-font-body': "'Patrick Hand', 'Comic Sans MS', cursive",
+      'ds-font-annotation': "'Caveat', 'Comic Sans MS', cursive",
+      'ds-font-weight-body': '400',
+      'ds-font-weight-annotation': '600',
+      'ds-radius': '6px',
+      'ds-shadow': '3px 3px 0 #2b2b2b',
+    });
   });
 
   it('every token value is literal — none is a var() composition of another token', () => {
