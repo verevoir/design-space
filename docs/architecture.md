@@ -85,9 +85,10 @@ checks shape (`styles` is a string, `tokens` a plain record) and content: `style
 denylist rejecting `</style`, the only real escape vector inside a raw-text `<style>` element;
 token names and values against an allowlist, since they interpolate inside a `:root { }`
 declaration block where `}` and `;` are live and a token was never meant to carry arbitrary CSS.
-`render` and `gate` both call it before accepting an adapter. `gate`'s own duplicate
-`AdapterLike` interface is gone; it now imports the one definition from `adapter-contract`.
-`GapRecord` was never duplicated — it is `gate`'s existing import of `render`'s own result type.
+`render` and `gate` both call it before accepting an adapter. `gate` previously carried its own
+copies of `AdapterLike` and `GapRecord` in `adapter-like.ts`. That file is gone: `AdapterLike`
+now comes from `adapter-contract`, and `GapRecord` from `render`, whose result type it always
+was.
 
 **CSS-based exfiltration is an accepted risk today, not a mitigated one.** Adapters are in-repo
 and trusted — an adapter author already has full code execution, so a `styles` string containing
