@@ -8,6 +8,7 @@
   "include": [
     "aigency-config.test.ts",
     "dockerfile-project-references.test.ts",
+    "dockerfile-checked-imports.test.ts",
     "aggregate.test.ts",
     "panel-memory.test.ts",
     "promote-scripts.test.ts",
