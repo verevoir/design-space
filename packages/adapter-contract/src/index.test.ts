@@ -94,6 +94,11 @@ describe('assertAdapter() content validation', () => {
     expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
   });
 
+  it('rejects a token value containing a comment closer', () => {
+    const adapter = { ...COMPLETE_ADAPTER, tokens: { 'ds-x': 'red */ blue' } };
+    expect(() => assertAdapter(adapter, 'test')).toThrow(AdapterContentError);
+  });
+
   it('accepts a quoted font stack as a token value', () => {
     const adapter = {
       ...COMPLETE_ADAPTER,
