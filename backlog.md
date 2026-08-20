@@ -399,6 +399,29 @@ assertion — and confirm `rollback.sh` restores traffic to the captured rollbac
 against the live service. This carries real production risk (a live traffic cut during the test)
 and is an operator decision to run deliberately; it is not planned or scheduled here.
 
+**Known gap, recorded 2026-08-20.** Branch protection on this repository requires status checks
+to be green; it does not require that `promote.yml` was the thing that ran them through to a
+merge. PR #18 is the proof: a direct merge call landed it the moment `ci` and Socket Security
+were green, and nothing in branch protection asked whether the promotion sequence — deploy,
+smoke, canary, traffic cut — had happened at all. What has protected every prior change onto
+this repository is that nothing except `promote.yml` was calling the merge API: convention, not
+enforcement, and convention held only until an instruction assumed otherwise. See the ADR 0007
+amendment of 2026-08-20 for the incident this records.
+
+**Candidate fix, not decided here.** A required status check named `promote` — the same pattern
+`antagonistic-review` already uses to make a check mandatory rather than advisory — would close
+this: a merge could not go green without `promote.yml` itself reporting success, so a bare merge
+call would have nothing to point at. The tradeoff is real and unresolved: `promote.yml`
+deliberately skips certain flows — a fork PR gets no preview and cannot be promoted at all, since
+WIF's provider condition is scoped to `verevoir/design-space` and a fork's head can be issued no
+credential (both `promote.yml`'s and `preview.yml`'s own fork guards say so directly) — so a
+required `promote` check would also block those PRs from ever going green, not only the
+accidental-bypass case it is meant to catch. Whether that tradeoff is acceptable, and whether a
+narrower mechanism exists that catches the bypass without also catching every flow `promote.yml`
+intentionally skips, needs an operator ruling — this entry states the hole and the candidate fix
+without pre-deciding which way that ruling should go, the way 2.2's disputed clause did before
+its 2026-08-19 ruling.
+
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
 **Outcome.** Preview and canary smoke tests authenticate as a principal holding

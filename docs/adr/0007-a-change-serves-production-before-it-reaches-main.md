@@ -141,6 +141,16 @@ longer. That is a narrowing of the gap the 2026-08-14 amendment already describe
 closure of it. The trigger-to-revisit below — telemetry against the incumbent's baseline — is
 unchanged by this and remains the actual fix.
 
+## Amendment, 2026-08-20 — the promotion sequence was bypassed once, as the trigger clause anticipated
+
+**What happened.** PR #18 (a `.gitignore`-only change) reached `main` as commit `bac7224` via a direct merge call, not through `promote.yml`. Only `ci` and Socket Security had run on it — no deploy, no smoke, no canary, no traffic cut, no promotion of any kind. The cause was an instruction that treated a generic "merge the PR" verb as this repository's landing mechanism; it is not — `promote.yml` performs the merge itself as the final step of the sequence this ADR decides. Nothing about branch protection stopped it: `bac7224`'s checks were green, and green checks are all branch protection asks for (see the gap recorded under 2S.4).
+
+**No content harm, but a real violation.** The diff itself was inert — a `.gitignore` change reaching production untested changes nothing a user can observe. That is not the same as saying nothing was wrong. This ADR's bar — a change is deployed and exercised in production before it is merged — is procedural and universal; it carries no size or risk exemption, and "merge then deploy" was rejected here as a general pattern, not as a pattern-for-changes-above-some-size. A change that skips the sequence violates the decision regardless of what the diff contains, because the sequence exists precisely because a diff's safety is not knowable by reading it.
+
+**The trigger fired, but its diagnosis does not obviously match its cause.** This ADR's own "Trigger to revisit" clause names this exact case: *"If the promotion sequence is ever bypassed under time pressure — a direct deploy, or a merge before the traffic cut — that is the signal the sequence is too slow, and the fix is to make it faster rather than to route around it."* Recorded plainly rather than reinterpreted to fit: this bypass was not, on the evidence available, impatience with a slow sequence — it was an instruction that misidentified which verb performs the merge. Nobody chose to skip a sequence they knew was running. Whether "make it faster" is still the right response to a bypass caused this way, or whether a structural fix is needed instead, is not decided here — a candidate structural fix is recorded as a backlog gap under 2S.4, and it needs an operator ruling of its own.
+
+**The second-order cost was concrete.** `bac7224` sat on `main` unpromoted — never deployed, never canaried, never traffic-tested — and it was that same unpromoted commit that later failed `assert-ancestry.sh` on PR #17, because #17's branch could not fast-forward cleanly past a commit the sequence had never touched. Recovering required a rebase and a force-push on #17. The ancestry precondition did exactly what it is for — it caught the inconsistency rather than letting a canary run against a false premise — but catching it was not free.
+
 ## Trigger to revisit
 
 **Replace the tag-URL health check with telemetry on the canary.** The right check is not a probe
