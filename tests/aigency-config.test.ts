@@ -39,7 +39,13 @@ const pkg = JSON.parse(
 ) as { scripts?: Record<string, string> };
 const rootScripts = new Set(Object.keys(pkg.scripts ?? {}));
 
-const KNOWN_KINDS = new Set(['bootstrap', 'gate', 'release']);
+// The four kinds the platform itself recognises for a declared command row, one per
+// declaring tool: bootstrap (prepare_repository), gate (run_gates), release
+// (run_release_step), query (run_query -- whose own refusal names this requirement
+// verbatim: "declare them in aigency.json as commands with kind: query"). This set is
+// the runtime's contract, not a preference of this repository's, so it is not truncated
+// to whichever kinds this branch's aigency.json happens to use.
+const KNOWN_KINDS = new Set(['bootstrap', 'gate', 'release', 'query']);
 
 // The only environment variable NAMES this repo's declared commands genuinely expect to need.
 // A row naming anything else is either a typo or scope creep on a credentialed surface.
@@ -144,9 +150,10 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     expect(malformedRows(commands)).toEqual([]);
   });
 
-  it('never declares a kind outside bootstrap, gate, or release', () => {
+  it('never declares a kind outside bootstrap, gate, release, or query', () => {
     const fixture: Command[] = [
       { name: 'ok', kind: 'gate' },
+      { name: 'ok-query', kind: 'query' },
       { name: 'bad', kind: 'deploy' },
     ];
     expect(unknownKindRows(fixture)).toEqual(['bad: deploy']);
