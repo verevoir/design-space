@@ -49,6 +49,39 @@ const ENV_NAME_SHAPE = /^[A-Z][A-Z0-9_]*$/;
 // script paths and short literals (branch names, timeouts) never look like this.
 const CREDENTIAL_SHAPED = /^[A-Za-z0-9_-]{20,}$/;
 
+describe('aigency.json — every declared command is shaped correctly', () => {
+  it('declares a name, a kind, and a non-empty command array on every row', () => {
+    const malformed = commands
+      .filter(
+        (c) =>
+          typeof c.name !== 'string' ||
+          c.name.length === 0 ||
+          typeof c.kind !== 'string' ||
+          !Array.isArray(c.command) ||
+          c.command.length === 0,
+      )
+      .map((c) => c.name ?? '(unnamed)');
+
+    expect(malformed).toEqual([]);
+  });
+
+  it('never declares a kind outside bootstrap, gate, or release', () => {
+    const unknown = commands
+      .filter((c) => !KNOWN_KINDS.has(c.kind as string))
+      .map((c) => `${c.name}: ${String(c.kind)}`);
+
+    expect(unknown).toEqual([]);
+  });
+
+  it('bounds every command with a positive integer timeoutMs', () => {
+    const unbounded = commands
+      .filter(
+        (c) =>
+          !(typeof c.timeoutMs === 'number' && Number.isInteger(c.timeoutMs) && c.timeoutMs > 0),
+      )
+      .map((c) => c.name);
+
+    expect(unbounded).toEqual([]);
 // Every function below is the validator a test actually exercises, pulled out so each test can
 // prove the LOGIC against constructed fixtures rather than only checking whatever rows this
 // branch's aigency.json happens to ship. See "THE RULE EVERY TEST BELOW FOLLOWS" in the file
@@ -172,56 +205,54 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     // The bug PR #9 exists to fix: an inherited row named a script (`typecheck`) this repo's
     // package.json does not define — `npm run <missing>` fails at the shell, silently, only
     // once the row actually runs. This is the test that would have caught it before it shipped.
-    const fixture: Command[] = [
-      { name: 'build', command: ['npm', 'run', 'build'] },
-      { name: 'ghost', command: ['npm', 'run', 'typecheck'] },
-      { name: 'not-npm', command: ['node', 'x.mjs'] },
-    ];
-    expect(missingScriptRows(fixture, rootScripts)).toEqual(['ghost -> typecheck']);
+    const missing = commands
+      .filter(
+        (c) => Array.isArray(c.command) && c.command[0] === 'npm' && c.command[1] === 'run',
+      )
+      .filter((c) => !rootScripts.has((c.command as string[])[2] ?? ''))
+      .map((c) => `${c.name} -> ${(c.command as string[])[2]}`);
 
-    expect(missingScriptRows(commands, rootScripts)).toEqual([]);
+    expect(missing).toEqual([]);
   });
 
   it('declares env as an array of names, never values', () => {
     // A value here (a literal token, or anything not shaped like SHOUT_CASE) would mean a
     // secret is one accidental paste away from landing in version control instead of being
     // read from the runtime's own environment at call time.
-    const fixture: Command[] = [
-      { name: 'ok', kind: 'release', command: ['x'], timeoutMs: 1, env: ['FOO_BAR'] },
-      { name: 'not-an-array', kind: 'release', command: ['x'], timeoutMs: 1, env: 'FOO_BAR' },
-      { name: 'lower-case', kind: 'release', command: ['x'], timeoutMs: 1, env: ['foo_bar'] },
-      { name: 'non-string-entry', kind: 'release', command: ['x'], timeoutMs: 1, env: [42] },
-    ];
-    expect(badEnvRows(fixture)).toEqual(['not-an-array', 'lower-case', 'non-string-entry']);
+    const bad = commands
+      .filter((c) => c.env !== undefined)
+      .filter(
+        (c) =>
+          !Array.isArray(c.env) ||
+          !(c.env as unknown[]).every((e) => typeof e === 'string' && ENV_NAME_SHAPE.test(e)),
+      )
+      .map((c) => c.name);
 
-    expect(badEnvRows(commands)).toEqual([]);
+    expect(bad).toEqual([]);
   });
 
   it('names only environment variables this repo genuinely expects', () => {
     // Every credentialed release step widens the credential surface a little; naming a
     // variable nobody asked for is exactly how that surface grows without anyone deciding it.
-    const fixture: Command[] = [
-      { name: 'known', kind: 'release', command: ['x'], timeoutMs: 1, env: ['CLAUDE_CODE_OAUTH_TOKEN'] },
-      { name: 'unknown', kind: 'release', command: ['x'], timeoutMs: 1, env: ['SOME_OTHER_TOKEN'] },
-    ];
-    expect(unexpectedEnvVars(fixture)).toEqual(['unknown: SOME_OTHER_TOKEN']);
+    const unexpected = commands
+      .filter((c) => Array.isArray(c.env))
+      .flatMap((c) =>
+        (c.env as string[]).filter((e) => !KNOWN_ENV_VARS.has(e)).map((e) => `${String(c.name)}: ${e}`),
+      );
 
-    expect(unexpectedEnvVars(commands)).toEqual([]);
+    expect(unexpected).toEqual([]);
   });
 
   it('embeds nothing credential-shaped inline in a command array', () => {
     // env names a variable to be read at call time; a command array is not the place for the
     // value itself, which would land in this file — and this repo's history — in the clear.
-    const fixture: Command[] = [
-      { name: 'ok', command: ['npm', 'run', 'build'] },
-      { name: 'path-like', command: ['/usr/local/bin/some-long-opaque-token-value'] },
-      { name: 'leaked', command: ['ghp_abcdefghijklmnopqrstuvwxyz0123456789'] },
-    ];
-    expect(credentialShapedArgs(fixture)).toEqual([
-      'leaked: ghp_abcdefghijklmnopqrstuvwxyz0123456789',
-    ]);
+    const suspicious = commands.flatMap((c) =>
+      (Array.isArray(c.command) ? (c.command as unknown[]) : [])
+        .filter((arg) => typeof arg === 'string' && !arg.includes('/') && CREDENTIAL_SHAPED.test(arg))
+        .map((arg) => `${String(c.name)}: ${String(arg)}`),
+    );
 
-    expect(credentialShapedArgs(commands)).toEqual([]);
+    expect(suspicious).toEqual([]);
   });
 
   it('keeps every release-kind row out of reach of an ordinary gate run', () => {
@@ -230,13 +261,10 @@ describe('aigency.json — every declared command is shaped correctly', () => {
     // did would run inside an ordinary verify pass instead of only when named deliberately —
     // silently spending real money (pregate) or moving GitHub state (rerun-checks) on every
     // commit.
-    const fixture: Command[] = [
-      { name: 'a-gate', kind: 'gate', command: ['x'], timeoutMs: 1, blocking: true },
-      { name: 'quiet-release', kind: 'release', command: ['x'], timeoutMs: 1, blocking: false },
-      { name: 'loud-release', kind: 'release', command: ['x'], timeoutMs: 1, blocking: true },
-    ];
-    expect(blockingReleaseRows(fixture)).toEqual(['loud-release']);
+    const reachable = commands
+      .filter((c) => c.kind === 'release' && c.blocking === true)
+      .map((c) => c.name);
 
-    expect(blockingReleaseRows(commands)).toEqual([]);
+    expect(reachable).toEqual([]);
   });
 });

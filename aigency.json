@@ -30,6 +30,14 @@
       "description": "ESLint. Blocking because a worker can fix it by editing its own output, which is the line between a gate that teaches and one that nags.",
       "blocking": true,
       "timeoutMs": 60000
+    },
+    {
+      "name": "pregate",
+      "kind": "release",
+      "command": ["node", "scripts/verified-pregate.mjs", "--base", "main", "--lens-timeout", "480"],
+      "description": "The local antagonistic review panel, run against the working tree's diff from main via scripts/verified-pregate.mjs — an in-repo wrapper that verifies the sibling script's pinned digest before invoking it, so it can carry the credentials below safely. ADVISORY: it reports findings and blocks nothing, so a REJECT is a conversation and not a verdict. It COSTS REAL MONEY on every run — several model calls per lens — which is why it is a release step named one at a time rather than a gate that fires on every verification. This row's 40-minute timeoutMs is the OUTERMOST of three nested timeouts — see AGENTS.md § Operating this repo for the full derivation (why 3 + 8 + 16 = 27 minutes, and why each layer must fire before the next) rather than restating it here. It is deliberately ABOVE scripts/verified-pregate.mjs's own 35-minute spawn bound, which is deliberately ABOVE the panel's own hardcoded 30-minute inner backstop (PREGATE_TIMEOUT_MS default): the innermost backstop fires first so a run can report which lens hung, and this row's timeoutMs exists only to catch a wedge neither inner layer caught.",
+      "env": ["CLAUDE_CODE_OAUTH_TOKEN", "AIGENCY_GUARDRAILS_TOKEN"],
+      "timeoutMs": 2400000
     }
   ]
 }

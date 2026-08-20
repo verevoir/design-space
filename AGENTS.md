@@ -51,6 +51,24 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
   order and concurrency; siblings in a wave must not write the same package.
 - **Keep the seams repo-shaped** (ADR 0004). The test of a correct boundary: could this package
   be published and consumed from another repository without moving code?
+- **Mutation-checking and adversarial review catch structurally different things, and a fix
+  needs both.** Mutation proves an assertion actually guards the behaviour it names; it cannot
+  find a failure mode nobody wrote an assertion for at all. Review finds the unconsidered path;
+  it cannot tell that an existing assertion is hollow. Both failed once, separately, in one
+  night: a review panel read `expect(html).toContain(':root {')` and approved it, and only
+  running the mutation showed that substring was already guaranteed by an unrelated reset rule —
+  the assertion proved nothing. Separately, eight mutation rounds on a timeout wrapper never
+  asked what happens when the whole *job* is killed rather than a *step*, because there was no
+  assertion covering that shape to mutate in the first place. Run both, expect each to find what
+  the other cannot.
+- **`run_gates` verifies the working tree; CI verifies what was actually committed and installed
+  from the lockfile.** They check different things, and the gap between them is where defects
+  live. Three separate incomplete commits came from exactly this gap in one night: missing
+  TypeScript project references, a `package-lock.json` entry left stale enough that `npm ci`
+  refused outright, and a Dockerfile that never copied a new package — the container built,
+  pushed, and only then failed to bind a port. A clean local gate run says nothing about any of
+  the three. Treat a green `run_gates` as necessary, never sufficient, and expect CI to disagree
+  with it sometimes — that disagreement is the gap doing its job.
 - **Cut every branch from current `origin/main`, never from a local `main` that may be stale.**
   A branch built on a stale base can be missing files the tree it was cut from already had —
   scripts a workflow calls, tests a suite imports — and the failure surfaces later, as a
@@ -89,6 +107,29 @@ not repeated.
 
   About five minutes and a couple of dollars — cheap against a CI round trip, and it runs the
   same five lenses.
+
+- **The pregate run is bounded by three nested timeouts. This is their one complete derivation —
+  `aigency.json` and `scripts/verified-pregate.mjs` each restate only the ordering that matters
+  to reading their own number, and point back here rather than repeating this.**
+
+  1. **The panel's own inner backstop** (`PREGATE_TIMEOUT_MS`, default 30 minutes, hardcoded in
+     `../capabilities/scripts/run-pregate.mjs`) fires FIRST by design. `--lens-timeout 480`
+     gives it a worst case of three sequential 60s-bounded setup calls (3 min), rubric
+     provisioning bounded by one lens deadline (8 min), and two lens deadlines run behind it in
+     parallel (16 min) — 3 + 8 + 16 = 27 minutes, inside the 30-minute bound with real margin.
+     Firing first is what lets a run report *which lens* hung.
+  2. **This wrapper's own spawn bound** (`DEFAULT_SPAWN_TIMEOUT_MS`, 35 minutes,
+     `scripts/verified-pregate.mjs`) sits deliberately above layer 1, so the panel's own
+     backstop gets the chance to fire and name a lens before the wrapper gives up on the whole
+     spawn. On firing, the wrapper kills the ENTIRE process group it spawned, not merely the
+     immediate child — a hung run must not keep making paid model calls after the wrapper has
+     already reported failure. `PREGATE_SPAWN_TIMEOUT_MS` / `PREGATE_KILL_GRACE_MS` override the
+     bound and its SIGTERM→SIGKILL escalation grace, for tests.
+  3. **The declared release step's own `timeoutMs`** (`aigency.json`'s `pregate` row, 40
+     minutes) sits deliberately above layer 2, as the final backstop. It is the only layer of
+     the three that gives no diagnostic at all when it fires — the runner simply kills the
+     process — which is exactly why layers 1 and 2 both exist to fire first, each with a
+     message naming what happened.
 
 - **Read the panel's findings from the run artifacts, not the check annotations.** An annotation
   is a one-line summary; the artifact carries the whole finding, with file and line.
