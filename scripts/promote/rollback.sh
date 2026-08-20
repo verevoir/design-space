@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+#
+# Restore the traffic assignment captured before the promotion started, and drop the candidate
+# tag. Nothing is rebuilt: the revision being restored to already exists and already served
+# traffic, so recovery is one API call and does not wait on CI.
+#
+#   usage: rollback.sh <snapshot-file> [tag-to-remove] [owner/repo pr-number]
+#
+# Idempotent by construction. Restoring an assignment that is already in place is a no-op, and a
+# tag that is already gone is not an error — a rollback that failed when run twice would be a
+# rollback nobody dares re-run.
+#
+# Verification is by TRAFFIC ASSIGNMENT, not by smoking the restored revision. The current
+# rollback target predates the `/health` endpoint and 404s it, so a smoke against it would
+# report a failed rollback that in fact succeeded. See the ADR 0007 amendment: this is a
+# one-time condition that ends with the first successful promotion.
+#
+# MERGE-STATE GUARD. The workflow's own `if:` gates this step on `steps.merge.conclusion !=
+# 'success'` — but a step's CONCLUSION is not the same fact as whether `gh pr merge` actually
+# succeeded. That call can succeed on GitHub's side and then have its OWN STEP marked
+# `cancelled` (a job-level timeout landing mid-step) or `failure`, in which case the workflow's
+# condition alone would still let this step run, and restoring traffic would leave `main`
+# describing a change production is not running — the split-brain state ADR 0007 exists to
+# prevent. So when <owner/repo> and <pr-number> are both given, this asks the SAME question
+# squash-merge.sh already answers for idempotency — is the pull request actually merged? — and
+# if so, touches nothing: traffic stays exactly where it is, on the canaried revision, and an
+# operator decides what happens next. This is best-effort: if the state cannot be read at all,
+# the restore proceeds rather than stranding traffic on an unreadable answer — the workflow's
+# own condition is still the first defense, this is the second.
+#
+# Exit status:
+#   0  traffic is back on the captured assignment and the tag is gone
+#   2  the pull request is already merged; nothing was touched, an operator must decide
+#   n  (other) it is not restored — this is an incident; the message says what state to expect
+set -euo pipefail
+
+SNAPSHOT="${1:?snapshot file required}"
+TAG="${2:-}"
+REPO="${3:-}"
+PR="${4:-}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -n "$REPO" ] && [ -n "$PR" ]; then
+  MERGE_STATE="$(gh pr view "$PR" --repo "$REPO" --json state --jq '.state' 2>/dev/null || true)"
+  if [ "$MERGE_STATE" = "MERGED" ]; then
+    echo "::error title=Rollback refused::${REPO}#${PR} is already MERGED. Traffic was left exactly where it was, on the canaried revision — restoring the pre-promotion assignment now would leave main describing a change production is not running. This deployment is recorded as failed; an operator must decide whether to promote forward or revert on main." >&2
+    exit 2
+  fi
+fi
+
+if [ ! -s "$SNAPSHOT" ]; then
+  echo "::error title=Rollback failed::no restore point at ${SNAPSHOT}; traffic must be restored by hand." >&2
+  exit 1
+fi
+
+# One call, tab-separated, rather than two node startups reading the same file.
+#
+# VALIDATED, not merely read. `${s.service}` in a template literal stringifies whatever it
+# finds there — a MISSING field (undefined), an explicit JSON `null`, a number, an object —
+# into the literal text "undefined" / "null" / "[object Object]", which is a non-empty string
+# and slips straight past a bash `-z` check below. That is worse than no guard at all: it lets
+# the incident path call gcloud with a confidently wrong --region rather than refusing. So node
+# itself now checks the TYPE of both fields, and writes nothing to stdout — exiting non-zero
+# instead — unless both are genuinely non-empty strings; an empty stdout is what makes `read`
+# below fail, so this reuses the existing "no service and region" branch rather than adding one.
+if ! IFS=$'\t' read -r SERVICE REGION < <(node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const isNamed = (v) => typeof v === "string" && v.length > 0;
+    if (!isNamed(s.service) || !isNamed(s.region)) process.exit(1);
+    process.stdout.write(`${s.service}\t${s.region}\n`);
+  ' "$SNAPSHOT"); then
+  echo "::error title=Rollback failed::the restore point at ${SNAPSHOT} names no service and region; traffic must be restored by hand." >&2
+  exit 1
+fi
+
+# Defense in depth only, now unreachable in practice: the node check above already refuses
+# anything that is not a genuine non-empty string, so SERVICE/REGION cannot reach this line
+# empty. Kept in case that check is ever weakened without this one being updated to match.
+if [ -z "${SERVICE:-}" ] || [ -z "${REGION:-}" ]; then
+  echo "::error title=Rollback failed::the restore point at ${SNAPSHOT} names no service and region; traffic must be restored by hand." >&2
+  exit 1
+fi
+
+if ! SPEC="$(node "${SCRIPT_DIR}/traffic-snapshot.mjs" --restore-spec < "$SNAPSHOT")"; then
+  echo "::error title=Rollback failed::the restore point at ${SNAPSHOT} could not be read; traffic must be restored by hand." >&2
+  exit 1
+fi
+
+echo "==> restoring traffic to ${SPEC}"
+
+set +e
+OUT="$(gcloud run services update-traffic "$SERVICE" \
+  --region "$REGION" \
+  --to-revisions "$SPEC" \
+  --quiet 2>&1)"
+RC=$?
+set -e
+
+[ -n "$OUT" ] && echo "$OUT"
+
+if [ "$RC" -ne 0 ]; then
+  echo "::error title=Rollback failed::could not restore traffic to ${SPEC}; the service may be serving the failed candidate." >&2
+  exit "$RC"
+fi
+
+echo "OK    traffic restored to ${SPEC}."
+
+# Removing the tag is best-effort in ONE direction only: absent is fine, anything else is not.
+# The same three-part condition as remove-preview-tag.sh, and for the same reason — a bare
+# "not found" also matches "Service not found", which is a misconfiguration this must surface.
+if [ -n "$TAG" ]; then
+  set +e
+  TAG_OUT="$(gcloud run services update-traffic "$SERVICE" \
+    --region "$REGION" \
+    --remove-tags "$TAG" \
+    --quiet 2>&1)"
+  TAG_RC=$?
+  set -e
+
+  [ -n "$TAG_OUT" ] && echo "$TAG_OUT"
+
+  if [ "$TAG_RC" -eq 0 ]; then
+    echo "OK    removed the ${TAG} tag."
+  elif echo "$TAG_OUT" | grep -qiE "not found|does not exist" \
+    && echo "$TAG_OUT" | grep -qi "tag" \
+    && echo "$TAG_OUT" | grep -qF "$TAG"; then
+    echo "OK    the ${TAG} tag was already absent."
+  else
+    echo "::error title=Rollback incomplete::traffic was restored but the ${TAG} tag may still be routing." >&2
+    exit "$TAG_RC"
+  fi
+fi
+
+echo "::notice title=Deployment rolled back::the promotion failed and traffic was restored to ${SPEC}. This deployment is recorded as failed; nothing was merged."

@@ -29,7 +29,19 @@ function handleRequest(
 
   if (url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', portVersion: PORT_VERSION }));
+    // Why `revision` exists and what it distinguishes: docs/architecture.md §9a ("`/health`
+    // says which build answered").
+    //
+    // Explicitly null off Cloud Run rather than omitted: a missing field is ambiguous between
+    // "not running on Cloud Run" and "running on a build too old to report it", and the second
+    // is the case a caller must not silently accept.
+    res.end(
+      JSON.stringify({
+        status: 'ok',
+        portVersion: PORT_VERSION,
+        revision: process.env['K_REVISION'] ?? null,
+      }),
+    );
     return;
   }
 

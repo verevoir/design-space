@@ -69,6 +69,23 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
   pushed, and only then failed to bind a port. A clean local gate run says nothing about any of
   the three. Treat a green `run_gates` as necessary, never sufficient, and expect CI to disagree
   with it sometimes — that disagreement is the gap doing its job.
+- **Cut every branch from current `origin/main`, never from a local `main` that may be stale.**
+  A branch built on a stale base can be missing files the tree it was cut from already had —
+  scripts a workflow calls, tests a suite imports — and the failure surfaces later, as a
+  collection error or a missing-script error, not as an obviously wrong diff. Worse: once that
+  base is squash-merged, the branch cannot be rebased onto the new `main` at all. The squash
+  collapses the base's history into one commit with no ancestor the branch's own commits share,
+  so a rebase sees every file the squashed work created as independently added on both sides —
+  an ADD/ADD conflict on each one, not a content conflict a rebase can resolve. That is a
+  structural fact about squash merges, not a mistake to fix in the rebase; the only way out is a
+  fresh branch cut from the new base.
+
+## Testing discipline
+
+An assertion whose expected value equals what a correct implementation already produces is
+unverified — the expected value and the bug-free value are the same, so the predicate is never
+exercised. Gut it to a constant and confirm the suite goes red before trusting it. Worked
+example: `tests/aigency-config.test.ts`'s file header.
 
 ## Operating this repo
 

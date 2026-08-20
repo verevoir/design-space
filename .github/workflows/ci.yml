@@ -49,5 +49,9 @@ jobs:
       # Separate steps rather than one `npm run verify`, so a failure names itself in the
       # checks list instead of every failure reading as "verify".
       - run: npm run lint
+      # Static check across scripts/: a documented multi-outcome exit contract (rollback.sh's
+      # shape) with no precise test assertion for one of its codes. Cheap and independent of the
+      # build, so it runs alongside lint rather than after the slower build/test steps.
+      - run: npm run exit-contracts
       - run: npm run build
       - run: npm test

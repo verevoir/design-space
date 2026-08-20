@@ -22,7 +22,7 @@ zero, a revision nobody is talking to costs nothing to keep.
 | PR opens or updates | `run deploy --no-traffic --tag pr-<n>` — its own URL, zero traffic |
 | verification | smoke tests run against that tag URL, and the URL is posted on the PR |
 | promotion | `--no-traffic --tag candidate`, smoke the candidate at zero traffic |
-| staged cut | `update-traffic --to-tags candidate=10`, health-check the live service, then `candidate=100` |
+| staged cut | `update-traffic --to-revisions <candidate>=10`, health-check the candidate (see the amendment below), then `=100` |
 | merge | only after the full cut succeeds |
 | failure at any step | `update-traffic` back to the previous revision, `--remove-tags`, and the deployment is recorded as failed |
 | PR closes | the `pr-<n>` tag is removed |
@@ -86,7 +86,69 @@ place an unanticipated failure can surface before it reaches everyone.
   asks for exactly this — each documented journey exercised against the freshly-deployed,
   no-traffic revision **before** traffic shifts.
 
+## Amendment, 2026-08-14 — the health check probes the candidate tag, not the live service
+
+The decision above says the staged cut is followed by a health check **against the live service**,
+and calls that "the only step in this sequence that observes real traffic hitting the new
+revision". Implementing it (2S.4) showed that the live service URL cannot carry that weight.
+
+**Why it was changed.** At a 10% split, roughly nine requests in ten reach the incumbent
+revision. The incumbent currently 404s `/health` — it predates the endpoint — so a probe of the
+service URL fails most of the time whether the candidate is healthy or not. Even with an
+incumbent that answered, a single request to a weighted URL tells you which revision you happened
+to reach, not whether the new one works. The failure and the success are indistinguishable, which
+makes the check worse than none: it would be routinely red, and routinely ignored.
+
+**What replaced it.** The health check probes the **candidate's tag URL**, which reaches the
+candidate revision specifically, and asserts the revision name that comes back from `/health`
+(the endpoint now echoes Cloud Run's `K_REVISION` for exactly this purpose). The traffic cut
+still happens first, so the candidate is answering real production traffic when it is probed.
+
+**What this does NOT prove, stated plainly.** It proves the candidate returns a valid response
+while carrying live traffic. That is all. It does **not** show that blended traffic is healthy,
+because it never observes the blend: the tag URL bypasses the split entirely. The 10% of users on
+the candidate are not being watched by this check — they are being served by a revision that
+answered one probe. The operator's stated intent was "we want to know that we're getting a valid
+response from the new service", and this delivers exactly that and nothing more. Read as anything
+wider, it is a false assurance.
+
+**Rollback verification is by traffic assignment only, and this is a one-time condition.** The
+rollback path confirms that traffic was restored to the captured assignment; it does not smoke the
+restored revision. It cannot: the current rollback target predates `/health` and would 404 it, so
+a smoke would report a failed rollback that in fact succeeded. Once the first promotion completes,
+the rollback target becomes a revision that does serve `/health`, and the check should be
+strengthened to smoke the restored revision at that point.
+
+## Amendment, 2026-08-16 — the health check observes a dwell, not an instant
+
+The 2026-08-14 amendment fixed WHERE the health check probes (the candidate's tag url). It did
+not fix WHEN: a single request, fired the moment the 10% cut lands, proves only that the
+candidate answered once. Anything that develops from serving real traffic over time — a
+connection pool exhausting, memory pressure building, a slow leak — has no window in which to
+surface before the very next step cuts to 100%.
+
+**What changed.** The health-check step now runs `scripts/promote/observe-canary.sh`, which
+probes the candidate's tag url repeatedly — five times, fifteen seconds apart, a 60-second
+dwell by default — and stops the promotion on the FIRST failed probe. It does not average, and
+it does not retry: a candidate that answers four probes and fails the fifth is not "mostly
+healthy", the same fail-closed stance every other decision point in `scripts/promote/` already
+takes.
+
+**What this does NOT prove, stated as plainly as the previous amendment states it for the
+probe this replaces.** Every probe still hits the candidate's OWN tag url, never the blended
+service url — this still does not observe the blend. It observes the CANDIDATE, repeatedly, for
+longer. That is a narrowing of the gap the 2026-08-14 amendment already described, not a
+closure of it. The trigger-to-revisit below — telemetry against the incumbent's baseline — is
+unchanged by this and remains the actual fix.
+
 ## Trigger to revisit
+
+**Replace the tag-URL health check with telemetry on the canary.** The right check is not a probe
+at all: it is watching the canary's **error rate and latency against the incumbent's baseline** for
+the duration of the 10% step, and aborting on divergence. That observes the blend, needs no
+endpoint to be reachable, and catches the failures nobody wrote a test for — which is the reason
+the staged cut exists. It was not built in 2S.4 because it needs a metrics source and a baseline
+this service does not yet have. When it lands, the tag-URL probe should go, not sit alongside it.
 
 If the promotion sequence is ever bypassed under time pressure — a direct deploy, or a merge
 before the traffic cut — that is the signal the sequence is too slow, and the fix is to make it

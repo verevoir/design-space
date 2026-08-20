@@ -10,6 +10,16 @@ import { fileURLToPath } from 'node:url';
 // tree, at time of writing, carries two extra release rows — board-status and rerun-checks —
 // that belong to a different story and must never ship on this one). Asserting structure
 // rather than content is what lets this file hold against either shape.
+//
+// THE RULE EVERY TEST BELOW FOLLOWS: an assertion whose expected value equals what a correct
+// implementation already produces is unverified — it cannot fail, because gutting the predicate
+// to a constant (e.g. always returning []) leaves it green too. This branch's shipped
+// aigency.json is small and entirely well-formed, so a test that checked only it would never
+// exercise the predicate's actual logic. Each test below instead proves its validator against a
+// constructed fixture carrying both a passing and a failing case, and checks the real config
+// only afterward, as one more input rather than the only one. Gut any predicate below to an
+// unconditional `[]` and its fixture assertion goes red; that is what makes each one a real
+// test rather than a vacuous one.
 
 interface Command {
   name?: unknown;
@@ -17,6 +27,7 @@ interface Command {
   command?: unknown;
   timeoutMs?: unknown;
   blocking?: unknown;
+  env?: unknown;
 }
 
 const raw = readFileSync(fileURLToPath(new URL('../aigency.json', import.meta.url)), 'utf8');
@@ -71,6 +82,123 @@ describe('aigency.json — every declared command is shaped correctly', () => {
       .map((c) => c.name);
 
     expect(unbounded).toEqual([]);
+// Every function below is the validator a test actually exercises, pulled out so each test can
+// prove the LOGIC against constructed fixtures rather than only checking whatever rows this
+// branch's aigency.json happens to ship. See "THE RULE EVERY TEST BELOW FOLLOWS" in the file
+// header above for why that matters and how the real config is still checked — as one more
+// input to the validator, not the validator's only input.
+
+function malformedRows(cmds: Command[]): unknown[] {
+  return cmds
+    .filter(
+      (c) =>
+        typeof c.name !== 'string' ||
+        c.name.length === 0 ||
+        typeof c.kind !== 'string' ||
+        !Array.isArray(c.command) ||
+        c.command.length === 0,
+    )
+    .map((c) => c.name ?? '(unnamed)');
+}
+
+function unknownKindRows(cmds: Command[]): string[] {
+  return cmds
+    .filter((c) => !KNOWN_KINDS.has(c.kind as string))
+    .map((c) => `${String(c.name)}: ${String(c.kind)}`);
+}
+
+function unboundedRows(cmds: Command[]): unknown[] {
+  return cmds
+    .filter(
+      (c) =>
+        !(typeof c.timeoutMs === 'number' && Number.isInteger(c.timeoutMs) && c.timeoutMs > 0),
+    )
+    .map((c) => c.name);
+}
+
+function missingScriptRows(cmds: Command[], scripts: Set<string>): string[] {
+  return cmds
+    .filter(
+      (c) => Array.isArray(c.command) && c.command[0] === 'npm' && c.command[1] === 'run',
+    )
+    .filter((c) => !scripts.has((c.command as string[])[2] ?? ''))
+    .map((c) => `${String(c.name)} -> ${(c.command as string[])[2]}`);
+}
+
+function credentialShapedArgs(cmds: Command[]): string[] {
+  return cmds.flatMap((c) =>
+    (Array.isArray(c.command) ? (c.command as unknown[]) : [])
+      .filter((arg) => typeof arg === 'string' && !arg.includes('/') && CREDENTIAL_SHAPED.test(arg))
+      .map((arg) => `${String(c.name)}: ${String(arg)}`),
+  );
+}
+
+function badEnvRows(cmds: Command[]): unknown[] {
+  return cmds
+    .filter((c) => c.env !== undefined)
+    .filter(
+      (c) =>
+        !Array.isArray(c.env) ||
+        !(c.env as unknown[]).every((e) => typeof e === 'string' && ENV_NAME_SHAPE.test(e)),
+    )
+    .map((c) => c.name);
+}
+
+function unexpectedEnvVars(cmds: Command[]): string[] {
+  return cmds
+    .filter((c) => Array.isArray(c.env))
+    .flatMap((c) =>
+      (c.env as string[]).filter((e) => !KNOWN_ENV_VARS.has(e)).map((e) => `${String(c.name)}: ${e}`),
+    );
+}
+
+function blockingReleaseRows(cmds: Command[]): unknown[] {
+  return cmds.filter((c) => c.kind === 'release' && c.blocking === true).map((c) => c.name);
+}
+
+describe('aigency.json — every declared command is shaped correctly', () => {
+  it('declares a name, a kind, and a non-empty command array on every row', () => {
+    const fixture: Command[] = [
+      { name: 'ok', kind: 'gate', command: ['x'] },
+      { name: '', kind: 'gate', command: ['x'] },
+      { kind: 'gate', command: ['x'] },
+      { name: 'no-kind', command: ['x'] },
+      { name: 'not-array', kind: 'gate', command: 'x' },
+      { name: 'empty-array', kind: 'gate', command: [] },
+    ];
+    expect(malformedRows(fixture)).toEqual([
+      '',
+      '(unnamed)',
+      'no-kind',
+      'not-array',
+      'empty-array',
+    ]);
+
+    expect(malformedRows(commands)).toEqual([]);
+  });
+
+  it('never declares a kind outside bootstrap, gate, or release', () => {
+    const fixture: Command[] = [
+      { name: 'ok', kind: 'gate' },
+      { name: 'bad', kind: 'deploy' },
+    ];
+    expect(unknownKindRows(fixture)).toEqual(['bad: deploy']);
+
+    expect(unknownKindRows(commands)).toEqual([]);
+  });
+
+  it('bounds every command with a positive integer timeoutMs', () => {
+    const fixture: Command[] = [
+      { name: 'ok', timeoutMs: 1000 },
+      { name: 'missing' },
+      { name: 'zero', timeoutMs: 0 },
+      { name: 'negative', timeoutMs: -5 },
+      { name: 'float', timeoutMs: 12.5 },
+      { name: 'string', timeoutMs: '1000' },
+    ];
+    expect(unboundedRows(fixture)).toEqual(['missing', 'zero', 'negative', 'float', 'string']);
+
+    expect(unboundedRows(commands)).toEqual([]);
   });
 
   it('names an npm script package.json actually defines, for every command that invokes one', () => {

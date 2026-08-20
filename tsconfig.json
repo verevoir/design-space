@@ -9,6 +9,7 @@
     { "path": "packages/adapter-sketch" },
     { "path": "packages/adapter-tokens" },
     { "path": "packages/pipeline" },
-    { "path": "packages/studio" }
+    { "path": "packages/studio" },
+    { "path": "tests" }
   ]
 }
