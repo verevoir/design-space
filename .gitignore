@@ -13,3 +13,8 @@ coverage/
 
 # TypeScript incremental build state -- a build artefact, not source
 *.tsbuildinfo
+
+# CI board-status poller output -- regenerated per run, never source
+board-status-*.json
+job-log-*.txt
+summary-out.txt
