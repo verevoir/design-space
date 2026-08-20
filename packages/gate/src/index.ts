@@ -17,4 +17,5 @@ export type {
   Finding,
   CoverageReport,
 } from './gate.js';
-export type { AdapterLike, GapRecord } from './adapter-like.js';
+export type { AdapterLike, Adapter } from '@design-space/adapter-contract';
+export type { GapRecord } from '@design-space/render';

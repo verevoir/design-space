@@ -8,6 +8,7 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     { "path": "../port" },
-    { "path": "../journey-model" }
+    { "path": "../journey-model" },
+    { "path": "../adapter-contract" }
   ]
 }

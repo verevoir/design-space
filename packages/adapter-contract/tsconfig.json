@@ -5,9 +5,5 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"],
-  "references": [
-    { "path": "../port" },
-    { "path": "../adapter-contract" }
-  ]
+  "exclude": ["src/**/*.test.ts"]
 }

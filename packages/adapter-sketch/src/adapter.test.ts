@@ -79,4 +79,16 @@ describe('sketchAdapter', () => {
       expect(html).not.toContain('Click "OK"');
     });
   });
+
+  describe('contract fields added by ADR 0008', () => {
+    it('supplies a non-empty styles string', () => {
+      expect(typeof sketchAdapter.styles).toBe('string');
+      expect(sketchAdapter.styles.length).toBeGreaterThan(0);
+    });
+
+    it('supplies a tokens record including the sketch design tokens', () => {
+      expect(sketchAdapter.tokens['ds-ink']).toBe('#2b2b2b');
+      expect(sketchAdapter.tokens['ds-paper']).toBe('#f0eee9');
+    });
+  });
 });

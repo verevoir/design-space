@@ -1,5 +1,5 @@
 {
-  "name": "@design-space/gate",
+  "name": "@design-space/adapter-contract",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,11 +11,5 @@
   },
   "scripts": {
     "build": "tsc -b"
-  },
-  "dependencies": {
-    "@design-space/port": "*",
-    "@design-space/journey-model": "*",
-    "@design-space/adapter-contract": "*",
-    "@design-space/render": "*"
   }
 }
