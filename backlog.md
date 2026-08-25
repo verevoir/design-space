@@ -422,6 +422,41 @@ intentionally skips, needs an operator ruling — this entry states the hole and
 without pre-deciding which way that ruling should go, the way 2.2's disputed clause did before
 its 2026-08-19 ruling.
 
+**Correction, 2026-08-25 — the candidate fix above does not close the hole, and its stated tradeoff
+is inverted.** The required-status-check fix recorded above does not work. GitHub's documented
+behaviour, confirmed against GitHub's own documentation on 2026-08-25: a job skipped by a
+conditional `if:` reports Success and does not block a merge, even as a required check — only a
+whole workflow skipped by path or branch filtering stays Pending and blocks. `promote.yml` is one
+job gated by a single job-level condition (draft status and the `promote` label); an unlabelled
+PR skips that job rather than failing any step in it, so a required `promote` check would report
+skipped, skipped counts as success, and the bare merge stays permitted exactly as before.
+Observed directly rather than merely reasoned: PR #9, unlabelled, already carries a check run
+named `promote` with conclusion `skipped` on its head — the check exists and reports, it does not
+simply fail to appear. See the ADR 0007 amendment of 2026-08-25 for the full argument, including
+the pattern that does work (`antagonistic-review`'s split between a skippable panel job and an
+`if: always()` aggregator, verified to fail closed by reading `aggregate.sh` directly).
+
+The stated tradeoff — that a required `promote` check "would also block those PRs from ever going
+green" — is inverted, and this part is inference from the workflow's control flow: no fork PR has
+been observed exercising this path. Reading `promote.yml`'s YAML directly: the job-level `if:`
+tests only draft status and the `promote` label, not fork status. The fork-guard step (`Skip
+promotion for fork pull requests`) writes an explanation to the job summary and exits 0 rather
+than failing. Every step after it carries its own
+`if: github.event.pull_request.head.repo.full_name == github.repository`, so on a fork PR those
+steps are skipped, not failed. A labelled fork PR therefore runs the job, fails nothing, and
+concludes success — having deployed, smoked and promoted nothing. Forks are not blocked from
+going green; they pass trivially, which is a worse problem for a required check than the one this
+entry was worried about.
+
+What the ruling now actually turns on, stated as a direction and not a decision: a required check
+on `promote.yml` cannot enforce anything, because `promote.yml` performs its own merge (at the
+squash-merge step, authenticated as the default `GITHUB_TOKEN`) after that same check would need
+to have already concluded — a required gate on the workflow that merges itself is a merge-time
+deadlock, detailed in the ADR 0007 amendment of 2026-08-25. Restricting who may push to `main` —
+refusing a bare merge call on the identity making it, rather than on check status — is one
+direction that does not depend on check-status timing at all, but it is not decided here. This
+entry states the hole and the options; the operator rules.
+
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
 **Outcome.** Preview and canary smoke tests authenticate as a principal holding
