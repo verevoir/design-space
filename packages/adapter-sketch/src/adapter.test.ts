@@ -171,6 +171,17 @@ describe('sketchAdapter — compare-set renderer', () => {
     expect(html).toContain('ds-compare-set__emphasis-mark');
   });
 
+  it('renders the emphasis mark as a rough inline SVG — monochrome by construction, not the borrowed ✦ character', () => {
+    const html = renderCompareSet({
+      attributes: ['Speed'],
+      items: [{ name: 'Family', values: ['67 Mb'], emphasis: true }],
+    });
+    expect(html).toContain('<svg');
+    expect(html).toContain('stroke="currentColor"');
+    expect(html).toContain('fill="none"');
+    expect(html).not.toContain('✦');
+  });
+
   it('does not mark a non-emphasised item', () => {
     const html = renderCompareSet({
       attributes: ['Speed'],
@@ -317,14 +328,33 @@ describe('sketchAdapter — status renderer', () => {
     expect(html).toContain('Full Fibre is available.');
   });
 
-  it('the two tones render different glyphs, so tone is not carried by colour alone', () => {
+  it('carries tone through a rough inline SVG mark, monochrome by construction (stroke=currentColor, fill=none)', () => {
     const pending = renderStatus({ tone: 'pending', message: 'x' });
     const good = renderStatus({ tone: 'good', message: 'x' });
-    const pendingGlyph = pending.match(/ds-status__glyph"[^>]*>([^<]+)</)?.[1];
-    const goodGlyph = good.match(/ds-status__glyph"[^>]*>([^<]+)</)?.[1];
-    expect(pendingGlyph).toBeDefined();
-    expect(goodGlyph).toBeDefined();
-    expect(pendingGlyph).not.toBe(goodGlyph);
+    for (const html of [pending, good]) {
+      expect(html).toContain('<svg');
+      expect(html).toContain('stroke="currentColor"');
+      expect(html).toContain('fill="none"');
+      expect(html).toContain('aria-hidden="true"');
+    }
+  });
+
+  it('the two tones render different path data, so tone is not carried by colour alone', () => {
+    const pending = renderStatus({ tone: 'pending', message: 'x' });
+    const good = renderStatus({ tone: 'good', message: 'x' });
+    const pendingPath = pending.match(/<path d="([^"]+)"/)?.[1];
+    const goodPath = good.match(/<path d="([^"]+)"/)?.[1];
+    expect(pendingPath).toBeDefined();
+    expect(goodPath).toBeDefined();
+    expect(pendingPath).not.toBe(goodPath);
+  });
+
+  it('no longer renders the tone as an emoji or a borrowed monochrome character', () => {
+    const pending = renderStatus({ tone: 'pending', message: 'x' });
+    const good = renderStatus({ tone: 'good', message: 'x' });
+    expect(pending).not.toContain('⏳');
+    expect(pending).not.toContain('⧖');
+    expect(good).not.toContain('✓');
   });
 
   it('renders both real instances from the two reference journeys', () => {

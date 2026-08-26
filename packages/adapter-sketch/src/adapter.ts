@@ -17,6 +17,49 @@ import { SKETCH_STYLES } from './styles.js';
 // and `gate` invisible drift instead of an obvious duplication.
 
 // ---------------------------------------------------------------------------
+// Rough, monochrome marks
+//
+// A glyph here stands in for a properly designed mark — a future issue, not
+// a settled piece of iconography — so it is drawn to read as deliberately
+// undesigned, the same move the GAP box makes. Emoji are out: several
+// render in full colour on macOS regardless of any CSS rule, which no
+// stylesheet can reach. A borrowed monochrome character (`✓`, `✦`) is out
+// too: monochrome, but it carries a designed voice, which is the opposite
+// of a placeholder.
+//
+// Inline SVG instead: `stroke="currentColor"` and `fill="none"` make it
+// monochrome by construction — it cannot introduce hue no matter what
+// tokens an adapter variant supplies — and sizing in `em` (via the CSS
+// classes in styles.ts) keeps it in step with the surrounding type.
+// Roughness lives in the path data: an open line rather than a closed
+// geometric one, a tick that overshoots, marks that don't quite meet
+// themselves. This is deliberately NOT the same move as §5's ban on
+// wobbly *layout* geometry — borders, boxes, table rules, card edges,
+// which stay straight throughout every rule in styles.ts. A hand-drawn
+// mark is a glyph, not a layout primitive; §5's own reasoning ("wobbly
+// geometry fights every layout and gets twee at scale") is about layout
+// surviving arbitrary generated content, which one small inline mark does
+// not threaten.
+//
+// Both the wrapping `<span>` and the `<svg>` itself carry `aria-hidden` —
+// belt and braces — since the mark is decorative: the tone label in words
+// (`renderStatus`) and the "Recommended: " prefix (`renderCompareSet`)
+// already carry the meaning for assistive tech.
+// ---------------------------------------------------------------------------
+
+function roughGlyph(className: string, viewBox: string, path: string): string {
+  return `<svg class="${className}" viewBox="${viewBox}" aria-hidden="true" focusable="false"><path d="${path}" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+// Each path is fixed, hand-chosen data — never derived from props — so none of it needs
+// escaping. Left open or asymmetric on purpose: GLYPH_GOOD's final stroke overshoots past
+// where a closed tick would stop; GLYPH_PENDING's six points don't return to their start;
+// GLYPH_EMPHASIS's four strokes are uneven lengths meeting off-centre, not a regular asterisk.
+const GLYPH_GOOD = 'M3.6 10.9 L8.3 15.6 L17.2 3.9';
+const GLYPH_PENDING = 'M4.1 3.6 L16.2 3.1 L10.0 10.2 L16.0 17.6 L3.7 17.9 L9.9 10.0';
+const GLYPH_EMPHASIS = 'M6 1.2 L6.5 10.8 M1.4 5.7 L11.2 6.4 M2.5 2.0 L10.1 10.5 M10.0 1.9 L2.8 10.4';
+
+// ---------------------------------------------------------------------------
 // Component implementations
 // ---------------------------------------------------------------------------
 
@@ -35,8 +78,8 @@ function renderPrompt(props: PromptProps): string {
  * real table to assistive tech, not a div grid that only looks like one.
  *
  * `emphasis` is expressed sketchily rather than as a polished highlight: no
- * fill colour, no badge, no border-colour swap. A single hand-drawn mark
- * (`✦`, in the annotation typeface) sits next to the item name, and that
+ * fill colour, no badge, no border-colour swap. A single rough inline-SVG
+ * mark (`GLYPH_EMPHASIS`, see above) sits next to the item name, and that
  * row's borders turn dashed — two channels, neither of them a colour fill,
  * so the row does not read as a finished "featured plan" card. A
  * screen-reader-only "Recommended: " prefix carries the same meaning the
@@ -50,7 +93,7 @@ function renderCompareSet(props: CompareSetProps): string {
   const rows = props.items
     .map((item) => {
       const emphasisMark = item.emphasis
-        ? `<span class="ds-compare-set__emphasis-mark" aria-hidden="true">✦</span><span class="ds-visually-hidden">Recommended: </span>`
+        ? `<span class="ds-compare-set__emphasis-mark" aria-hidden="true">${roughGlyph('ds-compare-set__emphasis-svg', '0 0 12 12', GLYPH_EMPHASIS)}</span><span class="ds-visually-hidden">Recommended: </span>`
         : '';
       const rowClass = item.emphasis ? ' class="ds-compare-set__item--emphasis"' : '';
       const cells = item.values.map((value) => `<td>${escapeHtml(value)}</td>`).join('');
@@ -104,19 +147,19 @@ function renderInputSet(props: InputSetProps): string {
 }
 
 /**
- * `status` carries its tone through more than colour: a distinct glyph
- * (`⧖` pending, `✓` good), a short text label naming the tone in words,
- * and a border style (dashed for pending, solid for good) — three
- * independent channels, so a reader who cannot perceive colour still gets
- * the tone from the glyph or the label alone. `role="status"` makes this
- * an ARIA live region, appropriate for a message that can change as a
- * check completes.
+ * `status` carries its tone through more than colour: a distinct rough
+ * inline-SVG mark (`GLYPH_PENDING`/`GLYPH_GOOD`, see above), a short text
+ * label naming the tone in words, and a border style (dashed for pending,
+ * solid for good) — three independent channels, so a reader who cannot
+ * perceive colour still gets the tone from the mark or the label alone.
+ * `role="status"` makes this an ARIA live region, appropriate for a
+ * message that can change as a check completes.
  */
 function renderStatus(props: StatusProps): string {
-  // ⧖ (U+29D6), not the hourglass emoji U+23F3 — U+23F3 is Emoji_Presentation=Yes and
-  // renders in full colour on macOS regardless of CSS; U+29D6 is not in the Unicode emoji
-  // set at all and renders as plain text in the surrounding ink colour.
-  const glyph = props.tone === 'good' ? '✓' : '⧖';
+  const glyph =
+    props.tone === 'good'
+      ? roughGlyph('ds-status__glyph-svg', '0 0 20 20', GLYPH_GOOD)
+      : roughGlyph('ds-status__glyph-svg', '0 0 20 20', GLYPH_PENDING);
   const label = props.tone === 'good' ? 'Good' : 'Pending';
   return `<div class="ds-status ds-status--${escapeAttr(props.tone)}" role="status">
   <span class="ds-status__glyph" aria-hidden="true">${glyph}</span>

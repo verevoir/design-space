@@ -30,6 +30,12 @@
  * safely re-target — CSS rules of equal specificity resolve in source
  * order, and this stylesheet is emitted after `render.ts`'s own document
  * CSS (see `buildDocument` in render.ts), so these rules win.
+ *
+ * Same-day follow-up: `.ds-status__glyph` and `.ds-compare-set__emphasis-mark` moved from
+ * text-sizing rules to inline-flex wrappers around an SVG mark (see adapter.ts's `roughGlyph`)
+ * — the borrowed characters carried a designed voice, the opposite of the placeholder a glyph
+ * is meant to read as here. The two `*-svg` selectors size the mark in `em`; colour is
+ * untouched, since the mark inherits `currentColor` from its ink-coloured wrapper already.
  */
 export const SKETCH_STYLES = `
 body {
@@ -102,9 +108,13 @@ header p {
   text-align: left;
 }
 .ds-compare-set__emphasis-mark {
-  font-family: var(--ds-font-annotation, cursive);
-  font-weight: var(--ds-font-weight-annotation, 600);
+  display: inline-flex;
+  align-items: center;
   margin-right: 0.35rem;
+}
+.ds-compare-set__emphasis-svg {
+  width: 0.9em;
+  height: 0.9em;
 }
 .ds-compare-set__item--emphasis th,
 .ds-compare-set__item--emphasis td {
@@ -152,8 +162,12 @@ header p {
 .ds-status--pending { border-style: dashed; }
 .ds-status--good { border-style: solid; }
 .ds-status__glyph {
-  font-size: 1rem;
-  font-variant-emoji: text;
+  display: inline-flex;
+  align-items: center;
+}
+.ds-status__glyph-svg {
+  width: 1.1em;
+  height: 1.1em;
 }
 .ds-status__label {
   font-family: var(--ds-font-annotation, cursive);

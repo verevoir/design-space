@@ -55,6 +55,11 @@ describe('SKETCH_STYLES', () => {
     expect(SKETCH_STYLES).toContain('.ds-compare-set__item--emphasis');
   });
 
+  it('sizes the rough SVG marks in em units via inline-flex wrappers, not text-sizing rules', () => {
+    expect(SKETCH_STYLES).toContain('.ds-status__glyph-svg');
+    expect(SKETCH_STYLES).toContain('.ds-compare-set__emphasis-svg');
+  });
+
   it('declares rules for the input-set component', () => {
     expect(SKETCH_STYLES).toContain('.ds-input-set');
     expect(SKETCH_STYLES).toContain('.ds-field__control');

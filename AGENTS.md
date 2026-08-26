@@ -75,6 +75,16 @@ How to *run* things here. Platform facts — the service, the identities, why th
 `linux/amd64`, why the health endpoint is `/health` — live in `docs/architecture.md` §9a and are
 not repeated.
 
+- **See the rendered page locally.** Two paths:
+  - `docker build -t design-space-studio . && docker run --rm -p 8080:8080 design-space-studio`,
+    then open `http://localhost:8080` — no local Node needed beyond Docker itself.
+  - Without Docker: `npm ci && npm run build`, then regenerate the prerendered document —
+    `node packages/studio/scripts/prerender-build.mjs` (also declared in `aigency.json` as the
+    `prerender` query, so an agent can run it through the belt rather than a raw shell command)
+    — then `node packages/studio/dist/serve.js` and open `http://localhost:8080` (`PORT`
+    overrides it). Re-run the prerender step after every build; it reads the compiled `dist/`
+    output and the journey at git `HEAD`, and prints a `gaps (unimplemented components):` line
+    naming anything the adapter has no renderer for.
 - **Run the review panel locally before pushing.** PRs otherwise take several rounds; the local
   run exists to bring that number down, not to replace CI. It lives outside this repository, in
   the capabilities project alongside it:
