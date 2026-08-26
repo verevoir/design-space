@@ -256,26 +256,29 @@ describe('sketchAdapter — input-set renderer', () => {
     ).toContain('type="text"');
   });
 
-  it('renders the required attribute when required is true', () => {
+  it('renders the bare required attribute (not just aria-required) when required is true', () => {
     const html = renderInputSet({ fields: [{ label: 'Postcode', kind: 'text', required: true }] });
-    expect(html).toMatch(/<input[^>]*\brequired\b/);
+    // (?<!aria-) excludes matching the "required" inside "aria-required", which the naive
+    // /\brequired\b/ pattern also matches — "-" is a non-word character, so \b fires right
+    // after it too. This checks for the bare HTML boolean attribute specifically.
+    expect(html).toMatch(/(?<!aria-)\brequired\b/);
     expect(html).toContain('aria-required="true"');
   });
 
-  it('omits the required attribute when required is false', () => {
+  it('omits the bare required attribute when required is false (aria-required="false" is still present)', () => {
     const html = renderInputSet({ fields: [{ label: 'Mobile', kind: 'tel', required: false }] });
-    expect(html).not.toMatch(/<input[^>]*\brequired\b/);
+    expect(html).not.toMatch(/(?<!aria-)\brequired\b/);
     expect(html).toContain('aria-required="false"');
   });
 
-  it('renders both fields of the real check-availability instance, both required', () => {
+  it('renders both fields of the real check-availability instance, both carrying the bare required attribute', () => {
     const block = blocksNamed(BASE, 'input-set').find((b) =>
       (b.props as { fields: { label: string }[] }).fields.some((f) => f.label === 'Postcode'),
     );
     const html = renderInputSet(block!.props as unknown as InputSetProps);
     expect(html).toContain('Postcode');
     expect(html).toContain('House number or name');
-    expect(html.match(/\brequired\b/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html.match(/(?<!aria-)\brequired\b/g)).toHaveLength(2);
   });
 
   it('renders the real your-details instance with Mobile not required', () => {
@@ -432,11 +435,20 @@ describe('sketchAdapter — summary renderer', () => {
     expect(html).toContain('&lt;script&gt;');
   });
 
-  it('escapes a hostile editTarget so it cannot break out of the href attribute', () => {
+  it('escapes the quote in a hostile editTarget so it cannot close the href attribute early and inject a real second attribute', () => {
+    // The actual risk in an attribute-value context is the quote character, not angle
+    // brackets: `<`/`>` inside a double-quoted attribute value stay inert text to the HTML
+    // parser (it only looks for the next literal `"`), so a payload built from a raw
+    // <script> tag proves nothing here — that is escapeHtml's job, already covered by the
+    // label/value tests above. The payload that actually matters in this context is one
+    // that supplies its own quote to close the attribute early and open a real one.
     const html = renderSummary({
-      rows: [{ label: 'x', value: 'y', editTarget: '"><script>alert(1)</script>' }],
+      rows: [{ label: 'x', value: 'y', editTarget: '" onmouseover="alert(1)' }],
     });
-    expect(html).not.toContain('<script>');
-    expect(html).not.toContain('"><script>');
+    // The literal quote from editTarget must be escaped to &quot; — if it were not, the
+    // href attribute would close early and onmouseover="..." would become a second, real,
+    // browser-parsed HTML attribute rather than inert text inside href's own value.
+    expect(html).toContain('&quot;');
+    expect(html).not.toContain('href="#screen-" onmouseover="alert(1)"');
   });
 });
