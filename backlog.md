@@ -457,6 +457,20 @@ refusing a bare merge call on the identity making it, rather than on check statu
 direction that does not depend on check-status timing at all, but it is not decided here. This
 entry states the hole and the options; the operator rules.
 
+**Observation, 2026-08-26 — the review gate's fail-closed behaviour was observed operating in
+production, and separately, an undiagnosed harness defect appeared alongside it.** On PR #20's
+antagonistic review run against commit `88176c09a90daae80c35728244f020c37e1f4738`, the
+`review (testing)` lens returned `REJECT` with zero findings, and its own job log gives the
+reason directly: `BASE_SHA`, `HEAD_SHA` and `HEAD_ROOT` came back empty, so it had no diff to
+review, and it wrote a fail-closed verdict rather than approving on absent input or fabricating a
+finding. That is the `aggregate.sh` fail-closed property described in the amendment above, now
+observed operating end-to-end on a real run, rather than established only by reading the script.
+Stated separately and plainly, because the two halves should not be blurred together: why those
+three environment variables were unset on this particular run is an unexplained defect in the
+review harness. It is not diagnosed here, and no fix is proposed here. The fail-closed behaviour
+worked as designed; the environment that should have supplied it did not, and nobody yet knows
+why.
+
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
 **Outcome.** Preview and canary smoke tests authenticate as a principal holding
