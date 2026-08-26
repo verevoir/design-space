@@ -76,7 +76,7 @@ describe('serve entry-point composition: document from disk → createStudioServ
     // Simulate the entry point's composition: read from disk, pass to server.
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(path, 'utf-8');
-    const server = createStudioServer({ rendered: { html: content, gaps: [] } });
+    const server = createStudioServer({ getRendered: () => Promise.resolve({ html: content, gaps: [] }) });
     const base = await bindServer(server, register);
 
     const res = await fetch(`${base}/`);
@@ -93,7 +93,7 @@ describe('serve entry-point composition: document from disk → createStudioServ
 
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(path, 'utf-8');
-    const server = createStudioServer({ rendered: { html: content, gaps: [] } });
+    const server = createStudioServer({ getRendered: () => Promise.resolve({ html: content, gaps: [] }) });
     const base = await bindServer(server, register);
 
     const res = await fetch(`${base}/`);
@@ -111,7 +111,7 @@ describe('serve entry-point composition: document from disk → createStudioServ
 
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(path, 'utf-8');
-    const server = createStudioServer({ rendered: { html: content, gaps: [] } });
+    const server = createStudioServer({ getRendered: () => Promise.resolve({ html: content, gaps: [] }) });
     const base = await bindServer(server, register);
 
     const res = await fetch(`${base}/health`);
@@ -128,7 +128,7 @@ describe('serve entry-point composition: document from disk → createStudioServ
 
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(path, 'utf-8');
-    const server = createStudioServer({ rendered: { html: content, gaps: [] } });
+    const server = createStudioServer({ getRendered: () => Promise.resolve({ html: content, gaps: [] }) });
     const base = await bindServer(server, register);
 
     const res = await fetch(`${base}/health`);
@@ -149,7 +149,7 @@ describe('serve entry-point composition: document from disk → createStudioServ
 
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(path, 'utf-8');
-    const server = createStudioServer({ rendered: { html: content, gaps: [] } });
+    const server = createStudioServer({ getRendered: () => Promise.resolve({ html: content, gaps: [] }) });
     const base = await bindServer(server, register);
 
     const res = await fetch(`${base}/`);

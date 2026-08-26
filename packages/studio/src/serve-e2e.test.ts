@@ -192,6 +192,81 @@ describe('serveDocument: an unreadable gaps sidecar does not stop the document b
   });
 });
 
+describe('serve.ts: the document is re-read per request, not cached from startup', () => {
+  let tmpDir3: string;
+  let srv3: Server | undefined;
+
+  preservePortEnv();
+
+  beforeEach(async () => {
+    tmpDir3 = join(
+      tmpdir(),
+      `ds-serve-fresh-${process.pid}-${Math.abs(Number(process.hrtime.bigint() % 100000n))}`,
+    );
+    await rm(tmpDir3, { recursive: true, force: true });
+    await mkdir(tmpDir3, { recursive: true });
+  });
+
+  afterEach(async () => {
+    if (srv3) {
+      await new Promise<void>((res) => srv3!.close(() => res()));
+      srv3 = undefined;
+    }
+    await rm(tmpDir3, { recursive: true, force: true });
+  });
+
+  it('serves a rewritten document on the next request, without restarting the server — the defect fixed today', async () => {
+    const docPath = join(tmpDir3, 'document.html');
+    await writeFile(docPath, HTML, 'utf-8');
+
+    process.env['PORT'] = '0';
+    const { serveDocument } = await import('./serve.js');
+    srv3 = await serveDocument(docPath);
+    const port = boundPort(srv3);
+
+    const before = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    expect(before).toBe(HTML);
+
+    // Rewrite the file on disk while the SAME server process is still running — no restart,
+    // no new serveDocument() call. This is exactly what a rebuild against a running container
+    // does.
+    const REBUILT_HTML =
+      '<!DOCTYPE html><html><body><h1>Rebuilt document, same running process</h1></body></html>';
+    await writeFile(docPath, REBUILT_HTML, 'utf-8');
+
+    const after = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    expect(after).toBe(REBUILT_HTML);
+    expect(after).not.toBe(before);
+  });
+
+  it('answers 503, not a crash, when the document is missing at request time', async () => {
+    const docPath = join(tmpDir3, 'document.html');
+    await writeFile(docPath, HTML, 'utf-8');
+
+    process.env['PORT'] = '0';
+    const { serveDocument } = await import('./serve.js');
+    srv3 = await serveDocument(docPath);
+    const port = boundPort(srv3);
+
+    // Confirm it serves normally first, so the 503 below is provably about the removal below
+    // and not some unrelated startup problem.
+    expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+
+    // The startup read already succeeded (serveDocument resolved) — this removes the file
+    // AFTER startup, which only a per-request read can ever observe.
+    await rm(docPath, { force: true });
+
+    const res = await fetch(`http://127.0.0.1:${port}/`);
+    expect(res.status).toBe(503);
+
+    // The server survives the failed request rather than crashing or wedging — restoring the
+    // file and asking again succeeds normally.
+    await writeFile(docPath, HTML, 'utf-8');
+    const recovered = await fetch(`http://127.0.0.1:${port}/`);
+    expect(recovered.status).toBe(200);
+  });
+});
+
 describe('serve.ts self-start guard', () => {
   it('does not start a server when the module is merely imported', async () => {
     // The container runs `node dist/serve.js`, where this module IS the entry point. An import

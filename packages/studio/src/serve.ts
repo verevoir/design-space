@@ -13,13 +13,27 @@
  *
  * The path is fixed. Tests drive `serveDocument(path)` directly rather than the container
  * accepting a path from its environment.
+ *
+ * The document is re-read from disk on EVERY request, not once at startup. A running server
+ * used to close over the HTML string it read at boot, so a rebuild that wrote a new
+ * document.html to the same running container was invisible until the process restarted —
+ * a stale page served with no signal that it was stale, observed directly rather than
+ * theorised. `startServer`'s `getRendered` is a provider function for exactly this: serve.ts
+ * supplies one that reads the file fresh on every call (`readRenderedDocument` below); the
+ * server itself has no opinion on whether the answer it gets is cached or live. This is a
+ * deliberate deployed-behaviour change — Cloud Run now does a small static file read per
+ * request instead of one at container boot — judged worth it for the iteration loop.
+ *
+ * The gaps sidecar is still read once, at startup, and is not part of this per-request
+ * freshness: nothing in the response surfaces gaps today (see the comment on `gaps` below),
+ * so there is nothing yet for a stale sidecar to make visibly wrong.
  */
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
 
-import type { GapRecord } from '@design-space/render';
+import type { GapRecord, RenderResult } from '@design-space/render';
 import { startServer } from './server.js';
 import { gapsPathFor } from './prerender.js';
 
@@ -34,7 +48,30 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DOCUMENT_PATH = join(__dirname, 'document.html');
 
 /**
- * Read a pre-rendered document and its gaps sidecar, and serve them.
+ * Read the document fresh off disk for a single request, wrapping a read failure in the same
+ * legible shape `serveDocument`'s startup check uses — named path, underlying message — so
+ * whichever one fires (startup or a later request) reads the same way in a log.
+ *
+ * The gaps sidecar is deliberately NOT re-read here: it is captured once by `serveDocument`
+ * and passed in, since nothing in the response surfaces it yet (see the comment there). Only
+ * `html` needs to be live.
+ */
+async function readRenderedDocument(
+  documentPath: string,
+  gaps: readonly GapRecord[],
+): Promise<RenderResult> {
+  const html = await readFile(documentPath, 'utf-8').catch((err: NodeJS.ErrnoException) => {
+    throw new Error(
+      `Studio server could not read the pre-rendered document at ${documentPath} for this request: ${err.message}.`,
+      { cause: err },
+    );
+  });
+  return { html, gaps };
+}
+
+/**
+ * Read a pre-rendered document and its gaps sidecar, and serve them — the document freshly on
+ * every request, the gaps sidecar once (see `readRenderedDocument`).
  *
  * Exported so tests can drive the real thing against a real path without the production entry
  * point having to accept one from outside.
@@ -42,7 +79,11 @@ const DOCUMENT_PATH = join(__dirname, 'document.html');
 export async function serveDocument(documentPath: string): Promise<Server> {
   const gapsPath = gapsPathFor(documentPath);
 
-  const html = await readFile(documentPath, 'utf-8').catch((err: NodeJS.ErrnoException) => {
+  // A startup probe, not what gets served: this confirms the document is readable NOW, so a
+  // container that can never serve fails fast and loudly at boot rather than starting and
+  // answering every request with a 503. What actually reaches a response is read again, fresh,
+  // by `readRenderedDocument` on each request below — this result is deliberately discarded.
+  await readFile(documentPath, 'utf-8').catch((err: NodeJS.ErrnoException) => {
     throw new Error(
       `Studio server failed to read the pre-rendered document at ${documentPath}: ${err.message}. ` +
         'Run the prerender build step before starting the server.',
@@ -57,7 +98,8 @@ export async function serveDocument(documentPath: string): Promise<Server> {
   // writes an unparseable sidecar is still a defect worth seeing.
   //
   // Revisit when the server actually surfaces gaps: at that point serving an empty list WOULD
-  // hide a finding, and failing loudly becomes the right call.
+  // hide a finding, and failing loudly becomes the right call. At that same point, re-read this
+  // per request too, the way `html` now is.
   const gaps: readonly GapRecord[] = await readFile(gapsPath, 'utf-8')
     .then((raw) => JSON.parse(raw) as GapRecord[])
     .catch((err: NodeJS.ErrnoException) => {
@@ -70,7 +112,9 @@ export async function serveDocument(documentPath: string): Promise<Server> {
       return [];
     });
 
-  const server = await startServer({ rendered: { html, gaps } });
+  const server = await startServer({
+    getRendered: () => readRenderedDocument(documentPath, gaps),
+  });
   const addr = server.address();
   const port = addr && typeof addr === 'object' ? addr.port : '?';
   process.stdout.write(`Studio server listening on port ${port}\n`);

@@ -7,24 +7,32 @@ import type { RenderResult } from '@design-space/render';
 // ---------------------------------------------------------------------------
 
 /**
- * A pre-rendered result that the server will serve at /.
- * Accepting the render output rather than re-rendering per-request keeps the
- * server minimal and avoids coupling it to the adapter-sketch package.
+ * How the server gets the pre-rendered result it serves at /.
+ *
+ * This is a PROVIDER, not a value: the server calls it once per request, live, rather than
+ * closing over a value fixed at server-creation time. The server itself stays ignorant of
+ * whether the answer is cached (fixed for the process's whole life — most tests still just
+ * want this, via a function that always resolves to the same value) or freshly produced on
+ * every call (what serve.ts does in production, so a rebuilt document is visible to a running
+ * server without a restart). That decision belongs entirely to the caller wiring this up.
+ *
+ * Rejecting is a legitimate answer, not just a value being unavailable: the server treats a
+ * rejected call as "cannot serve this request" and answers 503 rather than crashing — see
+ * `handleRequest`.
  */
 export interface ServerOptions {
-  /** The pre-rendered broadband-switch HTML. */
-  readonly rendered: RenderResult;
+  readonly getRendered: () => Promise<RenderResult>;
 }
 
 // ---------------------------------------------------------------------------
 // Request handler
 // ---------------------------------------------------------------------------
 
-function handleRequest(
+async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  rendered: RenderResult,
-): void {
+  getRendered: () => Promise<RenderResult>,
+): Promise<void> {
   const url = req.url ?? '/';
 
   if (url === '/health') {
@@ -35,6 +43,10 @@ function handleRequest(
     // Explicitly null off Cloud Run rather than omitted: a missing field is ambiguous between
     // "not running on Cloud Run" and "running on a build too old to report it", and the second
     // is the case a caller must not silently accept.
+    //
+    // Neither field here depends on `getRendered` — portVersion is a package constant and
+    // revision comes from the container's own K_REVISION env var — so this endpoint is
+    // unaffected by whether the caller's provider is cached or reads fresh per call.
     res.end(
       JSON.stringify({
         status: 'ok',
@@ -46,6 +58,25 @@ function handleRequest(
   }
 
   if (url === '/') {
+    let rendered: RenderResult;
+    try {
+      rendered = await getRendered();
+    } catch (err) {
+      // The provider failed for this request — e.g. serve.ts's file-backed provider found the
+      // document missing or unreadable. That must not crash the process (an unhandled
+      // rejection here would take the whole server down, not just this request), so it is
+      // reported to stderr — the container log is where an operator would look — and answered
+      // as 503: "this instance cannot serve right now", which is honest and lets a caller retry
+      // or a monitor page on it, rather than a 200 with an empty or wrong body.
+      process.stderr.write(
+        `Studio server: the document provider failed for a request: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+      res.writeHead(503, { 'Content-Type': 'text/plain' });
+      res.end('Service temporarily unavailable');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(rendered.html);
     return;
@@ -66,8 +97,14 @@ function handleRequest(
  * keeps the module importable in tests without binding a port.
  */
 export function createStudioServer(options: ServerOptions): Server {
-  const { rendered } = options;
-  return createServer((req, res) => handleRequest(req, res, rendered));
+  const { getRendered } = options;
+  return createServer((req, res) => {
+    // handleRequest's own try/catch answers a rejected provider with a 503 rather than
+    // throwing, so this is not swallowing an error silently — it exists only because
+    // node:http's request callback is not awaited by the framework, and an unawaited async
+    // function call must still not become an unhandled rejection.
+    void handleRequest(req, res, getRendered);
+  });
 }
 
 /**

@@ -8,8 +8,14 @@ import { PORT_VERSION } from '@design-space/port';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRendered(html: string): RenderResult {
-  return { html, gaps: [] };
+/**
+ * ServerOptions now takes a provider function, not a value (`getRendered`) — the server itself
+ * stays ignorant of whether the answer is cached or read fresh per call (see server.ts). Most
+ * tests in this file want a value fixed for the test's own duration, so this wraps one in a
+ * provider that always resolves to it.
+ */
+function providedRendered(html: string): () => Promise<RenderResult> {
+  return () => Promise.resolve({ html, gaps: [] });
 }
 
 /**
@@ -49,14 +55,14 @@ describe('createStudioServer()', () => {
 
   describe('/health endpoint', () => {
     it('returns HTTP 200', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/health`);
       expect(res.status).toBe(200);
     });
 
     it('returns JSON with status=ok', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/health`);
       const body = await res.json() as Record<string, unknown>;
@@ -67,7 +73,7 @@ describe('createStudioServer()', () => {
       // PORT_VERSION is documented as "MAJOR.MINOR" (two dot-separated integer
       // segments). This assertion checks the actual format — a value like
       // "0.1.0" (three segments) would fail, proving the doc-comment is honoured.
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/health`);
       const body = await res.json() as Record<string, unknown>;
@@ -83,7 +89,7 @@ describe('createStudioServer()', () => {
       const orig = process.env['K_REVISION'];
       process.env['K_REVISION'] = 'design-space-studio-00042-abc';
       try {
-        const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+        const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
         const base = await bindServer(server, register);
         const res = await fetch(`${base}/health`);
         const body = await res.json() as Record<string, unknown>;
@@ -103,7 +109,7 @@ describe('createStudioServer()', () => {
       const orig = process.env['K_REVISION'];
       delete process.env['K_REVISION'];
       try {
-        const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+        const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
         const base = await bindServer(server, register);
         const res = await fetch(`${base}/health`);
         const body = await res.json() as Record<string, unknown>;
@@ -119,7 +125,7 @@ describe('createStudioServer()', () => {
 
   describe('/ endpoint', () => {
     it('returns HTTP 200', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html><body>hi</body></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html><body>hi</body></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/`);
       expect(res.status).toBe(200);
@@ -127,7 +133,7 @@ describe('createStudioServer()', () => {
 
     it('returns the rendered HTML body', async () => {
       const html = '<!DOCTYPE html><html><body><h1>Journey</h1></body></html>';
-      const server = createStudioServer({ rendered: makeRendered(html) });
+      const server = createStudioServer({ getRendered: providedRendered(html) });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/`);
       const text = await res.text();
@@ -135,7 +141,7 @@ describe('createStudioServer()', () => {
     });
 
     it('Content-Type is text/html', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/`);
       expect(res.headers.get('content-type')).toContain('text/html');
@@ -144,11 +150,61 @@ describe('createStudioServer()', () => {
 
   describe('unknown route', () => {
     it('returns HTTP 404 for an unrecognised path', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/not-a-real-path`);
       expect(res.status).toBe(404);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createStudioServer() calls its provider fresh, per request — this is the whole point of
+// `getRendered` being a function rather than a value: the server has no cached copy of its
+// own, so two requests can see two different answers, and a rejected call is a request-time
+// failure rather than something that can only happen at startup.
+// ---------------------------------------------------------------------------
+
+describe('createStudioServer(): the provider is called per request, not once at creation', () => {
+  let cleanup: (() => void) | undefined;
+
+  afterEach(() => {
+    cleanup?.();
+    cleanup = undefined;
+  });
+
+  function register(fn: () => void) {
+    cleanup = fn;
+  }
+
+  it('serves whatever the provider returns on THIS call, not what it returned when the server was created', async () => {
+    let current = 'first';
+    const server = createStudioServer({
+      getRendered: () => Promise.resolve({ html: current, gaps: [] }),
+    });
+    const base = await bindServer(server, register);
+
+    const first = await (await fetch(`${base}/`)).text();
+    expect(first).toBe('first');
+
+    current = 'second';
+    const second = await (await fetch(`${base}/`)).text();
+    expect(second).toBe('second');
+  });
+
+  it('answers 503 rather than crashing when the provider rejects for a request', async () => {
+    const server = createStudioServer({
+      getRendered: () => Promise.reject(new Error('document unavailable for this request')),
+    });
+    const base = await bindServer(server, register);
+
+    const res = await fetch(`${base}/`);
+    expect(res.status).toBe(503);
+
+    // The server itself is still up and answers normally afterwards — one failed provider
+    // call for one request must not have crashed the process or wedged the server.
+    const res2 = await fetch(`${base}/health`);
+    expect(res2.status).toBe(200);
   });
 });
 
@@ -209,7 +265,7 @@ describe('startServer()', () => {
     const origPort = process.env['PORT'];
     process.env['PORT'] = '0';
     try {
-      const server = await startServer({ rendered: makeRendered('<html></html>') });
+      const server = await startServer({ getRendered: providedRendered('<html></html>') });
       started = server;
       const addr = server.address();
       expect(addr).not.toBeNull();
@@ -236,7 +292,7 @@ describe('startServer()', () => {
     process.env['PORT'] = String(port);
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/already in use/);
     } finally {
       if (origPort === undefined) {
@@ -253,7 +309,7 @@ describe('startServer()', () => {
     process.env['PORT'] = String(port);
     let caughtMessage = '';
     try {
-      await startServer({ rendered: makeRendered('<html></html>') });
+      await startServer({ getRendered: providedRendered('<html></html>') });
     } catch (err) {
       caughtMessage = err instanceof Error ? err.message : String(err);
     } finally {
@@ -281,7 +337,7 @@ describe('startServer()', () => {
     process.env['PORT'] = 'not-a-port';
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/PORT is invalid/);
     } finally {
       if (origPort === undefined) {
@@ -297,7 +353,7 @@ describe('startServer()', () => {
     process.env['PORT'] = 'badvalue';
     let caughtMessage = '';
     try {
-      await startServer({ rendered: makeRendered('<html></html>') });
+      await startServer({ getRendered: providedRendered('<html></html>') });
     } catch (err) {
       caughtMessage = err instanceof Error ? err.message : String(err);
     } finally {
@@ -317,7 +373,7 @@ describe('startServer()', () => {
     const origPort = process.env['PORT'];
     process.env['PORT'] = '0';
     try {
-      const server = await startServer({ rendered: makeRendered('<html></html>') });
+      const server = await startServer({ getRendered: providedRendered('<html></html>') });
       started = server;
       const addr = server.address();
       expect(addr && typeof addr === 'object' ? addr.port : 0).toBeGreaterThan(0);
@@ -335,7 +391,7 @@ describe('startServer()', () => {
     process.env['PORT'] = '80.5';
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/PORT is invalid/);
     } finally {
       if (origPort === undefined) {
@@ -353,7 +409,7 @@ describe('startServer()', () => {
     process.env['PORT'] = '65536';
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/PORT is invalid/);
     } finally {
       if (origPort === undefined) {
@@ -386,7 +442,7 @@ describe('startServer()', () => {
     process.env['PORT'] = '0';
     let server: Server;
     try {
-      server = await startServer({ rendered: makeRendered('<html></html>') });
+      server = await startServer({ getRendered: providedRendered('<html></html>') });
       started = server;
     } finally {
       if (origPort === undefined) {

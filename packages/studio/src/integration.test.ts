@@ -53,7 +53,7 @@ describe('studio integration: broadband-switch rendered with sketch adapter', ()
 
   it('the rendered document contains the prompt heading text from the first screen', async () => {
     const rendered = render(journey, sketchAdapter);
-    const server = createStudioServer({ rendered });
+    const server = createStudioServer({ getRendered: () => Promise.resolve(rendered) });
     const base = await bindServer(server, register);
     const res = await fetch(`${base}/`);
     const text = await res.text();
@@ -74,7 +74,7 @@ describe('studio integration: broadband-switch rendered with sketch adapter', ()
 
   it('real compare-set content — the package names — appears in the page; no gap element is present anywhere', async () => {
     const rendered = render(journey, sketchAdapter);
-    const server = createStudioServer({ rendered });
+    const server = createStudioServer({ getRendered: () => Promise.resolve(rendered) });
     const base = await bindServer(server, register);
     const res = await fetch(`${base}/`);
     const text = await res.text();
@@ -87,7 +87,7 @@ describe('studio integration: broadband-switch rendered with sketch adapter', ()
 
   it('the rendered HTML document has an inline style block (no external network calls needed)', async () => {
     const rendered = render(journey, sketchAdapter);
-    const server = createStudioServer({ rendered });
+    const server = createStudioServer({ getRendered: () => Promise.resolve(rendered) });
     const base = await bindServer(server, register);
     const res = await fetch(`${base}/`);
     const text = await res.text();
