@@ -3,6 +3,7 @@ import { check } from './gate.js';
 import { render } from '@design-space/render';
 import type { JourneyDocument } from '@design-space/journey-model';
 import type { AdapterLike } from '@design-space/adapter-contract';
+import { PORT_COMPONENTS, type ComponentName } from '@design-space/port';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -36,7 +37,12 @@ const MINIMAL_JOURNEY: JourneyDocument = {
   ],
 };
 
-/** Adapter that only implements prompt — the sole port component in wave 2S.1. */
+/**
+ * Adapter that implements only `prompt`. Wave 2S.1's port had exactly one
+ * component, so this adapter was complete against it; story 2.1 widened the
+ * port to six, so this adapter is now deliberately partial — used below to
+ * exercise both the 'implemented' and 'missing' halves of check().
+ */
 const SKETCH_LIKE_ADAPTER: AdapterLike = {
   name: 'sketch',
   components: {
@@ -109,11 +115,19 @@ describe('check()', () => {
   });
 
   describe('missing components', () => {
-    it('lists no port components as missing when prompt-only adapter is used (prompt is the only port component)', () => {
+    it('lists every registered port component the adapter does not implement as missing (prompt-only adapter, six-component port)', () => {
       const { gaps } = render(MINIMAL_JOURNEY, SKETCH_LIKE_ADAPTER);
       const report = check(SKETCH_LIKE_ADAPTER, gaps);
-      // The port only defines "prompt" in wave 2S.1, so nothing is missing
-      expect(report.missing).toHaveLength(0);
+      // Derived from the registry, not hardcoded — stays true as 3.1 adds
+      // renderers and as later components are registered, rather than
+      // needing another edit here each time either changes.
+      const expectedMissing = (Object.keys(PORT_COMPONENTS) as ComponentName[]).filter(
+        (name) => !Object.prototype.hasOwnProperty.call(SKETCH_LIKE_ADAPTER.components, name),
+      );
+      expect(expectedMissing).toEqual(
+        expect.arrayContaining(['compare-set', 'input-set', 'status', 'option-list', 'summary']),
+      );
+      expect(report.missing.slice().sort()).toEqual(expectedMissing.slice().sort());
     });
 
     it('lists prompt as missing when the adapter has no components', () => {
