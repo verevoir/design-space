@@ -40,7 +40,6 @@ describe('SKETCH_CSS_CUSTOM_PROPERTIES', () => {
       'ds-font-weight-body': '400',
       'ds-font-weight-annotation': '600',
       'ds-radius': '0',
-      'ds-shadow': '3px 3px 0 #2b2b2b',
     });
   });
 

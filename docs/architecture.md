@@ -149,10 +149,35 @@ Two rules follow:
   imagery, microcopy, real spacing — that have not been made. Two levels of fidelity, neither
   of them shipped-looking.
 
-The sketch style carries "provisional" through **typography and colour**, not wobbly geometry:
-handwriting face, warm paper, ink rather than black, one hard offset shadow, straight borders.
-That choice survives arbitrary generated content, where wobbly geometry fights every layout and
-gets twee at scale.
+The sketch style's reference is now **hand-drawn, like Excalidraw** — typography, colour, *and*
+geometry all carry "provisional", not typography and colour alone. Handwriting face, warm paper,
+and ink rather than black are unchanged. Outline only: the hard offset shadow this section used
+to name is gone. A rough, hand-drawn edge is drawn on screens, actions, status rows and the
+compare-set table's own outer edge; the table's internal cell rules and every form control stay
+straight (see the constraints below for why).
+
+**This replaces, rather than adds to, what this section said before.** It used to argue that
+wobbly geometry "fights every layout and gets twee at scale" and that typography and colour alone
+should carry "provisional". That argument was written before anything rendered — a prediction,
+not a measurement. It has since been applied to the real five-screen broadband-switch journey,
+and the prediction did not hold: applied there, the geometry does neither. Recorded here as a
+prediction that failed rather than a clause quietly deleted, since that is more useful to whoever
+reads this next than silence would be.
+
+**How it is achieved**, because the constraints are non-obvious and someone will otherwise
+reimplement this badly: a percent-encoded `data:image/svg+xml` URL wrapping an
+`feTurbulence`/`feDisplacementMap` SVG filter, declared once as a CSS custom property and
+referenced from `filter:`. Two hard constraints, both found by doing it rather than anticipated:
+
+- **The filter must sit on a border-only `::before` layer, never on the element itself.** Applied
+  directly to the element, it displaces the text too, which reads as a rendering fault rather
+  than as hand-drawn.
+- **Form controls cannot carry it.** `<input>` is a replaced element and cannot render
+  pseudo-elements — confirmed by probing it, not assumed. `.ds-field__control` and
+  `.ds-option__control` therefore keep their real, straight borders; this is a browser
+  constraint, not an oversight, and should not be undone later.
+
+Verified in Chrome only — data-URI SVG filter support has historically varied across browsers.
 
 ## 6. Storage
 
