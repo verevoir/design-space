@@ -15,26 +15,21 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
-import { createServer } from 'node:net';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Ask the OS for a free port, release it, and return the number. */
-function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      if (!addr || typeof addr === 'string') {
-        srv.close(() => reject(new Error('unexpected address shape')));
-        return;
-      }
-      const { port } = addr;
-      srv.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
+/**
+ * Reads the port actually bound by a server, rather than assuming one — every real bind in
+ * this file sets PORT=0 and lets the OS choose, so the number is never known ahead of time.
+ */
+function boundPort(server: Server): number {
+  const addr = server.address();
+  if (!addr || typeof addr !== 'object') {
+    throw new Error('unexpected address shape');
+  }
+  return addr.port;
 }
 
 /**
@@ -98,15 +93,16 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
       writeFile(gapsPath, GAPS_JSON, 'utf-8'),
     ]);
 
-    // Pick a free port and point serve.ts at the temp document.
-    const port = await findFreePort();
-    process.env['PORT'] = String(port);
+    // Ask the OS for a free ephemeral port — no separate probe-and-rebind step, and so no
+    // window in which something else could grab the same number first.
+    process.env['PORT'] = '0';
     // Drive the real composition against the real path. No mocks, and no environment
     // variable telling production code which file to open.
     const { serveDocument } = await import('./serve.js');
     server = await serveDocument(docPath);
+    const port = boundPort(server);
 
-    // Fetch from the real server.
+    // Fetch from the real server, on the port it actually bound.
     const res = await fetch(`http://127.0.0.1:${port}/`);
     expect(res.status).toBe(200);
     const body = await res.text();
@@ -126,10 +122,10 @@ describe('serve.ts end-to-end: real document on disk → real server → real HT
       writeFile(gapsPath, JSON.stringify(gapRecords), 'utf-8'),
     ]);
 
-    const port = await findFreePort();
-    process.env['PORT'] = String(port);
+    process.env['PORT'] = '0';
     const { serveDocument } = await import('./serve.js');
     server = await serveDocument(docPath);
+    const port = boundPort(server);
 
     // No response surfaces gaps today (handleRequest reads only rendered.html), so this can
     // only assert that a well-formed sidecar is read without disturbing startup. Asserting the
@@ -174,10 +170,10 @@ describe('serveDocument: an unreadable gaps sidecar does not stop the document b
       return true;
     };
 
-    // Take a free port. Without this the server binds startServer's 8080 default and the test
-    // passes or fails according to what else is listening on the machine — it passed in CI and
-    // failed locally for exactly that reason.
-    process.env['PORT'] = String(await findFreePort());
+    // PORT=0 asks the OS for a free ephemeral port directly. Without this the server binds
+    // startServer's 8080 default and the test passes or fails according to what else is
+    // listening on the machine — it passed in CI and failed locally for exactly that reason.
+    process.env['PORT'] = '0';
 
     try {
       const { serveDocument } = await import('./serve.js');
@@ -265,7 +261,9 @@ describe('serveDocument: an absent gaps sidecar is silent', () => {
       return true;
     };
 
-    process.env['PORT'] = String(await findFreePort());
+    // No fetch happens in this test — only stderr is inspected — so the port only needs to be
+    // free to bind, never read back. PORT=0 asks the OS for one directly.
+    process.env['PORT'] = '0';
 
     try {
       const { serveDocument } = await import('./serve.js');

@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
 import { createStudioServer, startServer } from './server.js';
 import type { RenderResult } from '@design-space/render';
 import { PORT_VERSION } from '@design-space/port';
@@ -28,33 +27,6 @@ function bindServer(server: Server, teardown: (fn: () => void) => void): Promise
       }
       teardown(() => server.close());
       resolve(`http://127.0.0.1:${addr.port}`);
-    });
-  });
-}
-
-/**
- * Ask the OS for a free port by binding a net server to port 0, recording the
- * assigned port, then closing it. Returns the port number.
- *
- * The caller must use the port immediately — there is a tiny window between
- * close() and the next bind, but that is unavoidable for any strategy that
- * does not modify startServer() to accept port 0 directly.
- */
-function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const net = createNetServer();
-    net.once('error', reject);
-    net.listen(0, '0.0.0.0', () => {
-      const addr = net.address();
-      if (!addr || typeof addr === 'string') {
-        net.close(() => reject(new Error('unexpected address shape')));
-        return;
-      }
-      const port = addr.port;
-      net.close((err) => {
-        if (err) reject(err);
-        else resolve(port);
-      });
     });
   });
 }
@@ -232,20 +204,22 @@ describe('startServer()', () => {
   // ---------------------------------------------------------------------------
 
   it('resolves to a listening Server when the port is available', async () => {
-    const port = await findFreePort();
+    // PORT=0 asks the OS to assign a free ephemeral port directly — no separate probe-then-
+    // rebind step, and so no window in which something else could grab the same number.
     const origPort = process.env['PORT'];
-    process.env['PORT'] = String(port);
+    process.env['PORT'] = '0';
     try {
       const server = await startServer({ rendered: makeRendered('<html></html>') });
       started = server;
       const addr = server.address();
       expect(addr).not.toBeNull();
       expect(typeof addr).toBe('object');
-      if (addr && typeof addr === 'object') {
-        expect(addr.port).toBe(port);
-      }
-      // Confirm it is actually serving HTTP.
-      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      if (!addr || typeof addr !== 'object') throw new Error('unexpected address shape');
+      // The bound port is read back off the server, never assumed — the OS chose it.
+      expect(addr.port).toBeGreaterThan(0);
+      expect(addr.port).toBeLessThanOrEqual(65535);
+      // Confirm it is actually serving HTTP, on the port actually bound.
+      const res = await fetch(`http://127.0.0.1:${addr.port}/health`);
       expect(res.status).toBe(200);
     } finally {
       if (origPort === undefined) {
@@ -336,13 +310,17 @@ describe('startServer()', () => {
     expect(caughtMessage).toContain('badvalue');
   });
 
-  it('rejects when PORT is set to 0 (out of valid range 1-65535)', async () => {
+  it('accepts PORT=0 as "let the OS assign a free ephemeral port", not an out-of-range value', async () => {
+    // 0 is Node's own convention for OS-assigned ports (net.Server.listen(0, ...)), not a
+    // malformed value — rejecting it is what used to force every real-server test in this
+    // package onto a racy probe-and-rebind workaround instead of binding directly.
     const origPort = process.env['PORT'];
     process.env['PORT'] = '0';
     try {
-      await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
-      ).rejects.toThrow(/PORT is invalid/);
+      const server = await startServer({ rendered: makeRendered('<html></html>') });
+      started = server;
+      const addr = server.address();
+      expect(addr && typeof addr === 'object' ? addr.port : 0).toBeGreaterThan(0);
     } finally {
       if (origPort === undefined) {
         delete process.env['PORT'];
@@ -403,10 +381,9 @@ describe('startServer()', () => {
   // ---------------------------------------------------------------------------
 
   it('forwards post-startup server errors to stderr rather than leaving them unhandled', async () => {
-    // Let startServer() bind on a free port and resolve.
-    const port = await findFreePort();
+    // Let startServer() bind on a free, OS-assigned port and resolve.
     const origPort = process.env['PORT'];
-    process.env['PORT'] = String(port);
+    process.env['PORT'] = '0';
     let server: Server;
     try {
       server = await startServer({ rendered: makeRendered('<html></html>') });

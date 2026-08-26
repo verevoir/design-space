@@ -9,7 +9,6 @@
  * prerender fails".
  */
 import { execFile } from 'node:child_process';
-import { createServer } from 'node:net';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -99,19 +98,6 @@ describe('prerender-build.mjs — the build step the container runs', () => {
 
 const HTML = '<!doctype html><html><body><h1>entry point document</h1></body></html>';
 
-/** Ask the OS for a free port by binding :0 and reading it back. */
-async function findFreePort(): Promise<number> {
-  const srv = createServer();
-  await new Promise<void>((res, rej) => {
-    srv.once('error', rej);
-    srv.listen(0, '127.0.0.1', () => res());
-  });
-  const addr = srv.address();
-  const port = addr && typeof addr === 'object' ? addr.port : 0;
-  await new Promise<void>((res) => srv.close(() => res()));
-  return port;
-}
-
 describe('serve.ts as the process entry point', () => {
   let entryDir: string;
 
@@ -139,9 +125,10 @@ describe('serve.ts as the process entry point', () => {
     );
     if (!hadDocument) await writeFile(docPath, HTML, 'utf-8');
 
-    const port = await findFreePort();
+    // PORT=0 asks the OS to assign a free ephemeral port — no separate probe step naming a
+    // number ahead of time, and so nothing for the container's own bind to race against.
     const child = execFile('node', [serveJs], {
-      env: { ...process.env, PORT: String(port) },
+      env: { ...process.env, PORT: '0' },
     });
 
     try {
@@ -160,7 +147,19 @@ describe('serve.ts as the process entry point', () => {
         });
       });
 
-      expect(line).toContain(`listening on port ${port}`);
+      // The port was never chosen ahead of time — it is read back out of the child's own
+      // stdout, which is what actually announces the port the OS handed it.
+      const announced = line.match(/listening on port (\d+)/);
+      expect(announced).not.toBeNull();
+      const port = Number(announced?.[1]);
+      expect(Number.isInteger(port)).toBe(true);
+      expect(port).toBeGreaterThan(0);
+      expect(port).toBeLessThanOrEqual(65535);
+
+      // Confirm it is actually reachable on the announced port, not just that a number was
+      // printed.
+      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(res.status).toBe(200);
     } finally {
       child.kill();
       if (!hadDocument) await rm(docPath, { force: true });
