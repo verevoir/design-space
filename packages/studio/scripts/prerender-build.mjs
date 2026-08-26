@@ -7,9 +7,17 @@
  *
  * Run this after `npm run build`:
  *
- *   node packages/studio/scripts/prerender-build.mjs [repoPath]
+ *   node packages/studio/scripts/prerender-build.mjs [repoPath] [outPath]
  *
  * repoPath defaults to the repository root (resolved relative to this file).
+ * outPath defaults to dist/document.html next to this script — the real path serve.js reads —
+ * and is a second POSITIONAL argument, matching repoPath, rather than an env var: both name
+ * where this run reads from and writes to, so a caller that wants either non-default says so
+ * the same way. This closes a real defect: before this argument existed, a caller that pointed
+ * repoPath at a scratch repository still wrote its output to the real dist/document.html,
+ * because outPath was computed relative to the SCRIPT's own location rather than passed in — a
+ * test built a proper throwaway git repo for its input and still corrupted the real, served
+ * build artifact as a side effect of running.
  * PRERENDER_REF env var overrides the git ref (default: HEAD).
  */
 import { join, dirname, resolve } from 'node:path';
@@ -18,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../../..');
 const repoPath = process.argv[2] ?? repoRoot;
-const outPath = join(__dirname, '../dist/document.html');
+const outPath = process.argv[3] ?? join(__dirname, '../dist/document.html');
 const ref = process.env['PRERENDER_REF'] ?? 'HEAD';
 
 // Import from the compiled dist — built by `tsc -b` before this script runs.

@@ -11,7 +11,7 @@
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -24,12 +24,22 @@ const scriptPath = resolve(
   '../scripts/prerender-build.mjs',
 );
 
-/** Run the script against a repo path, capturing stdout, stderr and the exit code. */
+/**
+ * Run the script against a repo path, capturing stdout, stderr and the exit code.
+ *
+ * `outPath`, when supplied, is passed as the script's second positional argument. Every call
+ * below that writes real output now supplies one pointing at a scratch path — letting a test
+ * fall back to the script's real default (packages/studio/dist/document.html) is exactly the
+ * defect this file used to have and no longer should.
+ */
 async function runScript(
   repoPath: string,
+  outPath?: string,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const { stdout, stderr } = await execFileAsync('node', [scriptPath, repoPath], {
+    const args =
+      outPath === undefined ? [scriptPath, repoPath] : [scriptPath, repoPath, outPath];
+    const { stdout, stderr } = await execFileAsync('node', args, {
       encoding: 'utf8',
       timeout: 60_000,
     });
@@ -71,15 +81,21 @@ describe('prerender-build.mjs — the build step the container runs', () => {
     let outDir: string;
 
     beforeAll(async () => {
-      // The script writes to packages/studio/dist/document.html relative to itself, so the
-      // success run exercises the real output path rather than a redirected one.
-      outDir = join(dirname(scriptPath), '../dist');
-      await mkdir(outDir, { recursive: true });
+      // The real repository is a legitimate INPUT here — it exercises the real broadband-switch
+      // journey — but the OUTPUT goes to a scratch directory, not packages/studio/dist/. A test
+      // that writes the real, served build artifact as a side effect of running is a defect
+      // regardless of whether what it writes happens to be correct; see the no-gaps block below
+      // for what happens when it is not (that was the actual incident this fix responds to).
+      outDir = await mkdtemp(join(tmpdir(), 'ds-prerender-build-success-'));
+    });
+
+    afterAll(async () => {
+      if (outDir) await rm(outDir, { recursive: true, force: true });
     });
 
     it('reports zero gaps for the reference journey — every port component now has a sketch renderer (story 3.1)', async () => {
       const repoRoot = resolve(dirname(scriptPath), '../../..');
-      const { code, stdout } = await runScript(repoRoot);
+      const { code, stdout } = await runScript(repoRoot, join(outDir, 'document.html'));
 
       // Until story 3.1, only `prompt` was implemented, so this same build reported five gaps
       // (compare-set, input-set, status, option-list, summary) against the real broadband-switch
@@ -91,6 +107,21 @@ describe('prerender-build.mjs — the build step the container runs', () => {
       expect(code).toBe(0);
       expect(stdout).toContain('Prerender complete.');
       expect(stdout).not.toContain('gaps (unimplemented components):');
+    });
+  });
+
+  describe('the default output path, asserted without writing there', () => {
+    it('defaults outPath to dist/document.html next to the script when no third argument is given', async () => {
+      // Actually exercising the default by running the script with no outPath argument would
+      // write into the real, served packages/studio/dist/document.html — precisely the
+      // corruption this file's other two blocks were just changed to stop doing. So the default
+      // is confirmed by reading the script's own fallback expression, and separately by
+      // resolving where that expression points, rather than by invoking it.
+      const source = await readFile(scriptPath, 'utf-8');
+      expect(source).toContain("process.argv[3] ?? join(__dirname, '../dist/document.html')");
+
+      const defaultOutPath = resolve(dirname(scriptPath), '../dist/document.html');
+      expect(defaultOutPath.split(sep).join('/')).toMatch(/packages\/studio\/dist\/document\.html$/);
     });
   });
 });
@@ -209,7 +240,12 @@ describe('serve.ts as the process entry point', () => {
     });
 
     it('completes without reporting gaps when nothing is missing', async () => {
-      const { code, stdout } = await runScript(cleanRepo);
+      // Output goes inside the same scratch repo, never the real dist/document.html — this is
+      // the exact test that produced the fixture ("Only implemented components" / "All
+      // implemented" / "Done") found being served in production. Passing outPath explicitly is
+      // the fix; the script's default was never wrong for its own real invocation, only for a
+      // caller like this one that redirected the input but not the output.
+      const { code, stdout } = await runScript(cleanRepo, join(cleanRepo, 'document.html'));
 
       expect(code).toBe(0);
       expect(stdout).toContain('Prerender complete.');
