@@ -60,6 +60,28 @@ describe('SKETCH_STYLES', () => {
     expect(SKETCH_STYLES).toContain('.ds-compare-set__emphasis-svg');
   });
 
+  it('the emphasised compare-set row is bordered solid, not dashed — emphasis moved off dashed onto weight', () => {
+    const rule = SKETCH_STYLES.match(/\.ds-compare-set__item--emphasis[^{]*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    // Strip comments before asserting: the rule is preceded by an explanatory comment that
+    // itself says the word "dashed" (naming what this moved off), which a plain substring
+    // check would wrongly trip. The declarations are what must not say it.
+    const body = rule![1].replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(body).toContain('border: 3px solid currentColor');
+    expect(body).not.toContain('dashed');
+  });
+
+  it('sizes the pending status glyph differently from the default (good) glyph, since the two no longer share a viewBox', () => {
+    // Both tones render the identical .ds-status__glyph-svg class (adapter.ts's roughGlyph does
+    // not vary the class by tone), so distinct sizing can only come from a rule scoped through
+    // the ancestor .ds-status--pending wrapper — not from the class alone.
+    const defaultRule = SKETCH_STYLES.match(/(?<!--pending )\.ds-status__glyph-svg\s*\{([^}]*)\}/);
+    const pendingRule = SKETCH_STYLES.match(/\.ds-status--pending \.ds-status__glyph-svg\s*\{([^}]*)\}/);
+    expect(defaultRule).not.toBeNull();
+    expect(pendingRule).not.toBeNull();
+    expect(pendingRule![1]).not.toBe(defaultRule![1]);
+  });
+
   it('declares rules for the input-set component', () => {
     expect(SKETCH_STYLES).toContain('.ds-input-set');
     expect(SKETCH_STYLES).toContain('.ds-field__control');

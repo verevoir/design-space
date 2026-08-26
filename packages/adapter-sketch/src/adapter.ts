@@ -47,17 +47,32 @@ import { SKETCH_STYLES } from './styles.js';
 // already carry the meaning for assistive tech.
 // ---------------------------------------------------------------------------
 
-function roughGlyph(className: string, viewBox: string, path: string): string {
-  return `<svg class="${className}" viewBox="${viewBox}" aria-hidden="true" focusable="false"><path d="${path}" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+function roughGlyph(
+  className: string,
+  viewBox: string,
+  path: string,
+  options?: { readonly strokeWidth?: string; readonly strokeAttrs?: string },
+): string {
+  const strokeWidth = options?.strokeWidth ?? '1.6';
+  const strokeAttrs = options?.strokeAttrs ?? 'stroke-linecap="round" stroke-linejoin="round"';
+  return `<svg class="${className}" viewBox="${viewBox}" aria-hidden="true" focusable="false"><path d="${path}" stroke="currentColor" fill="none" stroke-width="${strokeWidth}" ${strokeAttrs}/></svg>`;
 }
 
 // Each path is fixed, hand-chosen data — never derived from props — so none of it needs
-// escaping. Left open or asymmetric on purpose: GLYPH_GOOD's final stroke overshoots past
-// where a closed tick would stop; GLYPH_PENDING's six points don't return to their start;
-// GLYPH_EMPHASIS's four strokes are uneven lengths meeting off-centre, not a regular asterisk.
+// escaping. Left open or asymmetric on purpose:
+//   - GLYPH_GOOD's final stroke overshoots past where a closed tick would stop.
+//   - GLYPH_PENDING is closed (a trailing `Z`) — an open hexagon read as a stray scribble, not
+//     a shape — but closing it alone still read as a bowtie. It only reads as an hourglass
+//     once the viewBox is narrower than it is tall (14×20), which is why the pending mark's
+//     viewBox differs from the other two: closed and narrow are independent properties, and
+//     both are needed together. Verified live in the browser.
+//   - GLYPH_EMPHASIS's four strokes are visibly different lengths crossing off-centre, not a
+//     regular asterisk — scaling the old, more regular version up read as a bolder *designed*
+//     asterisk, the opposite of the scrawled mark this is meant to be. Verified live in the
+//     browser; irregularity fixed it, not size.
 const GLYPH_GOOD = 'M3.6 10.9 L8.3 15.6 L17.2 3.9';
-const GLYPH_PENDING = 'M4.1 3.6 L16.2 3.1 L10.0 10.2 L16.0 17.6 L3.7 17.9 L9.9 10.0';
-const GLYPH_EMPHASIS = 'M6 1.2 L6.5 10.8 M1.4 5.7 L11.2 6.4 M2.5 2.0 L10.1 10.5 M10.0 1.9 L2.8 10.4';
+const GLYPH_PENDING = 'M2.6 2.4 L11.5 2.0 L7.4 9.8 L11.2 17.6 L2.2 18.0 L6.6 10.1 Z';
+const GLYPH_EMPHASIS = 'M5.4 1.0 L6.9 11.1 M1.2 4.9 L11.4 6.9 M2.9 1.6 L9.6 10.9 M10.6 2.4 L2.2 9.4';
 
 // ---------------------------------------------------------------------------
 // Component implementations
@@ -93,7 +108,7 @@ function renderCompareSet(props: CompareSetProps): string {
   const rows = props.items
     .map((item) => {
       const emphasisMark = item.emphasis
-        ? `<span class="ds-compare-set__emphasis-mark" aria-hidden="true">${roughGlyph('ds-compare-set__emphasis-svg', '0 0 12 12', GLYPH_EMPHASIS)}</span><span class="ds-visually-hidden">Recommended: </span>`
+        ? `<span class="ds-compare-set__emphasis-mark" aria-hidden="true">${roughGlyph('ds-compare-set__emphasis-svg', '0 0 12 12', GLYPH_EMPHASIS, { strokeWidth: '1.5', strokeAttrs: 'stroke-linecap="round"' })}</span><span class="ds-visually-hidden">Recommended: </span>`
         : '';
       const rowClass = item.emphasis ? ' class="ds-compare-set__item--emphasis"' : '';
       const cells = item.values.map((value) => `<td>${escapeHtml(value)}</td>`).join('');
@@ -159,7 +174,10 @@ function renderStatus(props: StatusProps): string {
   const glyph =
     props.tone === 'good'
       ? roughGlyph('ds-status__glyph-svg', '0 0 20 20', GLYPH_GOOD)
-      : roughGlyph('ds-status__glyph-svg', '0 0 20 20', GLYPH_PENDING);
+      : roughGlyph('ds-status__glyph-svg', '0 0 14 20', GLYPH_PENDING, {
+          strokeWidth: '1.5',
+          strokeAttrs: 'stroke-linejoin="round"',
+        });
   const label = props.tone === 'good' ? 'Good' : 'Pending';
   return `<div class="ds-status ds-status--${escapeAttr(props.tone)}" role="status">
   <span class="ds-status__glyph" aria-hidden="true">${glyph}</span>

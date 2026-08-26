@@ -349,6 +349,20 @@ describe('sketchAdapter — status renderer', () => {
     expect(pendingPath).not.toBe(goodPath);
   });
 
+  it('the two tones render different viewBox values — sizing in styles.ts depends on this difference', () => {
+    // Both SVGs carry the identical .ds-status__glyph-svg class, so a CSS rule cannot size them
+    // differently by class alone; it can only key off the ancestor tone class. This pins the
+    // other half of that: the viewBox really does differ, which is what makes a square box
+    // wrong for pending (it would squash the hourglass back into a bowtie).
+    const pending = renderStatus({ tone: 'pending', message: 'x' });
+    const good = renderStatus({ tone: 'good', message: 'x' });
+    const pendingViewBox = pending.match(/viewBox="([^"]+)"/)?.[1];
+    const goodViewBox = good.match(/viewBox="([^"]+)"/)?.[1];
+    expect(pendingViewBox).toBeDefined();
+    expect(goodViewBox).toBeDefined();
+    expect(pendingViewBox).not.toBe(goodViewBox);
+  });
+
   it('no longer renders the tone as an emoji or a borrowed monochrome character', () => {
     const pending = renderStatus({ tone: 'pending', message: 'x' });
     const good = renderStatus({ tone: 'good', message: 'x' });

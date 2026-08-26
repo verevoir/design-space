@@ -113,13 +113,16 @@ header p {
   margin-right: 0.35rem;
 }
 .ds-compare-set__emphasis-svg {
-  width: 0.9em;
-  height: 0.9em;
+  /* Verified live in the browser: the irregular four-stroke path is invisible below this size. */
+  width: 1.5em;
+  height: 1.5em;
 }
 .ds-compare-set__item--emphasis th,
 .ds-compare-set__item--emphasis td {
-  border-style: dashed;
-  border-width: 2px;
+  /* Moved off dashed onto weight: dashed is overloaded elsewhere in this stylesheet
+   * (ds-action--secondary, ds-status--pending, ds-summary__row), and a heavy solid row
+   * reads as "this one" immediately rather than adding a fourth meaning to the same style. */
+  border: 3px solid currentColor;
 }
 .ds-input-set { margin-bottom: 1.5rem; }
 .ds-field { margin-bottom: 1rem; }
@@ -168,6 +171,19 @@ header p {
 .ds-status__glyph-svg {
   width: 1.1em;
   height: 1.1em;
+}
+/*
+ * The pending and good glyphs no longer share a viewBox (pending is 14×20 wide vs
+ * good's 20×20 square, so the hourglass reads narrow rather than square-bowtie), but both
+ * SVGs carry the identical .ds-status__glyph-svg class — roughGlyph() does not vary the
+ * class by tone. The only hook that distinguishes them is the ancestor .ds-status--pending
+ * wrapper, so the tone-specific size is reached as a descendant selector from there, kept
+ * more specific than the rule above so it wins regardless of source order.
+ */
+.ds-status--pending .ds-status__glyph-svg {
+  width: 1.25em;
+  height: 1.8em;
+  vertical-align: -0.35em;
 }
 .ds-status__label {
   font-family: var(--ds-font-annotation, cursive);
