@@ -46,7 +46,45 @@ describe('SKETCH_STYLES', () => {
   it('reaches render.ts\'s unclassed document shell (body, header h1/p) and its .ds-screen card', () => {
     expect(SKETCH_STYLES).toContain('header h1');
     expect(SKETCH_STYLES).toContain('.ds-screen');
-    expect(SKETCH_STYLES).toContain('box-shadow: var(--ds-shadow');
+  });
+
+  it('removes the hard offset shadow from the screen — outline only, per the operator', () => {
+    const rule = SKETCH_STYLES.match(/\.ds-screen\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    const body = rule![1].replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(body).toContain('box-shadow: none');
+    // Regression guard for the literal offset value the old hard shadow used, so a reintroduced
+    // shadow anywhere in the sheet (not just this rule) would be caught.
+    expect(SKETCH_STYLES).not.toContain('3px 3px 0');
+  });
+
+  it('leaves the replaced form controls with their real, visible border — they cannot host a ::before overlay', () => {
+    const fieldRule = SKETCH_STYLES.match(/\.ds-field__control\s*\{([^}]*)\}/);
+    const optionRule = SKETCH_STYLES.match(/\.ds-option__control\s*\{([^}]*)\}/);
+    expect(fieldRule).not.toBeNull();
+    expect(optionRule).not.toBeNull();
+    expect(fieldRule![1]).toContain('var(--ds-ink');
+    expect(fieldRule![1]).not.toContain('transparent');
+    expect(optionRule![1]).toContain('var(--ds-ink');
+    expect(optionRule![1]).not.toContain('transparent');
+  });
+
+  it('defines the rough-edge filter once as a custom property, and every roughened border overlay references it (not asserting the encoded filter bytes)', () => {
+    expect(SKETCH_STYLES).toContain('--ds-rough-filter:');
+    expect(SKETCH_STYLES).toContain('url("data:image/svg+xml,');
+    const overlaySelectors = [
+      '.ds-screen::before',
+      '.ds-action::before',
+      '.ds-status::before',
+      '.ds-compare-set::before',
+    ];
+    for (const selector of overlaySelectors) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = SKETCH_STYLES.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `expected a ${selector} rule`).not.toBeNull();
+      expect(rule![1]).toContain('filter: var(--ds-rough-filter)');
+      expect(rule![1]).toContain('pointer-events: none');
+    }
   });
 
   it('declares rules for the compare-set component, including the emphasis mark', () => {
