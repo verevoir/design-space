@@ -31,14 +31,21 @@ const scriptPath = resolve(
  * below that writes real output now supplies one pointing at a scratch path — letting a test
  * fall back to the script's real default (packages/studio/dist/document.html) is exactly the
  * defect this file used to have and no longer should.
+ *
+ * `journeyId`, when supplied, is passed as the script's third positional argument. It cannot be
+ * given without `outPath` also being given — there is no call site here that wants a
+ * non-default journey written to the real dist/document.html, and the signature does not offer
+ * that shape.
  */
 async function runScript(
   repoPath: string,
   outPath?: string,
+  journeyId?: string,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const args =
-      outPath === undefined ? [scriptPath, repoPath] : [scriptPath, repoPath, outPath];
+    const args = [scriptPath, repoPath];
+    if (outPath !== undefined) args.push(outPath);
+    if (journeyId !== undefined) args.push(journeyId);
     const { stdout, stderr } = await execFileAsync('node', args, {
       encoding: 'utf8',
       timeout: 60_000,
@@ -124,6 +131,22 @@ describe('prerender-build.mjs — the build step the container runs', () => {
       expect(defaultOutPath.split(sep).join('/')).toMatch(/packages\/studio\/dist\/document\.html$/);
     });
   });
+
+  describe('the default journey id, asserted without writing there', () => {
+    it('defaults journeyId to broadband-switch when no fourth argument is given, so the declared prerender command is unaffected', async () => {
+      // Same discipline as the outPath default above: actually exercising "no fourth argument"
+      // by running the script with two arguments only would write the real broadband-switch
+      // journey's rendered HTML into whatever outPath was given — fine in isolation, but the
+      // point of THIS test is to confirm the DEFAULT specifically, and doing that by running the
+      // script conflates "the default happens to be broadband-switch" with "I asked for
+      // broadband-switch" (this file's other blocks already ask for it explicitly). Confirmed
+      // instead by reading the script's own fallback expression, which is the actual source of
+      // truth aigency.json's zero-argument `prerender` command depends on.
+      const source = await readFile(scriptPath, 'utf-8');
+      expect(source).toContain("process.argv[4] ?? 'broadband-switch'");
+    });
+  });
+
 });
 
 
