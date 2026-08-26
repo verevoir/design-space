@@ -78,16 +78,20 @@ describe('prerender-build.mjs — the build step the container runs', () => {
       await mkdir(outDir, { recursive: true });
     });
 
-    it('reports the unimplemented components as gaps rather than passing silently', async () => {
+    it('reports zero gaps for the reference journey — every port component now has a sketch renderer (story 3.1)', async () => {
       const repoRoot = resolve(dirname(scriptPath), '../../..');
       const { code, stdout } = await runScript(repoRoot);
 
+      // Until story 3.1, only `prompt` was implemented, so this same build reported five gaps
+      // (compare-set, input-set, status, option-list, summary) against the real broadband-switch
+      // journey. The sketch adapter now implements every port component, and the real journey's
+      // block props all validate against the induced schemas, so the build's own gaps branch
+      // (`if (gaps.length > 0)`) must not fire at all — inverted from the prior assertion rather
+      // than deleted, since the old premise ("the reference journey must report gaps") is exactly
+      // what this story sets out to make false.
       expect(code).toBe(0);
-      // Only `prompt` is implemented in wave 2S, so the reference journey must report gaps.
-      // A silent success here would mean the gaps branch never fires and nobody learns which
-      // components are missing at build time.
-      expect(stdout).toContain('gaps (unimplemented components):');
-      expect(stdout).toContain('compare-set');
+      expect(stdout).toContain('Prerender complete.');
+      expect(stdout).not.toContain('gaps (unimplemented components):');
     });
   });
 });

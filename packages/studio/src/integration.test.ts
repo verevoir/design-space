@@ -61,25 +61,28 @@ describe('studio integration: broadband-switch rendered with sketch adapter', ()
     expect(text).toContain('Choose a new package');
   });
 
-  it('labelled gaps are present for unimplemented components (not silently omitted)', async () => {
+  // Until story 3.1, compare-set (and four siblings) had no sketch renderer, so this same
+  // journey rendered with a visible GAP box in place of the packages table. Story 3.1 gave
+  // the sketch adapter a renderer for every port component, so the premise these two tests
+  // once checked — "compare-set is unimplemented" — is no longer true. Inverted to assert
+  // what is now true instead of deleting the coverage: the real journey renders end to end
+  // with nothing missing.
+  it('the full journey renders with zero gaps now that every port component has a sketch renderer (story 3.1)', () => {
+    const rendered = render(journey, sketchAdapter);
+    expect(rendered.gaps).toHaveLength(0);
+  });
+
+  it('real compare-set content — the package names — appears in the page; no gap element is present anywhere', async () => {
     const rendered = render(journey, sketchAdapter);
     const server = createStudioServer({ rendered });
     const base = await bindServer(server, register);
     const res = await fetch(`${base}/`);
     const text = await res.text();
-    // compare-set is an unimplemented component; it must appear by name in a gap element
-    expect(text).toContain('compare-set');
-    expect(text).toContain('ds-gap');
-  });
-
-  it('the gap element naming compare-set is present — not silently skipped', async () => {
-    const rendered = render(journey, sketchAdapter);
-    // Verify the gap record is returned from render itself
-    const compareGap = rendered.gaps.find((g) => g.component === 'compare-set');
-    // If this assertion passes with compare-set simply absent from the output,
-    // the test would fail — the gap must be in the array to make it here.
-    expect(compareGap).toBeDefined();
-    expect(compareGap?.screenId).toBe('browse-packages');
+    // Real table content from browse-packages' compare-set block, not a gap placeholder.
+    expect(text).toContain('Family');
+    expect(text).toContain('Full Fibre');
+    expect(text).toContain('ds-compare-set');
+    expect(text).not.toContain('class="ds-gap"');
   });
 
   it('the rendered HTML document has an inline style block (no external network calls needed)', async () => {

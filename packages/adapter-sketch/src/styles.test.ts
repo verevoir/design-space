@@ -25,6 +25,31 @@ describe('SKETCH_STYLES', () => {
     expect(SKETCH_STYLES).toContain('var(--ds-ink');
   });
 
+  it('declares rules for the compare-set component, including the emphasis mark', () => {
+    expect(SKETCH_STYLES).toContain('.ds-compare-set');
+    expect(SKETCH_STYLES).toContain('.ds-compare-set__emphasis-mark');
+    expect(SKETCH_STYLES).toContain('.ds-compare-set__item--emphasis');
+  });
+
+  it('declares rules for the input-set component', () => {
+    expect(SKETCH_STYLES).toContain('.ds-input-set');
+    expect(SKETCH_STYLES).toContain('.ds-field__control');
+  });
+
+  it('declares rules for both status tones', () => {
+    expect(SKETCH_STYLES).toContain('.ds-status--pending');
+    expect(SKETCH_STYLES).toContain('.ds-status--good');
+  });
+
+  it('declares rules for the option-list component', () => {
+    expect(SKETCH_STYLES).toContain('.ds-option-list');
+  });
+
+  it('declares rules for the summary component', () => {
+    expect(SKETCH_STYLES).toContain('.ds-summary');
+    expect(SKETCH_STYLES).toContain('.ds-summary__edit');
+  });
+
   it('has no leading or trailing whitespace', () => {
     expect(SKETCH_STYLES).toBe(SKETCH_STYLES.trim());
   });

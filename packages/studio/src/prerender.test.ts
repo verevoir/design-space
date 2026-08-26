@@ -75,7 +75,11 @@ describe('prerender', () => {
   it('reports the gaps rather than leaving them to be noticed on the page', async () => {
     const { gaps } = await prerender({ repoPath, journeyId: 'demo', ref: 'HEAD', outPath });
 
-    // Only `prompt` is implemented in wave 2S, so compare-set must come back as a gap.
+    // As of story 3.1 the sketch adapter has a renderer for compare-set, so this no longer
+    // fails as "unimplemented" — but the fixture journey above passes an empty `items` array,
+    // which fails compare-set's own induced port schema (items.min(1)). The adapter is never
+    // called; render() records it as a schema-validation gap instead, under the same
+    // component name. Either way it reaches here as a gap, which is what this test checks.
     expect(gaps).toContain('compare-set');
   });
 
