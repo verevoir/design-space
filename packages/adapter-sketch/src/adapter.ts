@@ -33,13 +33,18 @@ import { SKETCH_STYLES } from './styles.js';
 // classes in styles.ts) keeps it in step with the surrounding type.
 // Roughness lives in the path data: an open line rather than a closed
 // geometric one, a tick that overshoots, marks that don't quite meet
-// themselves. This is deliberately NOT the same move as §5's ban on
-// wobbly *layout* geometry — borders, boxes, table rules, card edges,
-// which stay straight throughout every rule in styles.ts. A hand-drawn
-// mark is a glyph, not a layout primitive; §5's own reasoning ("wobbly
-// geometry fights every layout and gets twee at scale") is about layout
-// surviving arbitrary generated content, which one small inline mark does
-// not threaten.
+// themselves. This is a different MECHANISM from the border roughness in
+// styles.ts (a CSS filter on a `::before` overlay, per §5 as amended) —
+// a mark is a glyph, drawn once as fixed path data, not a layout
+// primitive whose position or size responds to content. Filtering an
+// entire element wobbles its text along with its border, which is
+// exactly what styles.ts's own `::before` layer exists to avoid (see its
+// header comment) — this mark sidesteps that by carrying its roughness
+// in the path itself rather than in a filter applied to a wrapping box.
+// The table's internal cell rules, card-edge structure and every form
+// control still render straight throughout styles.ts; only the outer
+// edges styles.ts targets, and this one inline mark, carry any wobble at
+// all.
 //
 // Both the wrapping `<span>` and the `<svg>` itself carry `aria-hidden` —
 // belt and braces — since the mark is decorative: the tone label in words

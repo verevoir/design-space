@@ -550,9 +550,10 @@ different job from designing a hand-drawn rendering, and doing both here would r
 story, two jobs. This story writes the sketch style *against* that contract.
 
 **Outcome.** A hand-drawn adapter implements the whole port. The rendering reads as provisional
-through typography and colour — handwriting face, warm paper, ink rather than black, one hard
-offset shadow, straight geometry — and stays legible with content of arbitrary length.
-Annotations render as margin notes.
+through typography, colour and a hand-drawn (Excalidraw-style) rough outline — handwriting
+face, warm paper, ink rather than black, outline only with no drop shadow (see
+`docs/architecture.md` §5 for the mechanism) — and stays legible with content of arbitrary
+length. Annotations render as margin notes.
 
 **Why.** This is the editing surface and the default, not a peer of the other adapters
 (architecture §5). A mediocre theme render is a shrug; a mediocre sketch render breaks the

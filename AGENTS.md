@@ -30,9 +30,10 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
 4. **Nothing above the resolver constructs a path** (ADR 0002). That seam is the whole of what
    phase 2 needs from phase 1.
 5. **The sketch adapter is the editing surface, not a peer of the other adapters.** It gets
-   disproportionate care. Provisional is carried by typography and colour — handwriting face,
-   warm paper, ink rather than black, one hard offset shadow — never by wobbly geometry, which
-   fights every layout and gets twee at scale.
+   disproportionate care. Provisional is now carried by typography, colour AND a hand-drawn
+   (Excalidraw-style) rough outline — outline only, no drop shadow. See
+   `docs/architecture.md` §5 for the mechanism and the two hard constraints that make it safe
+   to reimplement (border-only layer; form controls excluded).
 
 ## Working discipline
 
