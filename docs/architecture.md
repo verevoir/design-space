@@ -172,10 +172,15 @@ referenced from `filter:`. Two hard constraints, both found by doing it rather t
 - **The filter must sit on a border-only `::before` layer, never on the element itself.** Applied
   directly to the element, it displaces the text too, which reads as a rendering fault rather
   than as hand-drawn.
-- **Form controls cannot carry it.** `<input>` is a replaced element and cannot render
-  pseudo-elements — confirmed by probing it, not assumed. `.ds-field__control` and
-  `.ds-option__control` therefore keep their real, straight borders; this is a browser
-  constraint, not an oversight, and should not be undone later.
+- **`<input>` itself cannot carry it, but the adapter-rendered components that emit it can.**
+  `<input>` is a replaced element and cannot render pseudo-elements — confirmed by probing it,
+  not assumed, and that half of the original finding stands. But `input-set` and `option-list`
+  are components the sketch adapter renders itself — it owns their markup, not only their CSS —
+  so it wraps each control in its own `<span class="*-control-wrap">`, gives that span the rough
+  `::before` border, and makes the `<input>`'s own border transparent. No change to `render.ts`
+  and no widening of the adapter contract was needed: the markup a component renderer emits was
+  always this adapter's to decide. "Form controls stay straight" was the wrong conclusion to
+  draw from the true browser constraint above it, and does not hold any more.
 
 Verified in Chrome only — data-URI SVG filter support has historically varied across browsers.
 

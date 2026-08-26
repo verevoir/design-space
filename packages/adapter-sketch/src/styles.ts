@@ -58,11 +58,28 @@
  * preserved unchanged on the host rule (still reserving the right box size, now invisible) and
  * mirrored onto its `::before`; only which layer draws it moves.
  *
- * `.ds-field__control` and `.ds-option__control` are deliberately excluded from all of this:
- * both are replaced elements (`<input>`), and a replaced element cannot render
- * `::before`/`::after` content at all — probed directly (`content` comes back empty) rather
- * than assumed. They keep their real, straight-edged borders below; this is a browser
- * constraint, not an oversight.
+ * `.ds-field__control` and `.ds-option__control` (the raw `<input>` elements) still cannot be
+ * roughened directly: `<input>` is a replaced element and cannot render `::before`/`::after`
+ * content at all — probed directly (`content` comes back empty) rather than assumed. That part
+ * of the original finding was correct. The conclusion drawn from it — "so form controls stay
+ * straight" — was not: `input-set` and `option-list` are ADAPTER-rendered components, so this
+ * adapter owns their markup and is free to wrap each control in its own
+ * `<span class="*-control-wrap">` (`ds-field__control-wrap`, `ds-option__control-wrap`), give
+ * THAT span the rough `::before` border, and make the `<input>`'s own border transparent (kept,
+ * at the same width, for box sizing only). No change to render.ts and no widening of the
+ * adapter contract — the markup a component renderer emits was always this adapter's own.
+ *
+ * `.ds-field__control-wrap` deliberately declares no `display` (default `inline`, not
+ * `inline-block`): an inline, non-replaced box is not a block container, so the control's own
+ * `width: 100%` skips straight past it to `.ds-field`, the next real block container — exactly
+ * as it did before the wrapper existed. An earlier prototype wrapped the field with
+ * `display: inline-block` instead, which DOES become the containing block for that percentage
+ * width, and an inline-block with no declared width shrink-wraps to its content — so the field
+ * rendered visibly narrower. `.ds-option__control-wrap` has no percentage width to protect (the
+ * checkbox is a fixed `1.1rem` square) but is instead a flex item of `.ds-option`, so it is
+ * given the checkbox's own former size and flex properties explicitly (`width`, `height`,
+ * `flex-shrink`, `margin-top`), with the checkbox itself filling it at `100%` — deterministic
+ * sizing rather than relying on shrink-to-fit inside a flex item.
  */
 export const SKETCH_STYLES = `
 :root {
@@ -215,15 +232,27 @@ header p {
   font-family: var(--ds-font-annotation, cursive);
   color: var(--ds-ink, #2b2b2b);
 }
+.ds-field__control-wrap {
+  /* No display declared — see this file's header comment for why that is deliberate: it keeps
+   * this span from becoming the containing block for the control's own width: 100% below. */
+  position: relative;
+}
+.ds-field__control-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--ds-ink, #111);
+  filter: var(--ds-rough-filter);
+  pointer-events: none;
+}
 .ds-field__control {
-  /* Not roughened: <input> is a replaced element and cannot render ::before/::after content
-   * (probed directly — "content" comes back empty). This is a browser constraint, not an
-   * oversight — the real, straight-edged border below stays, or the field silently loses its
-   * border entirely, which is what happened on the first attempt at this. */
+  /* <input> itself still cannot host ::before (replaced element, probed directly) — the
+   * visible rough border is drawn by .ds-field__control-wrap::before above instead. This
+   * keeps a real, same-width border, just transparent, so box sizing is unchanged. */
   font-family: var(--ds-font-body, sans-serif);
   font-size: 1rem;
   padding: 0.4rem 0.6rem;
-  border: 1.5px solid var(--ds-ink, #111);
+  border: 1.5px solid transparent;
   border-radius: var(--ds-radius, 0);
   background: var(--ds-paper, #f0eee9);
   color: var(--ds-ink, #111);
@@ -297,16 +326,34 @@ header p {
   font-family: var(--ds-font-body, sans-serif);
   color: var(--ds-ink, #111);
 }
-.ds-option__control {
-  /* Not roughened: same replaced-element constraint as .ds-field__control above — <input>
-   * cannot render ::before/::after content, so this keeps its real, straight-edged border. */
-  appearance: none;
-  -webkit-appearance: none;
+.ds-option__control-wrap {
+  /* The actual flex item now (see .ds-option's display: flex) — carries the checkbox's former
+   * size and flex properties explicitly, so wrapping it changes nothing about layout; see this
+   * file's header comment for why deterministic sizing is used here rather than shrink-to-fit. */
+  display: inline-block;
+  position: relative;
   width: 1.1rem;
   height: 1.1rem;
   flex-shrink: 0;
   margin-top: 0.2rem;
+}
+.ds-option__control-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
   border: 1.5px solid var(--ds-ink, #2b2b2b);
+  filter: var(--ds-rough-filter);
+  pointer-events: none;
+}
+.ds-option__control {
+  /* <input> itself still cannot host ::before (replaced element) — the visible rough border
+   * is drawn by .ds-option__control-wrap::before above instead. Fills the wrapper at 100%
+   * rather than repeating a fixed size, so the two cannot silently drift apart. */
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 100%;
+  border: 1.5px solid transparent;
   border-radius: 0;
   background: var(--ds-paper, #f0eee9);
   position: relative;

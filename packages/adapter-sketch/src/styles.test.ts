@@ -58,15 +58,24 @@ describe('SKETCH_STYLES', () => {
     expect(SKETCH_STYLES).not.toContain('3px 3px 0');
   });
 
-  it('leaves the replaced form controls with their real, visible border — they cannot host a ::before overlay', () => {
+  it("makes each replaced form control's own border transparent — <input> cannot host a ::before overlay, so the visible rough border is drawn on its wrapper span instead", () => {
     const fieldRule = SKETCH_STYLES.match(/\.ds-field__control\s*\{([^}]*)\}/);
     const optionRule = SKETCH_STYLES.match(/\.ds-option__control\s*\{([^}]*)\}/);
     expect(fieldRule).not.toBeNull();
     expect(optionRule).not.toBeNull();
-    expect(fieldRule![1]).toContain('var(--ds-ink');
-    expect(fieldRule![1]).not.toContain('transparent');
-    expect(optionRule![1]).toContain('var(--ds-ink');
-    expect(optionRule![1]).not.toContain('transparent');
+    expect(fieldRule![1]).toContain('border: 1.5px solid transparent');
+    expect(optionRule![1]).toContain('border: 1.5px solid transparent');
+  });
+
+  it('carries a visible border colour on each control\'s wrapper, matching what the control itself used to carry', () => {
+    const fieldWrapRule = SKETCH_STYLES.match(/\.ds-field__control-wrap::before\s*\{([^}]*)\}/);
+    const optionWrapRule = SKETCH_STYLES.match(/\.ds-option__control-wrap::before\s*\{([^}]*)\}/);
+    expect(fieldWrapRule).not.toBeNull();
+    expect(optionWrapRule).not.toBeNull();
+    expect(fieldWrapRule![1]).toContain('var(--ds-ink');
+    expect(fieldWrapRule![1]).not.toContain('border: 1.5px solid transparent');
+    expect(optionWrapRule![1]).toContain('var(--ds-ink');
+    expect(optionWrapRule![1]).not.toContain('border: 1.5px solid transparent');
   });
 
   it('defines the rough-edge filter once as a custom property, and every roughened border overlay references it (not asserting the encoded filter bytes)', () => {
@@ -77,6 +86,8 @@ describe('SKETCH_STYLES', () => {
       '.ds-action::before',
       '.ds-status::before',
       '.ds-compare-set::before',
+      '.ds-field__control-wrap::before',
+      '.ds-option__control-wrap::before',
     ];
     for (const selector of overlaySelectors) {
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

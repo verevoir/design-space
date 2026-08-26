@@ -307,6 +307,18 @@ describe('sketchAdapter — input-set renderer', () => {
     expect(html).not.toContain('<script>');
     expect(html).toContain('&lt;script&gt;');
   });
+
+  it('wraps the control in its own span for the rough-border overlay, without disturbing the label/id association, required, or aria-required', () => {
+    // This is the thing this change could plausibly break: the wrapper sits between the
+    // <label for> target and its own id, and between the control and the required markers.
+    const html = renderInputSet({ fields: [{ label: 'Postcode', kind: 'text', required: true }] });
+    expect(html).toContain('<span class="ds-field__control-wrap">');
+    const idMatch = html.match(/id="([^"]+)"/);
+    expect(idMatch).not.toBeNull();
+    expect(html).toContain(`for="${idMatch![1]}"`);
+    expect(html).toMatch(/(?<!aria-)\brequired\b/);
+    expect(html).toContain('aria-required="true"');
+  });
 });
 
 describe('sketchAdapter — status renderer', () => {
@@ -437,6 +449,17 @@ describe('sketchAdapter — option-list renderer', () => {
       options: [{ label: 'x', detail: '"><script>alert(1)</script>' }],
     });
     expect(html).not.toContain('<script>');
+  });
+
+  it('wraps the checkbox in its own span for the rough-border overlay, without disturbing the label/id association', () => {
+    const html = renderOptionList({
+      selection: 'many',
+      options: [{ label: 'Static IP address', detail: '£5 a month' }],
+    });
+    expect(html).toContain('<span class="ds-option__control-wrap">');
+    const idMatch = html.match(/id="([^"]+)"/);
+    expect(idMatch).not.toBeNull();
+    expect(html).toContain(`for="${idMatch![1]}"`);
   });
 });
 

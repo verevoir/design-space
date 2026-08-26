@@ -41,10 +41,17 @@ import { SKETCH_STYLES } from './styles.js';
 // exactly what styles.ts's own `::before` layer exists to avoid (see its
 // header comment) — this mark sidesteps that by carrying its roughness
 // in the path itself rather than in a filter applied to a wrapping box.
-// The table's internal cell rules, card-edge structure and every form
-// control still render straight throughout styles.ts; only the outer
-// edges styles.ts targets, and this one inline mark, carry any wobble at
-// all.
+// The table's internal cell rules and card-edge structure still render
+// straight throughout styles.ts. Form controls no longer do: `<input>`
+// itself still cannot host a `::before` (replaced element, probed
+// directly), but `input-set` and `option-list` are components THIS
+// adapter renders, so it wraps each control in its own span
+// (`ds-field__control-wrap`, `ds-option__control-wrap`, see below) and
+// roughens that instead — see styles.ts's header comment for the wrapper
+// CSS and the shrink-wrap pitfall it deliberately avoids. Corrected same
+// day: an earlier version of this comment, and of docs/architecture.md
+// §5, concluded from the true `<input>` constraint that "form controls
+// stay straight" — that conclusion did not follow and no longer holds.
 //
 // Both the wrapping `<span>` and the `<svg>` itself carry `aria-hidden` —
 // belt and braces — since the mark is decorative: the tone label in words
@@ -157,7 +164,7 @@ function renderInputSet(props: InputSetProps): string {
         : ' aria-required="false"';
       return `<div class="ds-field">
     <label class="ds-field__label" for="${escapeAttr(id)}">${escapeHtml(field.label)}${requiredMark}</label>
-    <input class="ds-field__control" type="${escapeAttr(field.kind)}" id="${escapeAttr(id)}" name="${escapeAttr(id)}"${requiredAttrs}>
+    <span class="ds-field__control-wrap"><input class="ds-field__control" type="${escapeAttr(field.kind)}" id="${escapeAttr(id)}" name="${escapeAttr(id)}"${requiredAttrs}></span>
   </div>`;
     })
     .join('\n  ');
@@ -204,7 +211,7 @@ function renderOptionList(props: OptionListProps): string {
     .map((option, index) => {
       const id = `ds-option-${slugify(option.label)}-${index}`;
       return `<label class="ds-option" for="${escapeAttr(id)}">
-    <input class="ds-option__control" type="checkbox" id="${escapeAttr(id)}" name="${escapeAttr(id)}">
+    <span class="ds-option__control-wrap"><input class="ds-option__control" type="checkbox" id="${escapeAttr(id)}" name="${escapeAttr(id)}"></span>
     <span class="ds-option__text">
       <span class="ds-option__label">${escapeHtml(option.label)}</span>
       <span class="ds-option__detail">${escapeHtml(option.detail)}</span>
