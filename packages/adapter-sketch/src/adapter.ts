@@ -105,7 +105,7 @@ function renderInputSet(props: InputSetProps): string {
 
 /**
  * `status` carries its tone through more than colour: a distinct glyph
- * (`⏳` pending, `✓` good), a short text label naming the tone in words,
+ * (`⧖` pending, `✓` good), a short text label naming the tone in words,
  * and a border style (dashed for pending, solid for good) — three
  * independent channels, so a reader who cannot perceive colour still gets
  * the tone from the glyph or the label alone. `role="status"` makes this
@@ -113,7 +113,10 @@ function renderInputSet(props: InputSetProps): string {
  * check completes.
  */
 function renderStatus(props: StatusProps): string {
-  const glyph = props.tone === 'good' ? '✓' : '⏳';
+  // ⧖ (U+29D6), not the hourglass emoji U+23F3 — U+23F3 is Emoji_Presentation=Yes and
+  // renders in full colour on macOS regardless of CSS; U+29D6 is not in the Unicode emoji
+  // set at all and renders as plain text in the surrounding ink colour.
+  const glyph = props.tone === 'good' ? '✓' : '⧖';
   const label = props.tone === 'good' ? 'Good' : 'Pending';
   return `<div class="ds-status ds-status--${escapeAttr(props.tone)}" role="status">
   <span class="ds-status__glyph" aria-hidden="true">${glyph}</span>

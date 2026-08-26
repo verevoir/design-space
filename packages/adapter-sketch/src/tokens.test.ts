@@ -32,10 +32,6 @@ describe('SKETCH_CSS_CUSTOM_PROPERTIES', () => {
     expect(SKETCH_CSS_CUSTOM_PROPERTIES).toEqual({
       'ds-paper': '#f0eee9',
       'ds-ink': '#2b2b2b',
-      'ds-accent': '#1a6fb5',
-      'ds-destructive': '#c0392b',
-      'ds-escape': '#555555',
-      'ds-escape-border': '#aaaaaa',
       'ds-explain': '#444444',
       'ds-border-color': '#dddddd',
       'ds-gap-border': '#e74c3c',
@@ -43,7 +39,7 @@ describe('SKETCH_CSS_CUSTOM_PROPERTIES', () => {
       'ds-font-annotation': "'Caveat', 'Comic Sans MS', cursive",
       'ds-font-weight-body': '400',
       'ds-font-weight-annotation': '600',
-      'ds-radius': '6px',
+      'ds-radius': '0',
       'ds-shadow': '3px 3px 0 #2b2b2b',
     });
   });

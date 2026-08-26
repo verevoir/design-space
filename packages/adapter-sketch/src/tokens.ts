@@ -9,21 +9,30 @@
  * meant to be looked up as a value (by the eventual contrast check, 4.1),
  * and a token whose value is itself a reference to another token defeats
  * that lookup.
+ *
+ * Every value below is achromatic (grey/ink/paper, R=G=B) except
+ * 'ds-gap-border', with one exception explained in its own entry — the
+ * operator's rule for this adapter is "no colour anywhere in the sketch
+ * style; ink on warm paper only." 'ds-accent', 'ds-destructive', 'ds-escape'
+ * and 'ds-escape-border' — a blue, a red, and two greys that became unused
+ * once styles.ts stopped reading them for colour — were removed rather than
+ * kept as dead or misleading data. 'ds-radius' is '0': §5 requires straight
+ * borders throughout, and this token drives every rounded corner styles.ts
+ * still reads it from.
  */
 export const SKETCH_CSS_CUSTOM_PROPERTIES: Readonly<Record<string, string>> = {
   'ds-paper': '#f0eee9',
   'ds-ink': '#2b2b2b',
-  'ds-accent': '#1a6fb5',
-  'ds-destructive': '#c0392b',
-  'ds-escape': '#555555',
-  'ds-escape-border': '#aaaaaa',
   'ds-explain': '#444444',
   'ds-border-color': '#dddddd',
+  // Colours only render.ts's own GAP placeholder (a build-time diagnostic overlay this
+  // design system does not otherwise use) — see the commit message for why this one
+  // token is not achromatic like every other value here.
   'ds-gap-border': '#e74c3c',
   'ds-font-body': "'Patrick Hand', 'Comic Sans MS', cursive",
   'ds-font-annotation': "'Caveat', 'Comic Sans MS', cursive",
   'ds-font-weight-body': '400',
   'ds-font-weight-annotation': '600',
-  'ds-radius': '6px',
+  'ds-radius': '0',
   'ds-shadow': '3px 3px 0 #2b2b2b',
 };
