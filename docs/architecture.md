@@ -155,7 +155,8 @@ and ink rather than black are unchanged. Outline only: the hard offset shadow th
 to name is gone. A rough, hand-drawn edge is drawn on screens, actions, status rows, the compare-set table's own
 outer edge, and — via a wrapper span, since `<input>` cannot itself host a pseudo-element —
 `input-set` and `option-list`'s controls; the table's internal cell rules are what actually stays
-straight (see the constraints below for why).
+straight — the rough edge sits on the table's own outer border only, not on each cell, so the
+internal grid still reads as a real table (see the constraints below for how that layer is built).
 
 **This replaces, rather than adds to, what this section said before.** It used to argue that
 wobbly geometry "fights every layout and gets twee at scale" and that typography and colour alone

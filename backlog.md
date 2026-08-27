@@ -564,6 +564,28 @@ end to end; a screen whose text is three times longer than the reference still r
 output has been looked at and accepted by eye — this story has a taste bar that no automated
 check stands in for.
 
+**Status.** Open — not done. One clause below is currently unmeetable, not merely unproven;
+per-clause evidence follows, matching 2.2's convention above rather than an unqualified assertion.
+
+- *Every port component renders with no escape hatch*: met. The sketch adapter implements all
+  six port components with zero missing (`adapter.test.ts`, "sketchAdapter implements every port
+  component (story 3.1)"), and the real `broadband-switch` journey prerenders with zero reported
+  gaps (`prerender-build.test.ts`, "reports zero gaps for the reference journey — every port
+  component now has a sketch renderer (story 3.1)").
+- *Both reference journeys render end to end*: **not met, and currently unmeetable**, not merely
+  untested. The postcode-first variation's own store id is `broadband-switch.postcode-first`
+  (`prerender-build.mjs`'s header comment), but the store's `resolveObject()` calls
+  `validateId()`, and `packages/store/src/resolver.ts`'s
+  `SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/` forbids `.` — so this journey cannot be reached by id
+  at all today. No test anywhere calls `prerender()` with that id; the postcode-first fixture's
+  only coverage is at the port/schema and adapter-unit level, never through the store or through
+  `prerender-build.mjs`'s real invocation path.
+- *A screen whose text is three times longer than the reference still reads*: unproven, not
+  assumed either way — checked directly, and no test or fixture in the repository exercises
+  stretched or long-form text against either journey.
+- *The output has been looked at and accepted by eye*: met. The operator has viewed the rendered
+  journey and accepted it, iterating across several rounds.
+
 **Writes.** `packages/adapter-sketch`.
 **Note.** The one story in phase 1 that is not bulk work.
 
