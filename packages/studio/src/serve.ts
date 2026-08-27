@@ -52,6 +52,14 @@ const DOCUMENT_PATH = join(__dirname, 'document.html');
  * legible shape `serveDocument`'s startup check uses — named path, underlying message — so
  * whichever one fires (startup or a later request) reads the same way in a log.
  *
+ * This deliberately races a rebuild — that is the point of reading fresh per request — but it
+ * never observes a torn file. prerender.ts writes the document (and its gaps sidecar) via
+ * `writeAtomically`: to a temp file first, then `rename()`d into place, and a rename within one
+ * filesystem is atomic at the OS level. So this read always sees either the complete previous
+ * document or the complete new one, never a partial write caught mid-flight. No content-shape
+ * check is added here for that reason: it would be detecting corruption after the fact, where
+ * the write-side fix instead makes the corruption impossible to produce in the first place.
+ *
  * The gaps sidecar is deliberately NOT re-read here: it is captured once by `serveDocument`
  * and passed in, since nothing in the response surfaces it yet (see the comment there). Only
  * `html` needs to be live.
