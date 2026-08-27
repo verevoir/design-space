@@ -81,6 +81,10 @@ esac
 jq_bounded() { timeout "$JQ_BOUNDED_TIMEOUT" jq "$@"; }
 
 ok=1
+# Lenses that could not load a rubric, accumulated separately from `ok`: both
+# fail the gate, but only one of them is a statement about the change. Set here
+# rather than on first use because `set -u` is on and an unset expansion aborts.
+cnr=''
 echo "## Antagonistic panel — verdict by lens"
 for lens in $lenses; do
   f="$dir/verdict-$lens/verdict.json"
@@ -114,6 +118,15 @@ for lens in $lenses; do
     jq_bounded -r '.summary // ""' "$f" 2>/dev/null || true
     jq_bounded -r '.findings[]? | "  - " + .' "$f" 2>/dev/null || true
   } | safe
+  # COULD_NOT_RUN means the reviewer never got a bar to judge against. It fails
+  # closed exactly as a REJECT does — the difference is not the exit code, it is
+  # what the operator is told to go and fix. Collapsing it into "rejected" sends
+  # someone to re-read a diff when the actual fault is in the gate, and it
+  # OUTRANKS rejected in the headline for that reason: a lens that could not load
+  # the bar did not reject the change, and its silence is not evidence about it.
+  if [ "$v" = "COULD_NOT_RUN" ]; then
+    cnr="${cnr}${cnr:+, }${lens}"
+  fi
   [ "$v" = "APPROVE" ] || ok=0
 done
 
@@ -139,6 +152,13 @@ for d in "$dir"/verdict-*/; do
 done
 
 echo ""
+if [ -n "$cnr" ]; then
+  # Reported before the generic failure, and separately from it: this is a gate
+  # fault, not a verdict on the change. Nothing here says the change is bad — it
+  # says the change was never judged.
+  echo "::error title=Antagonistic review could not run::Lens(es) could not load a rubric: ${cnr}. The gate fails CLOSED because the change was NOT reviewed — this is NOT a finding against the change. Fix the rubric path (corpus reachable? practices readable?) and re-run."
+  exit 1
+fi
 if [ "$ok" -ne 1 ]; then
   echo "::error title=Change rejected::At least one lens rejected or failed to produce a verdict. The gate fails CLOSED."
   exit 1
