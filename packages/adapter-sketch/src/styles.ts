@@ -80,6 +80,25 @@
  * given the checkbox's own former size and flex properties explicitly (`width`, `height`,
  * `flex-shrink`, `margin-top`), with the checkbox itself filling it at `100%` — deterministic
  * sizing rather than relying on shrink-to-fit inside a flex item.
+ *
+ * Same-day follow-up: the checked-state mark had two defects, found together. First,
+ * `.ds-option__control:checked::after { content: "✓"; ... }` used the exact borrowed
+ * monochrome character this adapter's marks are built to avoid — see adapter.ts's header
+ * comment and the rule `roughGlyph()` exists to enforce everywhere else. Second, and worse:
+ * `.ds-option__control` IS the raw `<input>` — a replaced element, which this file's own
+ * comment two paragraphs up already establishes cannot host `::before`/`::after` at all
+ * (probed directly). A `:checked::after` rule placed there compiles but paints nothing; the
+ * tick had been invisible since story 3.1 shipped, independent of which character it named.
+ * Both are fixed together by moving the hook to `.ds-option__control-wrap:has(:checked)::after`
+ * — the wrap, not the input, is where generated content actually renders — and drawing the mark
+ * as a rough SVG, the same path data as `roughGlyph`'s `GLYPH_GOOD` in adapter.ts (duplicated,
+ * not imported: a CSS data URI cannot reach into a TS module). It is applied as a `mask`, not
+ * `content: url(...)`: masking lets `background-color` supply the colour from `var(--ds-ink)`
+ * below, so the mark stays token-driven like every other mark in this adapter rather than
+ * baking a fixed colour into the image. `:has()` is broad but not universal across older
+ * browsers — unlike this file's other marks, this one has not been verified live in a browser,
+ * only reasoned through against the CSS spec's replaced-element rules; treat it as unconfirmed
+ * until it has been looked at.
  */
 export const SKETCH_STYLES = `
 :root {
@@ -88,6 +107,11 @@ export const SKETCH_STYLES = `
    * a data:image/svg+xml URL referenced with a #fragment from CSS — unencoded angle brackets
    * and quotes are not accepted there. */
   --ds-rough-filter: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%3E%3Cfilter%20id=%22r%22%3E%3CfeTurbulence%20type=%22fractalNoise%22%20baseFrequency=%220.02%22%20numOctaves=%223%22%20seed=%227%22%20result=%22n%22/%3E%3CfeDisplacementMap%20in=%22SourceGraphic%22%20in2=%22n%22%20scale=%223%22/%3E%3C/filter%3E%3C/svg%3E#r");
+  /* Same path data as GLYPH_GOOD in adapter.ts's roughGlyph, duplicated because a CSS data URI
+   * cannot import from a TS module. Referenced via mask, not content: url(), so the mark's
+   * colour comes from background-color at the call site (see .ds-option__control-wrap's
+   * :has(:checked)::after below) rather than being baked into the image. */
+  --ds-option-check-mask: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2020%2020%22%3E%3Cpath%20d=%22M3.6%2010.9%20L8.3%2015.6%20L17.2%203.9%22%20fill=%22none%22%20stroke=%22%23000%22%20stroke-width=%221.6%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E");
 }
 body {
   background: var(--ds-paper, #f0eee9);
@@ -358,16 +382,18 @@ header p {
   background: var(--ds-paper, #f0eee9);
   position: relative;
 }
-.ds-option__control:checked::after {
-  content: "✓";
+.ds-option__control-wrap:has(:checked)::after {
+  /* Lives on the wrap, not on .ds-option__control above: that <input> is a replaced element
+   * and cannot host ::before/::after at all (see this file's header comment), so a rule
+   * targeting it directly compiles but never paints. :has() reaches the wrap from its
+   * checkbox descendant's checked state instead, where generated content works. */
+  content: "";
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.8rem;
-  line-height: 1;
-  color: var(--ds-ink, #2b2b2b);
+  inset: 0.15em;
+  background: var(--ds-ink, #2b2b2b);
+  -webkit-mask: var(--ds-option-check-mask) no-repeat center / contain;
+  mask: var(--ds-option-check-mask) no-repeat center / contain;
+  pointer-events: none;
 }
 .ds-option__label { font-weight: 600; }
 .ds-option__detail {

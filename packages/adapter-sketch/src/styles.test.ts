@@ -145,6 +145,28 @@ describe('SKETCH_STYLES', () => {
     expect(SKETCH_STYLES).toContain('.ds-option-list');
   });
 
+  it('marks the checked option on the wrapper span, never on the input itself — .ds-option__control is a replaced element and cannot host generated content', () => {
+    expect(SKETCH_STYLES).not.toContain('.ds-option__control:checked::after');
+    expect(SKETCH_STYLES).toContain('.ds-option__control-wrap:has(:checked)::after');
+  });
+
+  it('draws the checked mark as a masked rough SVG, not the borrowed ✓ character (this file\'s marks are built to avoid it — see adapter.ts)', () => {
+    const rule = SKETCH_STYLES.match(/\.ds-option__control-wrap:has\(:checked\)::after\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    const body = rule![1].replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(body).not.toContain('✓');
+    expect(body).not.toContain('content: "✓"');
+    expect(body).toContain('-webkit-mask:');
+    expect(body).toContain('mask:');
+    expect(body).toContain('var(--ds-option-check-mask)');
+  });
+
+  it('colours the checked mark through background-color: var(--ds-ink), so it stays token-driven rather than a colour baked into the mask image', () => {
+    const rule = SKETCH_STYLES.match(/\.ds-option__control-wrap:has\(:checked\)::after\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toContain('background: var(--ds-ink');
+  });
+
   it('declares rules for the summary component', () => {
     expect(SKETCH_STYLES).toContain('.ds-summary');
     expect(SKETCH_STYLES).toContain('.ds-summary__edit');

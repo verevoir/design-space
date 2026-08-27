@@ -16,9 +16,15 @@
  * style; ink on warm paper only." 'ds-accent', 'ds-destructive', 'ds-escape'
  * and 'ds-escape-border' — a blue, a red, and two greys that became unused
  * once styles.ts stopped reading them for colour — were removed rather than
- * kept as dead or misleading data. 'ds-radius' is '0': §5 requires straight
- * borders throughout, and this token drives every rounded corner styles.ts
- * still reads it from.
+ * kept as dead or misleading data. 'ds-radius' is '0' — styles.ts reads this
+ * token for every corner it draws (`.ds-action`, `.ds-field__control`,
+ * `.ds-status`), so setting it here squares them all without editing each
+ * rule individually. (Not restated from §5 here on purpose: §5 has already
+ * moved twice since this file was written, most recently to make rough
+ * geometry a carrier of provisional-ness rather than an absence of it — see
+ * AGENTS.md's own note about a summary drifting out of sync with §5 once.
+ * This comment states only what is true of this file and checkable against
+ * it, so it cannot drift the same way again.)
  */
 export const SKETCH_CSS_CUSTOM_PROPERTIES: Readonly<Record<string, string>> = {
   'ds-paper': '#f0eee9',
