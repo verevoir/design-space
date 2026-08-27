@@ -677,3 +677,89 @@ describe("aggregate.sh — union the panel and gate on unanimous approval", () =
     }
   });
 });
+
+// COULD_NOT_RUN: a lens that never got a bar to judge against. It fails the gate
+// exactly as a REJECT does -- the difference is not the exit code, it is what the
+// operator is sent to fix. A gate fault reported as a rejection sends someone to
+// re-read a diff that was never the problem, so the distinction has to survive all
+// the way to the message, and these pin that it does.
+describe("aggregate.sh — COULD_NOT_RUN is a gate fault, not a rejection", () => {
+  it("fails closed, and says the review could not run rather than that the change was rejected", async () => {
+    const { code, stdout } = await aggregate({
+      a: verdict("APPROVE"),
+      b: verdict("COULD_NOT_RUN", [], "rubric unavailable — cannot review"),
+    });
+    expect(code, "a gate that could not review must never pass").toBe(1);
+    expect(stdout).toContain("Antagonistic review could not run");
+    expect(stdout).toContain("b");
+    expect(
+      stdout,
+      "the generic rejection headline would send the author to the wrong place",
+    ).not.toContain("At least one lens rejected");
+  });
+
+  it("lets COULD_NOT_RUN outrank a REJECT in the same run", async () => {
+    // Precedence is deliberate (S25). A lens that could not load the bar did not
+    // reject the change, and its silence is not evidence about the change -- so the
+    // unreviewed half is the more urgent thing to report.
+    const { code, stdout } = await aggregate({
+      a: verdict("REJECT", ["real finding"]),
+      b: verdict("COULD_NOT_RUN"),
+    });
+    expect(code).toBe(1);
+    expect(stdout).toContain("Antagonistic review could not run");
+    expect(stdout).not.toContain("At least one lens rejected");
+  });
+
+  it("joins several could-not-run lenses into one readable list", async () => {
+    // `${cnr:+, }` is a conditional separator, and the failure it guards against is a
+    // list that starts or ends with a stray comma -- so assert the exact joined form.
+    const { stdout } = await aggregate({
+      a: verdict("COULD_NOT_RUN"),
+      b: verdict("COULD_NOT_RUN"),
+    });
+    expect(stdout).toContain("could not load a rubric: a, b");
+  });
+
+  it("names a single could-not-run lens with no separator at all", async () => {
+    const { stdout } = await aggregate({
+      a: verdict("COULD_NOT_RUN"),
+      b: verdict("APPROVE"),
+    });
+    expect(stdout).toContain("could not load a rubric: a.");
+  });
+
+  it("still reports an ordinary rejection as a rejection when no lens is blocked", async () => {
+    // The guard against over-firing: introducing the new branch must not reclassify
+    // the case that was already correct.
+    const { code, stdout } = await aggregate({
+      a: verdict("APPROVE"),
+      b: verdict("REJECT", ["real finding"]),
+    });
+    expect(code).toBe(1);
+    expect(stdout).toContain("At least one lens rejected");
+    expect(stdout).not.toContain("could not run");
+  });
+
+  it("does not treat an unrecognised verdict string as could-not-run", async () => {
+    // A verdict we cannot read is not a claim that the gate broke. It fails closed
+    // down the ordinary path.
+    const { code, stdout } = await aggregate({
+      a: verdict("APPROVE"),
+      b: verdict("MAYBE"),
+    });
+    expect(code).toBe(1);
+    expect(stdout).toContain("At least one lens rejected");
+    expect(stdout).not.toContain("could not run");
+  });
+
+  it("leaves the all-approve path green", async () => {
+    const { code, stdout } = await aggregate({
+      a: verdict("APPROVE"),
+      b: verdict("APPROVE"),
+    });
+    expect(code).toBe(0);
+    expect(stdout).toContain("Every lens APPROVED");
+    expect(stdout).not.toContain("could not run");
+  });
+});

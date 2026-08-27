@@ -517,9 +517,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # Display-only: make a REJECT visible at a glance in the checks UI by failing
-      # THIS job when its own lens objected (otherwise every lens job greens and only
-      # the aggregator reddens — you can't see which lens it was). `if: always()` is
+      # Display-only: make a non-APPROVE verdict visible at a glance in the checks UI
+      # by failing THIS job when its own lens did not approve (otherwise every lens job
+      # greens and only the aggregator reddens — you can't see which lens it was). It
+      # distinguishes the two ways a lens fails to approve, for the same reason the
+      # aggregator does: a lens that OBJECTED is telling you about the change, and a
+      # lens that COULD NOT RUN is telling you about the gate. Labelling the second
+      # "rejected" here would undo at the job level exactly what aggregate.sh does at
+      # the run level. `if: always()` is
       # load-bearing: the review action may itself exit non-zero on a REJECT, and the
       # skip-on-failure default would suppress this step in exactly the case it exists
       # to show (the missing-verdict branch covers a run that died before writing one).
@@ -543,6 +548,10 @@ jobs:
           # caps in aggregate.sh): a pathological payload fails this lens closed, never
           # holds the step. Runner always has coreutils timeout.
           v="$(timeout 10 jq -r '.verdict // empty' "$f" 2>/dev/null || echo '')"
+          # Anything that is not APPROVE fails this job — the tri-state changes what the
+          # operator is TOLD, never whether it fails. An unrecognised verdict string is
+          # not COULD_NOT_RUN either: it falls to the rejected wording below, because a
+          # verdict we cannot read is not a claim that the gate broke.
           if [ "$v" != "APPROVE" ]; then
             # Sanitise in the same order as aggregate.sh's safe(): strip CR (a literal \r
             # is a line terminator to the runner, so '\r::set-env' would open a command the
@@ -556,7 +565,11 @@ jobs:
             # aggregate.sh for the long version of why.
             n="$(timeout 10 jq -r 'if (.findings | type) == "array" then (.findings | length) else "?" end' "$f" 2>/dev/null || echo '?')"
             case "$n" in ''|*[!0-9]*) n='?' ;; esac
-            echo "::error title=${{ matrix.lens }} rejected (${n} findings)::${summary}"
+            if [ "$v" = "COULD_NOT_RUN" ]; then
+              echo "::error title=${{ matrix.lens }} could not run::${summary}"
+            else
+              echo "::error title=${{ matrix.lens }} rejected (${n} findings)::${summary}"
+            fi
             exit 1
           fi
           echo "${{ matrix.lens }} — APPROVE"
