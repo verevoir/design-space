@@ -399,11 +399,10 @@ assertion — and confirm `rollback.sh` restores traffic to the captured rollbac
 against the live service. This carries real production risk (a live traffic cut during the test)
 and is an operator decision to run deliberately; it is not planned or scheduled here.
 
-**Provenance, stated explicitly:** every date in the entries below — 2026-08-20, 2026-08-25 (twice) and
-2026-08-26 (twice) — is when the event it describes happened, not when it was written down. All of
-these entries, from the original gap through the 2026-08-26 correction, were composed together in a
-single pass on 2026-08-27, from session records rather than as each event was settled. A reader
-should weigh the dates accordingly: they mark the incidents, not the record-keeping.
+**Provenance, stated explicitly:** the dates on entries in this section mark when the events they
+describe happened, not when the entries were written. Entries here are composed after the fact,
+from session records, rather than contemporaneously as each event was settled. A reader should
+weigh the dates accordingly: they mark the incidents, not the record-keeping.
 
 **Known gap, recorded 2026-08-20.** Branch protection on this repository requires status checks
 to be green; it does not require that `promote.yml` was the thing that ran them through to a
