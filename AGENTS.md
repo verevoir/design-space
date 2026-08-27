@@ -32,8 +32,8 @@ is the source; if this file and an ADR disagree, the ADR wins and this file is w
 5. **The sketch adapter is the editing surface, not a peer of the other adapters.** It gets
    disproportionate care. Provisional is now carried by typography, colour AND a hand-drawn
    (Excalidraw-style) rough outline — outline only, no drop shadow. See
-   `docs/architecture.md` §5 for the mechanism and the two hard constraints that make it safe
-   to reimplement (border-only layer; form controls excluded).
+   `docs/architecture.md` §5 for the mechanism and its two hard constraints — not restated here
+   because a short summary of them already drifted out of sync with §5 once.
 
 ## Working discipline
 

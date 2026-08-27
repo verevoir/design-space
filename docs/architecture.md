@@ -152,8 +152,9 @@ Two rules follow:
 The sketch style's reference is now **hand-drawn, like Excalidraw** — typography, colour, *and*
 geometry all carry "provisional", not typography and colour alone. Handwriting face, warm paper,
 and ink rather than black are unchanged. Outline only: the hard offset shadow this section used
-to name is gone. A rough, hand-drawn edge is drawn on screens, actions, status rows and the
-compare-set table's own outer edge; the table's internal cell rules and every form control stay
+to name is gone. A rough, hand-drawn edge is drawn on screens, actions, status rows, the compare-set table's own
+outer edge, and — via a wrapper span, since `<input>` cannot itself host a pseudo-element —
+`input-set` and `option-list`'s controls; the table's internal cell rules are what actually stays
 straight (see the constraints below for why).
 
 **This replaces, rather than adds to, what this section said before.** It used to argue that

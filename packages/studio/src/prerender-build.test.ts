@@ -11,7 +11,7 @@
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -117,18 +117,58 @@ describe('prerender-build.mjs — the build step the container runs', () => {
     });
   });
 
-  describe('the default output path, asserted without writing there', () => {
-    it('defaults outPath to dist/document.html next to the script when no third argument is given', async () => {
-      // Actually exercising the default by running the script with no outPath argument would
-      // write into the real, served packages/studio/dist/document.html — precisely the
-      // corruption this file's other two blocks were just changed to stop doing. So the default
-      // is confirmed by reading the script's own fallback expression, and separately by
-      // resolving where that expression points, rather than by invoking it.
-      const source = await readFile(scriptPath, 'utf-8');
-      expect(source).toContain("process.argv[3] ?? join(__dirname, '../dist/document.html')");
+  describe('the default output path, exercised by actually running the script', () => {
+    // The literal expression under test — `process.argv[3] ?? join(__dirname, '../dist/document.html')`
+    // — can only be exercised by really running the script with no third argument, and doing that
+    // at its real location would overwrite the real, served packages/studio/dist/document.html —
+    // precisely the corruption this file's other blocks exist to stop. So the script, plus the
+    // ONE compiled sibling it imports (`../dist/prerender.js`, a leaf module: it imports only
+    // bare `@design-space/*` specifiers and node builtins, no further relative siblings), are
+    // copied into a scratch directory placed inside this package — so Node's module resolution
+    // still walks up to the workspace's real node_modules from the copy, the same way it does
+    // from the real dist/. Running the copy with no third argument makes `__dirname` resolve
+    // inside the scratch tree, so the real fallback computes a scratch path and writes there.
+    // A prior version of this test asserted the fallback expression's literal spelling instead —
+    // a refactor that reformatted it would have broken that test for no behavioural reason, and a
+    // genuine regression in where the default resolves would have sailed through untouched. This
+    // version fails on the second and passes through the first.
+    let scratchRoot: string;
 
-      const defaultOutPath = resolve(dirname(scriptPath), '../dist/document.html');
-      expect(defaultOutPath.split(sep).join('/')).toMatch(/packages\/studio\/dist\/document\.html$/);
+    beforeAll(async () => {
+      const studioRoot = resolve(dirname(scriptPath), '..');
+      scratchRoot = await mkdtemp(join(studioRoot, '.ds-prerender-default-'));
+      await mkdir(join(scratchRoot, 'scripts'), { recursive: true });
+      await mkdir(join(scratchRoot, 'dist'), { recursive: true });
+      const scriptSource = await readFile(scriptPath, 'utf-8');
+      await writeFile(join(scratchRoot, 'scripts', 'prerender-build.mjs'), scriptSource, 'utf-8');
+      const compiledPrerender = await readFile(join(studioRoot, 'dist', 'prerender.js'), 'utf-8');
+      await writeFile(join(scratchRoot, 'dist', 'prerender.js'), compiledPrerender, 'utf-8');
+    });
+
+    afterAll(async () => {
+      if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true });
+    });
+
+    it('defaults outPath to dist/document.html next to the script when no third argument is given', async () => {
+      const repoRoot = resolve(dirname(scriptPath), '../../..');
+      const scratchScript = join(scratchRoot, 'scripts', 'prerender-build.mjs');
+
+      // Only repoPath is passed — no outPath — so the real fallback runs, against the copy's own
+      // __dirname, exactly as it would for a real zero-argument invocation.
+      const { code, stdout } = await execFileAsync('node', [scratchScript, repoRoot], {
+        encoding: 'utf8',
+        timeout: 60_000,
+      }).then(
+        (r) => ({ code: 0, stdout: r.stdout }),
+        (err: { code?: number; stdout?: string }) => ({ code: err.code ?? 1, stdout: err.stdout ?? '' }),
+      );
+
+      expect(code).toBe(0);
+      expect(stdout).toContain('Prerender complete.');
+
+      // Checks where it actually wrote, not merely what the source names as the default.
+      const written = await readFile(join(scratchRoot, 'dist', 'document.html'), 'utf-8');
+      expect(written.length).toBeGreaterThan(0);
     });
   });
 
