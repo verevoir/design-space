@@ -399,6 +399,12 @@ assertion — and confirm `rollback.sh` restores traffic to the captured rollbac
 against the live service. This carries real production risk (a live traffic cut during the test)
 and is an operator decision to run deliberately; it is not planned or scheduled here.
 
+**Provenance, stated explicitly:** every date in the entries below — 2026-08-20, 2026-08-25 (twice) and
+2026-08-26 (twice) — is when the event it describes happened, not when it was written down. All of
+these entries, from the original gap through the 2026-08-26 correction, were composed together in a
+single pass on 2026-08-27, from session records rather than as each event was settled. A reader
+should weigh the dates accordingly: they mark the incidents, not the record-keeping.
+
 **Known gap, recorded 2026-08-20.** Branch protection on this repository requires status checks
 to be green; it does not require that `promote.yml` was the thing that ran them through to a
 merge. PR #18 is the proof: a direct merge call landed it the moment `ci` and Socket Security
@@ -483,7 +489,9 @@ This refutes both hypotheses entertained when the observation above was first wr
 
 **What remains open, precisely.** Whether the *entire* environment was empty inside the tool that ran, or only the workflow's three custom variables. If `PATH`/`RUNNER_TEMP`/`GITHUB_WORKSPACE` were populated while only the custom vars were empty, the fault sits in `claude-code-base-action`'s own `env:` propagation into the tool; if everything was empty, the fault is a bare subprocess spawn losing its parent's environment. These are different defects with different owners, and the log available could answer this but has not yet been read for that specific question.
 
-**The durable, gate-level finding, which depends on none of the above and needs no log evidence to check.** To `aggregate.sh`, a lens that could not review is indistinguishable from a lens that reviewed and rejected. The verdict *summary* tells the two apart for a human reader — `REJECT` with zero findings and an environment message, versus `REJECT` with findings quoting evidence — but nothing downstream reads the summary; the gate reads the `verdict` token alone. The consequence: as built, the gate cannot distinguish a working panel from one silently running four lenses out of five. This is not a claim that `aggregate.sh` "collapses everything" — it does not: a missing verdict file gets its own "did not run to completion" message in the report, an absent verdict field renders as none, an untakeable findings count prints `?`. What is binary is the *gate's decision*, not its reporting — unanimous-approval-or-closed is a project policy choice recorded under ADR 021, not a defect in the aggregator.
+**The durable, gate-level finding, which depends on none of the above and needs no log evidence to check.** To `aggregate.sh`, a lens that could not review is indistinguishable from a lens that reviewed and rejected. The verdict *summary* tells the two apart for a human reader — `REJECT` with zero findings and an environment message, versus `REJECT` with findings quoting evidence — but nothing downstream reads the summary; the gate reads the `verdict` token alone. The consequence: as built, the gate cannot distinguish a working panel from one silently running four lenses out of five. This is not a claim that `aggregate.sh` "collapses everything" — it does not: a missing verdict file gets its own "did not run to completion" message in the report, an absent verdict field renders as none, an untakeable findings count prints `?`. What is binary is the *gate's decision*, not its reporting — unanimous-approval-or-closed is a project policy choice, not a defect in the aggregator. Whether
+that policy choice is the right one is not a decision this repository has recorded anywhere;
+stating it here describes the gate's current behaviour, it does not cite a ruling on it.
 
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
