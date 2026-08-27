@@ -172,18 +172,100 @@ describe('prerender-build.mjs — the build step the container runs', () => {
     });
   });
 
-  describe('the default journey id, asserted without writing there', () => {
-    it('defaults journeyId to broadband-switch when no fourth argument is given, so the declared prerender command is unaffected', async () => {
-      // Same discipline as the outPath default above: actually exercising "no fourth argument"
-      // by running the script with two arguments only would write the real broadband-switch
-      // journey's rendered HTML into whatever outPath was given — fine in isolation, but the
-      // point of THIS test is to confirm the DEFAULT specifically, and doing that by running the
-      // script conflates "the default happens to be broadband-switch" with "I asked for
-      // broadband-switch" (this file's other blocks already ask for it explicitly). Confirmed
-      // instead by reading the script's own fallback expression, which is the actual source of
-      // truth aigency.json's zero-argument `prerender` command depends on.
-      const source = await readFile(scriptPath, 'utf-8');
-      expect(source).toContain("process.argv[4] ?? 'broadband-switch'");
+  describe('journeyId selects which journey renders — exercised by actually running the script, not by reading its source', () => {
+    // The literal expression under test — `process.argv[4] ?? 'broadband-switch'` — is exercised
+    // properly only by running the script and observing WHICH journey it actually rendered, both
+    // with a real non-default id supplied and with none. A prior version of this test asserted
+    // only the default, and did so by reading the script's source text for the fallback
+    // expression's literal spelling — a refactor that reformatted it would have broken that test
+    // for no behavioural reason, and the happy path (a real id actually selecting a different
+    // journey) had no coverage at all. This block replaces it with two real runs against a
+    // scratch repository carrying two real, valid journeys.
+    //
+    // Deliberately not `broadband-switch.postcode-first`: that id contains a `.`, which the
+    // store's SAFE_ID (`/^[A-Za-z0-9][A-Za-z0-9_-]*$/`) forbids — a known, separate, currently
+    // unmeetable blocker (backlog.md, story 3.1's Status), not something this test should try to
+    // route around. `broadband-switch-alt` is SAFE_ID-valid and serves the same purpose: a real,
+    // reachable, non-default journey id.
+    let journeyRepo: string;
+
+    beforeAll(async () => {
+      journeyRepo = await mkdtemp(join(tmpdir(), 'ds-prerender-journeyid-'));
+      const git = (...args: string[]) => execFileAsync('git', args, { cwd: journeyRepo });
+      await git('init', '-q');
+      await git('config', 'user.email', 'test@example.invalid');
+      await git('config', 'user.name', 'Test');
+      await git('config', 'commit.gpgsign', 'false');
+
+      await mkdir(join(journeyRepo, 'examples', 'journeys'), { recursive: true });
+      await writeFile(
+        join(journeyRepo, 'examples', 'journeys', 'broadband-switch.json'),
+        JSON.stringify({
+          id: 'broadband-switch',
+          title: 'Default journey marker',
+          intent: 'Prove the fourth argument default resolves to THIS journey.',
+          entry: 'only',
+          screens: [
+            {
+              id: 'only',
+              purpose: 'The default journey.',
+              blocks: [{ component: 'prompt', props: { heading: 'DEFAULT JOURNEY MARKER' } }],
+              actions: [{ label: 'Done', weight: 'primary', target: null }],
+              annotations: [],
+            },
+          ],
+        }),
+        'utf-8',
+      );
+      await writeFile(
+        join(journeyRepo, 'examples', 'journeys', 'broadband-switch-alt.json'),
+        JSON.stringify({
+          id: 'broadband-switch-alt',
+          title: 'Alt journey marker',
+          intent: 'Prove a real, non-default fourth argument selects THIS journey instead.',
+          entry: 'only',
+          screens: [
+            {
+              id: 'only',
+              purpose: 'The alternate journey.',
+              blocks: [{ component: 'prompt', props: { heading: 'ALT JOURNEY MARKER' } }],
+              actions: [{ label: 'Done', weight: 'primary', target: null }],
+              annotations: [],
+            },
+          ],
+        }),
+        'utf-8',
+      );
+      await git('add', '-A');
+      await git('commit', '-qm', 'two journeys, to prove journeyId selects between them');
+    });
+
+    afterAll(async () => {
+      if (journeyRepo) await rm(journeyRepo, { recursive: true, force: true });
+    });
+
+    it('renders the journey named by a real fourth argument, not the default', async () => {
+      const outPath = join(journeyRepo, 'alt-document.html');
+      const { code, stdout } = await runScript(journeyRepo, outPath, 'broadband-switch-alt');
+
+      expect(code).toBe(0);
+      expect(stdout).toContain('Prerender complete.');
+
+      const written = await readFile(outPath, 'utf-8');
+      expect(written).toContain('ALT JOURNEY MARKER');
+      expect(written).not.toContain('DEFAULT JOURNEY MARKER');
+    });
+
+    it('renders the default journey (broadband-switch) when no fourth argument is given — a real run, not a source-text match', async () => {
+      const outPath = join(journeyRepo, 'default-document.html');
+      const { code, stdout } = await runScript(journeyRepo, outPath);
+
+      expect(code).toBe(0);
+      expect(stdout).toContain('Prerender complete.');
+
+      const written = await readFile(outPath, 'utf-8');
+      expect(written).toContain('DEFAULT JOURNEY MARKER');
+      expect(written).not.toContain('ALT JOURNEY MARKER');
     });
   });
 

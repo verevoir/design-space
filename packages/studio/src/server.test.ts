@@ -192,14 +192,37 @@ describe('createStudioServer(): the provider is called per request, not once at 
     expect(second).toBe('second');
   });
 
-  it('answers 503 rather than crashing when the provider rejects for a request', async () => {
+  it('answers 503 rather than crashing when the provider rejects for a request, and logs the failure reason to stderr', async () => {
     const server = createStudioServer({
       getRendered: () => Promise.reject(new Error('document unavailable for this request')),
     });
     const base = await bindServer(server, register);
 
-    const res = await fetch(`${base}/`);
+    // handleRequest's own catch branch is deliberate behaviour (server.ts: "reported to stderr
+    // — the container log is where an operator would look"), but until now only the HTTP status
+    // was asserted here, leaving the logged diagnostic itself unverified — stubbing out or
+    // deleting the stderr write would not have failed this test.
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr) as typeof process.stderr.write;
+    process.stderr.write = (chunk: unknown, encodingOrCb?: unknown, cb?: unknown): boolean => {
+      stderrChunks.push(String(chunk));
+      return (origWrite as (c: unknown, e?: unknown, cb?: unknown) => boolean)(chunk, encodingOrCb, cb);
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(`${base}/`);
+    } finally {
+      process.stderr.write = origWrite;
+    }
     expect(res.status).toBe(503);
+    expect(
+      stderrChunks.some(
+        (c) =>
+          c.includes('Studio server: the document provider failed for a request') &&
+          c.includes('document unavailable for this request'),
+      ),
+    ).toBe(true);
 
     // The server itself is still up and answers normally afterwards — one failed provider
     // call for one request must not have crashed the process or wedged the server.
