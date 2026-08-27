@@ -8,18 +8,13 @@
  * Story 3.1 added rules for the five components induced in 2.1
  * (`compare-set`, `input-set`, `status`, `option-list`, `summary`).
  *
- * Corrected the same day, against a real rendered page rather than a
- * source read: §5 requires provisional to be carried by typography and
- * BORDER STYLE — never colour, never new geometry (a rounded corner is
- * exactly that) — and several rules here still painted real hue (a blue
- * accent, a red destructive/required marker) or rounded corners. Every
- * rule below now reads only `--ds-ink` / `--ds-paper` / `--ds-explain` for
- * colour (all achromatic), and distinguishes action weight by border style
- * instead: dashed for de-emphasis (the same meaning dashed already carries
- * for `.ds-status--pending` and compare-set emphasis), double for a
- * destructive action, dotted for the lowest-emphasis escape action.
- * `--ds-radius` moved to `0` in tokens.ts, which straightens every rule
- * below that reads it without editing each one individually.
+ * Border style carries meaning here, not just colour: dashed marks
+ * de-emphasis (`.ds-action--secondary`, `.ds-status--pending`), double
+ * marks a destructive action, dotted marks the lowest-emphasis escape
+ * action. `--ds-radius` is `0` in tokens.ts, which straightens every rule
+ * below that reads it without editing each one individually; every colour
+ * value here is achromatic for the same single-point-of-control reason
+ * (tokens.ts's own header says why).
  *
  * A short "document shell" section up top overrides `body`, `header h1` /
  * `header p`, and `.ds-screen` — elements `render.ts` emits unclassed or
@@ -31,74 +26,55 @@
  * order, and this stylesheet is emitted after `render.ts`'s own document
  * CSS (see `buildDocument` in render.ts), so these rules win.
  *
- * Same-day follow-up: `.ds-status__glyph` and `.ds-compare-set__emphasis-mark` moved from
- * text-sizing rules to inline-flex wrappers around an SVG mark (see adapter.ts's `roughGlyph`)
- * — the borrowed characters carried a designed voice, the opposite of the placeholder a glyph
- * is meant to read as here. The two `*-svg` selectors size the mark in `em`; colour is
- * untouched, since the mark inherits `currentColor` from its ink-coloured wrapper already.
+ * `.ds-status__glyph` and `.ds-compare-set__emphasis-mark` are inline-flex
+ * wrappers around an SVG mark (adapter.ts's `roughGlyph`; its own header
+ * says why a borrowed character is not used instead). The two `*-svg`
+ * selectors size the mark in `em`; colour is untouched, since the mark
+ * inherits `currentColor` from its ink-coloured wrapper already.
  *
- * Same-day follow-up: hard offset shadows replaced by a hand-drawn (Excalidraw-style) outline,
- * per the operator. The adapter has no markup hook to add a wrapping element for roughening —
- * it supplies CSS and tokens only — so the wobble is an SVG filter (feTurbulence +
- * feDisplacementMap) declared as a `data:image/svg+xml` URL and referenced from `filter:`,
- * verified live in Chrome against the running studio: no external asset, no new dependency,
- * entirely inside the adapter's existing CSS-and-tokens contract. Declared once as
- * `--ds-rough-filter` below and reused everywhere a rough edge is needed. Verified in Chrome
- * only — data-URI SVG filter support has historically varied across browsers, and that has not
- * been checked here.
+ * The rough hand-drawn edge — mechanism and rationale: docs/architecture.md
+ * §5, ADR 0010 — is drawn on `.ds-screen`, `.ds-action`, `.ds-status` and
+ * the compare-set `<table>` via a `::before` overlay. Each keeps a real but
+ * transparent border (for box sizing only), gains `position: relative`,
+ * and grows a `::before` absolutely positioned over the same edge, which
+ * carries the visible filtered border and is `pointer-events: none` so it
+ * cannot intercept clicks. Each element's existing border vocabulary
+ * (above) is preserved unchanged on the host rule and mirrored onto its
+ * `::before`; only which layer draws it moves.
  *
- * The filter is applied to a `::before` overlay, never to the element itself: filtering the
- * element displaces its text along with its border, and wobbly body text reads as a rendering
- * fault, not as hand-drawn (seen directly in the browser). So `.ds-screen`, `.ds-action`,
- * `.ds-status` and the compare-set `<table>` keep a real but transparent border (for box
- * sizing only), gain `position: relative`, and grow a `::before` that is absolutely positioned
- * over the same edge, carries the visible filtered border, and is `pointer-events: none` so it
- * cannot intercept clicks. Each element's existing border vocabulary — primary heavier,
- * secondary dashed, destructive double, escape dotted, `ds-status--pending` dashed — is
- * preserved unchanged on the host rule (still reserving the right box size, now invisible) and
- * mirrored onto its `::before`; only which layer draws it moves.
+ * `input-set` and `option-list`'s controls get the same treatment via a
+ * wrapper span — why a wrap is needed at all: docs/architecture.md §5's
+ * "How it is achieved". `.ds-field__control-wrap` deliberately declares no
+ * `display` (default `inline`, not `inline-block`): an inline, non-replaced
+ * box is not a block container, so the control's own `width: 100%` skips
+ * straight past it to `.ds-field`, the next real block container — exactly
+ * as it did before the wrapper existed. An earlier prototype wrapped the
+ * field with `display: inline-block` instead, which DOES become the
+ * containing block for that percentage width, and an inline-block with no
+ * declared width shrink-wraps to its content — so the field rendered
+ * visibly narrower. `.ds-option__control-wrap` has no percentage width to
+ * protect (the checkbox is a fixed `1.1rem` square) but is instead a flex
+ * item of `.ds-option`, so it is given the checkbox's own former size and
+ * flex properties explicitly (`width`, `height`, `flex-shrink`,
+ * `margin-top`), with the checkbox itself filling it at `100%` —
+ * deterministic sizing rather than relying on shrink-to-fit inside a flex
+ * item.
  *
- * `.ds-field__control` and `.ds-option__control` (the raw `<input>` elements) still cannot be
- * roughened directly: `<input>` is a replaced element and cannot render `::before`/`::after`
- * content at all — probed directly (`content` comes back empty) rather than assumed. That part
- * of the original finding was correct. The conclusion drawn from it — "so form controls stay
- * straight" — was not: `input-set` and `option-list` are ADAPTER-rendered components, so this
- * adapter owns their markup and is free to wrap each control in its own
- * `<span class="*-control-wrap">` (`ds-field__control-wrap`, `ds-option__control-wrap`), give
- * THAT span the rough `::before` border, and make the `<input>`'s own border transparent (kept,
- * at the same width, for box sizing only). No change to render.ts and no widening of the
- * adapter contract — the markup a component renderer emits was always this adapter's own.
- *
- * `.ds-field__control-wrap` deliberately declares no `display` (default `inline`, not
- * `inline-block`): an inline, non-replaced box is not a block container, so the control's own
- * `width: 100%` skips straight past it to `.ds-field`, the next real block container — exactly
- * as it did before the wrapper existed. An earlier prototype wrapped the field with
- * `display: inline-block` instead, which DOES become the containing block for that percentage
- * width, and an inline-block with no declared width shrink-wraps to its content — so the field
- * rendered visibly narrower. `.ds-option__control-wrap` has no percentage width to protect (the
- * checkbox is a fixed `1.1rem` square) but is instead a flex item of `.ds-option`, so it is
- * given the checkbox's own former size and flex properties explicitly (`width`, `height`,
- * `flex-shrink`, `margin-top`), with the checkbox itself filling it at `100%` — deterministic
- * sizing rather than relying on shrink-to-fit inside a flex item.
- *
- * Same-day follow-up: the checked-state mark had two defects, found together. First,
- * `.ds-option__control:checked::after { content: "✓"; ... }` used the exact borrowed
- * monochrome character this adapter's marks are built to avoid — see adapter.ts's header
- * comment and the rule `roughGlyph()` exists to enforce everywhere else. Second, and worse:
- * `.ds-option__control` IS the raw `<input>` — a replaced element, which this file's own
- * comment two paragraphs up already establishes cannot host `::before`/`::after` at all
- * (probed directly). A `:checked::after` rule placed there compiles but paints nothing; the
- * tick had been invisible since story 3.1 shipped, independent of which character it named.
- * Both are fixed together by moving the hook to `.ds-option__control-wrap:has(:checked)::after`
- * — the wrap, not the input, is where generated content actually renders — and drawing the mark
- * as a rough SVG, the same path data as `roughGlyph`'s `GLYPH_GOOD` in adapter.ts (duplicated,
- * not imported: a CSS data URI cannot reach into a TS module). It is applied as a `mask`, not
- * `content: url(...)`: masking lets `background-color` supply the colour from `var(--ds-ink)`
- * below, so the mark stays token-driven like every other mark in this adapter rather than
- * baking a fixed colour into the image. `:has()` is broad but not universal across older
- * browsers — unlike this file's other marks, this one has not been verified live in a browser,
- * only reasoned through against the CSS spec's replaced-element rules; treat it as unconfirmed
- * until it has been looked at.
+ * Same-day follow-up: the checked-state mark had two defects, found
+ * together — see adapter.ts's header for the borrowed-character rule it
+ * broke, and docs/architecture.md §5 for why `.ds-option__control` (the raw
+ * `<input>`) cannot itself host the mark. Both are fixed together by moving
+ * the hook to `.ds-option__control-wrap:has(:checked)::after` and drawing
+ * the mark as a rough SVG, the same path data as `roughGlyph`'s
+ * `GLYPH_GOOD` in adapter.ts (duplicated, not imported: a CSS data URI
+ * cannot reach into a TS module). It is applied as a `mask`, not
+ * `content: url(...)`: masking lets `background-color` supply the colour
+ * from `var(--ds-ink)` below, so the mark stays token-driven like every
+ * other mark in this adapter rather than baking a fixed colour into the
+ * image. `:has()` is broad but not universal across older browsers —
+ * unlike this file's other marks, this one has not been verified live in a
+ * browser, only reasoned through against the CSS spec's replaced-element
+ * rules; treat it as unconfirmed until it has been looked at.
  */
 export const SKETCH_STYLES = `
 :root {

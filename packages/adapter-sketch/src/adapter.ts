@@ -33,25 +33,10 @@ import { SKETCH_STYLES } from './styles.js';
 // classes in styles.ts) keeps it in step with the surrounding type.
 // Roughness lives in the path data: an open line rather than a closed
 // geometric one, a tick that overshoots, marks that don't quite meet
-// themselves. This is a different MECHANISM from the border roughness in
-// styles.ts (a CSS filter on a `::before` overlay, per §5 as amended) —
-// a mark is a glyph, drawn once as fixed path data, not a layout
-// primitive whose position or size responds to content. Filtering an
-// entire element wobbles its text along with its border, which is
-// exactly what styles.ts's own `::before` layer exists to avoid (see its
-// header comment) — this mark sidesteps that by carrying its roughness
-// in the path itself rather than in a filter applied to a wrapping box.
-// The table's internal cell rules and card-edge structure still render
-// straight throughout styles.ts. Form controls no longer do: `<input>`
-// itself still cannot host a `::before` (replaced element, probed
-// directly), but `input-set` and `option-list` are components THIS
-// adapter renders, so it wraps each control in its own span
-// (`ds-field__control-wrap`, `ds-option__control-wrap`, see below) and
-// roughens that instead — see styles.ts's header comment for the wrapper
-// CSS and the shrink-wrap pitfall it deliberately avoids. Corrected same
-// day: an earlier version of this comment, and of docs/architecture.md
-// §5, concluded from the true `<input>` constraint that "form controls
-// stay straight" — that conclusion did not follow and no longer holds.
+// themselves. This is a different mechanism from the border roughness in
+// styles.ts (mechanism and rationale: docs/architecture.md §5, ADR 0010) —
+// a mark is a glyph, drawn once as fixed path data, not a layout primitive
+// whose position or size responds to content.
 //
 // Both the wrapping `<span>` and the `<svg>` itself carry `aria-hidden` —
 // belt and braces — since the mark is decorative: the tone label in words
