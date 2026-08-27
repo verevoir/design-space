@@ -319,6 +319,31 @@ describe('sketchAdapter — input-set renderer', () => {
     expect(html).toMatch(/(?<!aria-)\brequired\b/);
     expect(html).toContain('aria-required="true"');
   });
+
+  it('gives two fields whose labels collide after slugification distinct ids, each label still pointing at its own field', () => {
+    // 'Phone' and 'Phone!' both slugify to 'phone' — slugify strips everything but
+    // [a-z0-9-], so the '!' disappears and the two labels collapse to the same slug. Before
+    // the index was folded into the id, this produced two identical ids: the second field's
+    // <label for> then resolved to the FIRST field's input (the DOM spec's own rule for
+    // duplicate ids), silently focusing the wrong control when a user clicked the second
+    // label.
+    const html = renderInputSet({
+      fields: [
+        { label: 'Phone', kind: 'tel', required: true },
+        { label: 'Phone!', kind: 'tel', required: false },
+      ],
+    });
+    const ids = [...html.matchAll(/<input[^>]* id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+
+    // Each <label for="..."> must resolve to ITS OWN field's input, not merely to some id
+    // that exists somewhere in the document — this is the actual defect the reviewer named,
+    // and a weaker assertion (e.g. "both label targets are present somewhere") would not
+    // catch it regressing.
+    const labelFors = [...html.matchAll(/<label[^>]* for="([^"]+)"/g)].map((m) => m[1]);
+    expect(labelFors).toEqual(ids);
+  });
 });
 
 describe('sketchAdapter — status renderer', () => {

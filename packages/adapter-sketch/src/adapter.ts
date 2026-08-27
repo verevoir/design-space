@@ -144,18 +144,21 @@ function renderCompareSet(props: CompareSetProps): string {
  * hand-drawn label and a plain-bordered control — not about dropping the
  * semantics a real form needs.
  *
- * The control's id is derived from the field's own label (slugified). This
- * is deterministic and sufficient for both reference journeys, where no two
- * fields share a label within one block; a renderer receives only this
- * block's own props, never the journey document or a sibling block
- * (architecture §3: an adapter must not know which journey it renders), so
- * there is no document-wide registry available here to guarantee
- * uniqueness beyond that.
+ * The control's id folds the field's own label (slugified) together with its
+ * position in the array — `ds-field-<slug>-<index>` — the same shape
+ * `renderOptionList` below uses for the identical reason: two fields whose
+ * labels collide, or differ only in characters `slugify` strips, would
+ * otherwise produce duplicate ids and silently break the second field's
+ * `<label for>` association. A renderer receives only this block's own props,
+ * never the journey document or a sibling block (architecture §3: an adapter
+ * must not know which journey it renders), so the index is the only
+ * disambiguator available here — and it is sufficient, since it is unique by
+ * construction within one block.
  */
 function renderInputSet(props: InputSetProps): string {
   const fields = props.fields
-    .map((field) => {
-      const id = `ds-field-${slugify(field.label)}`;
+    .map((field, index) => {
+      const id = `ds-field-${slugify(field.label)}-${index}`;
       const requiredMark = field.required
         ? `<span class="ds-field__required" aria-hidden="true"> *</span>`
         : '';
