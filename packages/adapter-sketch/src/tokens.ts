@@ -31,9 +31,10 @@ export const SKETCH_CSS_CUSTOM_PROPERTIES: Readonly<Record<string, string>> = {
   'ds-ink': '#2b2b2b',
   'ds-explain': '#444444',
   'ds-border-color': '#dddddd',
-  // Colours only render.ts's own GAP placeholder (a build-time diagnostic overlay this
-  // design system does not otherwise use) — see the commit message for why this one
-  // token is not achromatic like every other value here.
+  // render.ts's .ds-gap rule is a build-time diagnostic overlay — a visible box naming a
+  // component with no renderer, seen by a developer during development, never part of the
+  // finished sketch output — so it sits outside the achromatic rule above and keeps a real
+  // colour to stay legible as "something is wrong here" at a glance.
   'ds-gap-border': '#e74c3c',
   'ds-font-body': "'Patrick Hand', 'Comic Sans MS', cursive",
   'ds-font-annotation': "'Caveat', 'Comic Sans MS', cursive",
