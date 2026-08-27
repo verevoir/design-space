@@ -30,6 +30,9 @@ export const CompareSetPropsSchema = z
   .refine(
     (props) => props.items.every((item) => item.values.length === props.attributes.length),
     { message: 'every item.values must have exactly one entry per attributes entry' },
-  );
+  )
+  .refine((props) => props.items.filter((item) => item.emphasis === true).length <= 1, {
+    message: 'at most one item may carry emphasis',
+  });
 
 export type CompareSetProps = z.infer<typeof CompareSetPropsSchema>;

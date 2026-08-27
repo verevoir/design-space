@@ -49,4 +49,26 @@ describe('CompareSetPropsSchema', () => {
     const result = CompareSetPropsSchema.safeParse({ attributes: ['Speed'], items: [] });
     expect(result.success).toBe(false);
   });
+
+  it('accepts exactly one item marked with emphasis', () => {
+    const result = CompareSetPropsSchema.safeParse({
+      attributes: ['Speed'],
+      items: [
+        { name: 'Essential', values: ['36 Mb'] },
+        { name: 'Family', values: ['67 Mb'], emphasis: true },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects more than one item marked with emphasis', () => {
+    const result = CompareSetPropsSchema.safeParse({
+      attributes: ['Speed'],
+      items: [
+        { name: 'Family', values: ['67 Mb'], emphasis: true },
+        { name: 'Full Fibre', values: ['500 Mb'], emphasis: true },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
 });

@@ -518,4 +518,22 @@ describe('sketchAdapter — summary renderer', () => {
     expect(html).toContain('&quot;');
     expect(html).not.toContain('href="#screen-" onmouseover="alert(1)"');
   });
+
+  it("escapes a literal apostrophe in editTarget to &#39; — escapeAttr's own documented reason for existing over escapeHtml", () => {
+    // Every attribute this adapter emits is double-quoted, so a raw apostrophe cannot itself
+    // close an attribute the way a double quote does (see the sibling test above) — this is
+    // not closing a live injection route, it is exercising the one branch escapeAttr adds
+    // over escapeHtml (its own doc comment: "additionally escaping single quotes — which
+    // escapeHtml does not"). editTarget is chosen deliberately, not as the first call site to
+    // hand: field.kind and props.tone are closed Zod enums that can never carry an apostrophe,
+    // and every other escapeAttr call site is an id generated internally via slugify(), which
+    // already strips anything but [a-z0-9-] before escapeAttr ever sees it. editTarget is the
+    // only value that is genuine, unrestricted journey-authored text, so it is the one site
+    // where a real apostrophe in real content actually reaches escapeAttr at all.
+    const html = renderSummary({
+      rows: [{ label: 'x', value: 'y', editTarget: "check-availability's-summary" }],
+    });
+    expect(html).toContain('&#39;');
+    expect(html).not.toContain("'");
+  });
 });
