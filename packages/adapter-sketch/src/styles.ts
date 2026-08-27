@@ -33,14 +33,29 @@
  * inherits `currentColor` from its ink-coloured wrapper already.
  *
  * The rough hand-drawn edge — mechanism and rationale: docs/architecture.md
- * §5, ADR 0010 — is drawn on `.ds-screen`, `.ds-action`, `.ds-status` and
- * the compare-set `<table>` via a `::before` overlay. Each keeps a real but
- * transparent border (for box sizing only), gains `position: relative`,
- * and grows a `::before` absolutely positioned over the same edge, which
- * carries the visible filtered border and is `pointer-events: none` so it
- * cannot intercept clicks. Each element's existing border vocabulary
- * (above) is preserved unchanged on the host rule and mirrored onto its
- * `::before`; only which layer draws it moves.
+ * §5, ADR 0010 — is drawn via a `::before` overlay on `.ds-screen`,
+ * `.ds-action`, `.ds-status`, and the compare-set `<table>`, but the table
+ * takes it differently from the other three. `.ds-screen`, `.ds-action` and
+ * `.ds-status` each keep a real but transparent border (for box sizing
+ * only), gain `position: relative`, and grow a `::before` absolutely
+ * positioned over the same edge, which carries the visible filtered border
+ * and is `pointer-events: none` so it cannot intercept clicks. Each
+ * element's existing border vocabulary (above) is preserved unchanged on
+ * the host rule and mirrored onto its `::before`; only which layer draws
+ * it moves.
+ *
+ * `.ds-compare-set` deliberately carries no transparent host border of its
+ * own. `border-collapse: collapse` changes what a border on `<table>` even
+ * does: rather than reserving independent space the way a block element's
+ * border does, it would merge with the cells' own borders under the
+ * collapsing-border algorithm — there is no equivalent "box-sizing only"
+ * border to add here. The table's outer edge is already occupied by its
+ * outermost cells' own real `1.5px solid` borders (the `th`/`td` rule
+ * below), which sit exactly at the table's edge under collapse;
+ * `.ds-compare-set::before`'s `inset: 0` overlay draws its rough replica
+ * directly onto that existing boundary, with nothing further to reserve.
+ * Confirmed live, repeatedly, against the rendered page through this same
+ * change — not merely reasoned through.
  *
  * `input-set` and `option-list`'s controls get the same treatment via a
  * wrapper span — why a wrap is needed at all: docs/architecture.md §5's

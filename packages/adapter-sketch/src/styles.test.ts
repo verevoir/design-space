@@ -98,6 +98,35 @@ describe('SKETCH_STYLES', () => {
     }
   });
 
+  it('reserves box-sizing space for the rough overlay with a matching transparent host border, on the three block elements that need it', () => {
+    // .ds-compare-set is deliberately excluded from this pairing — see the next test and
+    // this file's header comment for why border-collapse makes it unnecessary there.
+    const pairs: ReadonlyArray<{ readonly host: string; readonly width: string }> = [
+      { host: '.ds-action', width: '2px' },
+      { host: '.ds-status', width: '1.5px' },
+    ];
+    for (const { host, width } of pairs) {
+      const escaped = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = SKETCH_STYLES.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `expected a ${host} rule`).not.toBeNull();
+      expect(rule![1]).toContain(`border: ${width} solid transparent`);
+    }
+    // .ds-screen's own border width/style come from render.ts's PAGE_CSS (a separate file,
+    // separately tested — see render.test.ts's ".ds-screen border rule" test); styles.ts
+    // overrides only the colour here, to transparent, so only that override is checked.
+    const screenRule = SKETCH_STYLES.match(/\.ds-screen\s*\{([^}]*)\}/);
+    expect(screenRule).not.toBeNull();
+    expect(screenRule![1]).toContain('border-color: transparent');
+  });
+
+  it("declares no border at all on .ds-compare-set itself — border-collapse would merge one with the cells' own borders rather than reserving space, so there is nothing to add", () => {
+    const rule = SKETCH_STYLES.match(/\.ds-compare-set\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).not.toContain('border:');
+    expect(rule![1]).not.toContain('border-color');
+    expect(rule![1]).not.toContain('border-width');
+  });
+
   it('declares rules for the compare-set component, including the emphasis mark', () => {
     expect(SKETCH_STYLES).toContain('.ds-compare-set');
     expect(SKETCH_STYLES).toContain('.ds-compare-set__emphasis-mark');
