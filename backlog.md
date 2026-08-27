@@ -463,6 +463,31 @@ leftover blocks; inducing from the two journeys together yields one vocabulary r
 the port carries a version identifier that adapter output can be keyed on; adding a component is
 possible and removing or renaming one within a session is refused.
 
+**Status.** Done, with per-clause evidence below rather than an unqualified assertion. This
+story's bar is about expressibility — whether both journeys validate against the induced
+schemas — not about rendering, which is 3.1's separate, currently-blocked bar; nothing below
+depends on the store or `SAFE_ID`.
+
+- *Both reference journeys are expressible entirely in the induced port with no leftover
+  blocks*: met. `packages/port/src/registry.test.ts` walks every block in both
+  `broadband-switch` and `broadband-switch.postcode-first`, by journey name and screen id, and
+  asserts each validates against `getContract(block.component).propsSchema` — no block in either
+  journey is left unchecked.
+- *Inducing from the two journeys together yields one vocabulary rather than two*: met. Both
+  journeys validate against the same single `PORT_COMPONENTS` registry (`registry.ts`), not two
+  separate ones; `registry.test.ts` also pins it to exactly the six components "induced jointly
+  from both reference journeys" (`index.ts`, `registry.ts`; ADR 0001).
+- *The port carries a version identifier that adapter output can be keyed on*: met.
+  `PORT_VERSION` (`packages/port/src/version.ts`) is exported from the package's public entry
+  point and served at `/health` (`packages/studio/src/server.ts`); `server.test.ts`'s "returns
+  the port version in MAJOR.MINOR format" test asserts the served value matches `PORT_VERSION`
+  exactly.
+- *Adding a component is possible and removing or renaming one within a session is refused*:
+  met. `registry.test.ts`'s own test pins the registry to the exact six names via a hard
+  equality assertion; renaming or removing any of them changes that list and fails the test —
+  and so the gate — immediately. `docs/architecture.md`'s "The port grows monotonically"
+  section states the same invariant in prose.
+
 **Writes.** `packages/port`.
 **Reads.** `packages/journey-model`, `examples/journeys`.
 **Unblocks.** 3.1, 3.2, 3.3 — this is where the plan fans to three.
