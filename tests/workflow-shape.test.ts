@@ -362,3 +362,40 @@ describe('antagonistic-review.yml — the panel remembers how it judged this dif
     expect(yml.slice(unionAt)).not.toContain('- name:');
   });
 });
+
+// The tri-state reached the aggregator's headline first and this step second, which
+// is the wrong order to discover: the aggregator reddens the RUN, but this step is
+// what names the individual lens in the checks UI. A COULD_NOT_RUN labelled
+// "<lens> rejected" here would undo at the job level exactly what aggregate.sh does
+// at the run level -- telling the author their change was objected to when the gate
+// simply never read the bar.
+describe('antagonistic-review.yml — the surface step distinguishes could-not-run from rejected', () => {
+  const stepAt = yml.indexOf("name: Surface this lens's verdict as the job conclusion");
+  const stepBody = yml.slice(stepAt, yml.indexOf('antagonistic-review:', stepAt));
+  const flatStep = stepBody.replace(/\s+/g, ' ');
+
+  it('emits a could-not-run title for a COULD_NOT_RUN verdict', () => {
+    expect(stepAt, 'the step itself must still exist').toBeGreaterThan(-1);
+    expect(flatStep).toMatch(/if \[ "\$v" = "COULD_NOT_RUN" \]; then/);
+    expect(flatStep).toMatch(/::error title=\$\{\{ matrix\.lens \}\} could not run::/);
+  });
+
+  it('keeps the rejected title for an ordinary non-approval', () => {
+    // The new branch must not swallow the case that was already right.
+    expect(flatStep).toMatch(/::error title=\$\{\{ matrix\.lens \}\} rejected \(\$\{n\} findings\)::/);
+  });
+
+  it('still fails the job for EVERY non-APPROVE verdict', () => {
+    // The tri-state changes what the operator is told, never whether it fails.
+    expect(flatStep).toMatch(/if \[ "\$v" != "APPROVE" \]; then/);
+    expect(flatStep).toContain('exit 1');
+  });
+
+  it('does not describe itself as a REJECT-only surface any more', () => {
+    // The comment above the step said "make a REJECT visible at a glance", which
+    // stopped being true the moment a second non-approving verdict existed.
+    const preamble = yml.slice(Math.max(0, stepAt - 1200), stepAt);
+    expect(preamble).not.toContain('make a REJECT visible at a glance');
+  });
+});
+
