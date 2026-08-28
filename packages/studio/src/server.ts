@@ -133,7 +133,16 @@ export function createStudioServer(options: ServerOptions): Server {
  */
 export function startServer(options: ServerOptions): Promise<Server> {
   const rawPort = process.env['PORT'];
-  const port = rawPort !== undefined ? Number(rawPort) : 8080;
+  // undefined (never set) and '' or whitespace-only (set but blank — the ordinary shape of a
+  // container misconfiguration: an unresolved template variable, an empty env override) are
+  // different failures and must not collapse to the same outcome. Number('') === 0, so without
+  // this distinction a blank PORT would silently pass as the literal '0' ephemeral-port
+  // convention below instead of hitting the invalid-PORT rejection it should. Only an actual
+  // '0' means the convention; a blank string forces NaN so it falls through to the same
+  // rejection as any other malformed value, with rawPort (not the coerced port) still shown so
+  // the operator can see exactly what was set.
+  const port =
+    rawPort === undefined ? 8080 : rawPort.trim() === '' ? NaN : Number(rawPort);
 
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     return Promise.reject(

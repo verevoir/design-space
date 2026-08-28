@@ -443,6 +443,52 @@ describe('startServer()', () => {
     }
   });
 
+  it('rejects when PORT is set to the empty string, rather than silently binding an ephemeral port', async () => {
+    // Number('') === 0 in JS. Without an explicit blank check, an empty PORT (an ordinary
+    // shape for a container misconfiguration — an unresolved template variable, an empty env
+    // override) would silently take the same branch as the deliberate PORT=0 convention
+    // instead of failing loudly. undefined (never set) and '' (set but blank) must not collapse
+    // to the same outcome.
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = '';
+    try {
+      await expect(
+        startServer({ getRendered: providedRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
+  it('rejects when PORT is set to a whitespace-only string, and the error names the actual raw value', async () => {
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = '   ';
+    try {
+      await expect(
+        startServer({ getRendered: providedRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+      // The raw value, not the coerced number, is what makes a blank PORT diagnosable —
+      // JSON.stringify('   ') is what should appear in the error, not "0" or "NaN".
+      let caughtMessage = '';
+      try {
+        await startServer({ getRendered: providedRendered('<html></html>') });
+      } catch (err) {
+        caughtMessage = err instanceof Error ? err.message : String(err);
+      }
+      expect(caughtMessage).toContain(JSON.stringify('   '));
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
   // ---------------------------------------------------------------------------
   // Post-startup error handling
   //
