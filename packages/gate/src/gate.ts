@@ -157,50 +157,17 @@ export interface CoverageReport {
 // innermost `selector { … }` blocks (the pattern does not track brace
 // nesting, so an at-rule wrapping a rule is not specially rejected — the
 // inner rule still gets found and parsed the same as an unwrapped one) and,
-// within each, EVERY `color` declaration and every `background`/
+// within each, every `color` declaration and every `background`/
 // `background-color` declaration (there can be more than one of each in a
-// single rule — a later one can override an earlier one), each naming a
-// `var(--token[, fallback])` reference.
+// single rule — a later one can override an earlier one).
 //
-// Which declaration actually WINS for a slot is resolved by the two cascade
-// rules this scan can determine from source text alone within one rule: a
-// declaration carrying `!important` beats a normal one regardless of which
-// comes first, and among declarations of equal importance the LAST one in
-// source order wins — this is why `background-color: var(--bg); background:
-// white;` must resolve to `white`, not to `--bg`'s value, and why an
-// earlier `!important` still beats a later declaration that lacks one. This
-// is not a full CSS cascade engine — it does not model shorthand resets
-// beyond treating `background` and `background-color` as one combined slot
-// (already true of the regex below). A `var(--token)` reference is
-// recognised wherever it appears in a declaration's value, not only when it
-// leads it — so a token embedded inside another function, e.g. `background:
-// linear-gradient(var(--bg), red)`, is still found and the declaration
-// correctly reported as carrying more than a single colour reference
-// (unmeasurable), rather than silently vanishing from every report because
-// no branch recognised it at all. This scan still never computes an actual
-// rendered colour out of a gradient, `url()`, or any other function — only
-// whether a token reference is present, which is enough to classify the
-// pair honestly. Anything past what these rules resolve is left unmeasured
-// rather than guessed at, exactly like every other unparseable case here.
-//
-// A declaration counts as MEASURABLE only if its entire value is exactly one
-// such reference, optionally followed by `!important` — nothing else. A
-// winning declaration that names a token but also carries other content
-// (e.g. `background: var(--bg) url(hero.png) no-repeat`, where the flat
-// colour is only one layer of what actually renders) is recognised as
-// carrying more than a single colour reference. A winning declaration that
-// carries no token reference at all — a plain literal or keyword — is still
-// reported, identified by the most recently referenced token for that slot
-// (so a reader can see which token got overridden), but with the ACTUAL
-// winning text as its value, never the overridden token's own resolved
-// value; if no declaration for the slot ever referenced a token at all,
-// there is nothing to identify the pair by and it is not counted. Either
-// way the pair it belongs to is reported as `unmeasurableContrast`, never
-// guessed at as a pass or fail. A rule where a declaration is not found at
-// all (a CSS comment sitting where a colour declaration was expected, an
-// unrecognised property) is simply not counted as a pair at all — silence,
-// not a wrong measurement, matching the existing rule that a lone `color`
-// with no `background` counts nowhere.
+// Which declaration wins a slot's cascade is documented at
+// `resolveWinningDeclaration`; what counts as a measurable value (versus
+// impure or unrecognised) is documented at `parseColourDeclarationValue`;
+// how the two combine — including what happens when the winner carries no
+// token of its own — is documented at `resolveSlot`. None of that is
+// restated here, so each rule has exactly one place it lives rather than
+// two that have to be kept in sync by hand.
 // ---------------------------------------------------------------------------
 
 const RULE_PATTERN = /([^{}]+)\{([^{}]*)\}/g;
