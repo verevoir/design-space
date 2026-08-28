@@ -8,10 +8,12 @@ in "Trigger to revisit".
 
 ## Context
 
-`docs/architecture.md` §5 and commit `4c6f078` describe and implement the sketch adapter's
-hand-drawn border treatment as a percent-encoded `data:image/svg+xml` `feTurbulence` /
-`feDisplacementMap` CSS filter, applied to a `::before` layer over `.ds-screen`, `.ds-action`,
-`.ds-status` and the compare-set `<table>`. That is one of three mechanisms that were prototyped
+`docs/architecture.md` §5 and `packages/adapter-sketch/src/styles.ts` describe and implement the
+sketch adapter's hand-drawn border treatment as a percent-encoded `data:image/svg+xml`
+`feTurbulence` / `feDisplacementMap` CSS filter — declared once as the `--ds-rough-filter` custom
+property and applied via `filter: var(--ds-rough-filter)` on a `::before` layer over
+`.ds-screen`, `.ds-action`, `.ds-status` and the compare-set `<table>`. That is one of three
+mechanisms that were prototyped
 live today before that one was chosen. The other two are recorded here so the reasoning survives
 a restart rather than being re-derived — or re-attempted — later.
 
@@ -22,7 +24,8 @@ happens in the browser, after the adapter's work is done).
 
 ## Decision
 
-**Keep the CSS turbulence filter as implemented in `4c6f078`.** No change to shipped behaviour.
+**Keep the CSS turbulence filter as implemented in `packages/adapter-sketch/src/styles.ts`'s
+`--ds-rough-filter` custom property.** No change to shipped behaviour.
 
 Its virtue is that it is **size-independent** — a CSS `filter` displaces whatever geometry is
 already drawn, so the same declaration works correctly on a narrow button and a wide screen
@@ -111,8 +114,9 @@ down.
 
 ## Consequences
 
-- No code change. `4c6f078` stands; `docs/architecture.md` §5 continues to describe what is
- actually implemented and is not amended by this ADR.
+- No code change. `packages/adapter-sketch/src/styles.ts`'s `--ds-rough-filter` filter stands;
+ `docs/architecture.md` §5 continues to describe what is actually implemented and is not
+ amended by this ADR.
 - The next attempt at richer border character has three prior findings to start from instead of
  zero: two dead ends with reasons, and one working mechanism with a stated precondition.
 
