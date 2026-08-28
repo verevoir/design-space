@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { check } from './gate.js';
+import { check, WCAG21_AA_NORMAL_TEXT_CONTRAST } from './gate.js';
 import { render } from '@design-space/render';
 import type { JourneyDocument } from '@design-space/journey-model';
 import type { AdapterLike } from '@design-space/adapter-contract';
@@ -302,6 +302,590 @@ describe('check()', () => {
         styles: '',
       } as unknown as AdapterLike;
       expect(() => check(incomplete, [])).toThrow(/tokens/);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — escape hatches: adapter components with no port entry
+  // ---------------------------------------------------------------------------
+
+  describe('escape hatches', () => {
+    it('reports an adapter component with no port entry as an escape hatch', () => {
+      const adapter: AdapterLike = {
+        name: 'custom',
+        components: {
+          prompt: (_props) => '<div class="ds-prompt"></div>',
+          'custom-widget': (_props) => '<div class="custom"></div>',
+        },
+        styles: '',
+        tokens: {},
+      };
+      const report = check(adapter, []);
+      expect(report.escapeHatches).toEqual([{ kind: 'escapeHatch', component: 'custom-widget' }]);
+    });
+
+    it('a port-covered component is never also reported as an escape hatch', () => {
+      const report = check(SKETCH_LIKE_ADAPTER, []);
+      expect(report.escapeHatches.map((f) => f.component)).not.toContain('prompt');
+    });
+
+    it('an escape-hatch component is never counted in implemented (coverage stays exact)', () => {
+      const adapter: AdapterLike = {
+        name: 'custom',
+        components: { 'custom-widget': (_props) => '' },
+        styles: '',
+        tokens: {},
+      };
+      const report = check(adapter, []);
+      expect(report.implemented).toHaveLength(0);
+      expect(report.escapeHatches).toHaveLength(1);
+    });
+
+    it('no escape hatches when every adapter component is in the port', () => {
+      const report = check(SKETCH_LIKE_ADAPTER, []);
+      expect(report.escapeHatches).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — token resolution
+  // ---------------------------------------------------------------------------
+
+  describe('unresolved tokens', () => {
+    it('reports a var(--x) reference in styles with no matching tokens entry', () => {
+      const adapter: AdapterLike = {
+        name: 'gappy-tokens',
+        components: {},
+        styles: '.ds-thing { color: var(--ds-missing); }',
+        tokens: {},
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toEqual([{ kind: 'unresolvedToken', token: 'ds-missing' }]);
+    });
+
+    it('a token that IS in tokens is not reported as unresolved', () => {
+      const adapter: AdapterLike = {
+        name: 'resolved-tokens',
+        components: {},
+        styles: '.ds-thing { color: var(--ds-present); }',
+        tokens: { 'ds-present': '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toHaveLength(0);
+    });
+
+    it('reports each distinct unresolved token name once, even if referenced in several rules', () => {
+      const adapter: AdapterLike = {
+        name: 'repeated-reference',
+        components: {},
+        styles:
+          '.a { color: var(--ds-missing); } .b { border-color: var(--ds-missing); }',
+        tokens: {},
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toHaveLength(1);
+    });
+
+    it('no unresolved tokens when styles references nothing via var()', () => {
+      const adapter: AdapterLike = {
+        name: 'no-vars',
+        components: {},
+        styles: '.a { color: #000; }',
+        tokens: {},
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toHaveLength(0);
+    });
+
+    it('a var(--x, fallback) reference with no matching tokens entry is still detected as an unresolved token, fallback and all', () => {
+      // VAR_REFERENCE_PATTERN's trailing `(?:,[^)]*)?` group exists to match
+      // this exact fallback shape. Removing that group makes the whole var()
+      // fail to match at all when a fallback is present, so the token would
+      // silently vanish from this report instead of showing up as unresolved.
+      const adapter: AdapterLike = {
+        name: 'fallback-reference',
+        components: {},
+        styles: '.a { color: var(--ds-fallback, red); }',
+        tokens: {},
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toEqual([{ kind: 'unresolvedToken', token: 'ds-fallback' }]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — contrast
+  // ---------------------------------------------------------------------------
+
+  describe('contrast', () => {
+    it('measures and passes a black-on-white pair against the default 4.5 bar', () => {
+      const adapter: AdapterLike = {
+        name: 'contrast-ok',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+      // Black on white is the maximum possible WCAG ratio, 21:1.
+      expect(report.contrast[0]?.ratio).toBeCloseTo(21, 1);
+      expect(report.contrast[0]?.bar).toBe(4.5);
+    });
+
+    it('measures and fails a low-contrast pair against the default bar', () => {
+      const adapter: AdapterLike = {
+        name: 'contrast-bad',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background-color: var(--bg); }',
+        tokens: { fg: '#777777', bg: '#888888' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(false);
+      expect(report.contrast[0]?.ratio).toBeLessThan(4.5);
+    });
+
+    it('honours an overridden contrast bar', () => {
+      const adapter: AdapterLike = {
+        name: 'contrast-strict',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        // A real pair that clears 4.5 but not a much stricter 20:1 bar.
+        tokens: { fg: '#333333', bg: '#ffffff' },
+      };
+      const defaultReport = check(adapter, [], {});
+      const strictReport = check(adapter, [], { contrastBar: 20 });
+      expect(defaultReport.contrast[0]?.passes).toBe(true);
+      expect(strictReport.contrast[0]?.bar).toBe(20);
+      expect(strictReport.contrast[0]?.passes).toBe(false);
+    });
+
+    it('a rule with color but no background in the same block is not counted at all', () => {
+      const adapter: AdapterLike = {
+        name: 'color-only',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); }',
+        tokens: { fg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+    });
+
+    it('a named CSS colour is reported as unmeasurable, never guessed at as a pass or fail', () => {
+      const adapter: AdapterLike = {
+        name: 'named-colour',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: 'chartreuse', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.ds-thing',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: 'chartreuse',
+          backgroundValue: '#ffffff',
+        },
+      ]);
+    });
+
+    it('a partial-alpha rgba() value is unmeasurable, not composited or guessed', () => {
+      const adapter: AdapterLike = {
+        name: 'partial-alpha',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: 'rgba(0, 0, 0, 0.5)', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(1);
+    });
+
+    it('an opaque rgba() (alpha 1) is measured like a solid colour', () => {
+      const adapter: AdapterLike = {
+        name: 'opaque-rgba',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: 'rgba(0, 0, 0, 1)', bg: 'rgb(255, 255, 255)' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+    });
+
+    it('a pair where either token is unresolved never appears in contrast or unmeasurableContrast — it is only an unresolved-token finding', () => {
+      const adapter: AdapterLike = {
+        name: 'unresolved-pair',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { bg: '#ffffff' }, // fg is never defined
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      expect(report.unresolvedTokens).toEqual([{ kind: 'unresolvedToken', token: 'fg' }]);
+    });
+
+    it('background before color in declaration order is still recognised as a pair', () => {
+      const adapter: AdapterLike = {
+        name: 'reversed-order',
+        components: {},
+        styles: '.ds-thing { background: var(--bg); color: var(--fg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(1);
+    });
+
+    it('3-digit hex shorthand is parsed correctly', () => {
+      const adapter: AdapterLike = {
+        name: 'hex3',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: '#000', bg: '#fff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.ratio).toBeCloseTo(21, 1);
+    });
+
+    it('an out-of-range rgb() channel value is reported as unmeasurable, not silently clamped or passed', () => {
+      // isByte's bounds check (0-255) is what excludes this — mutating isByte
+      // to always return true would let 999 through as a real channel value
+      // and this pair would wrongly end up in `contrast` instead of here.
+      const adapter: AdapterLike = {
+        name: 'out-of-range-rgb',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: 'rgb(999, 0, 0)', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(1);
+      expect(report.unmeasurableContrast[0]?.foregroundValue).toBe('rgb(999, 0, 0)');
+      expect(report.unmeasurableContrast[0]?.backgroundValue).toBe('#ffffff');
+    });
+
+    it('a background declaration mixing a colour token with other content (e.g. an image layer) is unmeasurable, not silently measured', () => {
+      // The exact shape docs finding 1 traced: an unanchored background
+      // pattern used to grab just the `--bg` token and silently discard
+      // `url(hero.png) no-repeat`, reporting a confident pass/fail for a
+      // declaration that is not actually a flat colour. It must now be
+      // recognised as carrying more than a single colour reference.
+      const adapter: AdapterLike = {
+        name: 'mixed-background',
+        components: {},
+        styles: '.hero { color: var(--fg); background: var(--bg) url(hero.png) no-repeat; }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: '#000000',
+          backgroundValue: 'var(--bg) url(hero.png) no-repeat',
+        },
+      ]);
+    });
+
+    it('!important trailing a single var() reference does not make the declaration impure — it is still measured', () => {
+      const adapter: AdapterLike = {
+        name: 'important-trailing',
+        components: {},
+        styles: '.ds-thing { color: var(--fg) !important; background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+    });
+
+    // -------------------------------------------------------------------
+    // Round 14 — the cascade fix: the LAST declaration for a slot wins,
+    // not the first one that happens to parse as var(). review
+    // (correctness) rejection against 7c37931, reproduced live against the
+    // built HEAD code before this fix landed.
+    // -------------------------------------------------------------------
+
+    it('a later plain background declaration overriding an earlier token-based background-color is unmeasurable, not a stale confident measurement', () => {
+      // The exact repro the correctness lens gave: background-color's token
+      // must not survive being overridden by a later plain `background:
+      // white`. Before the fix, `?? previous` silently kept the stale
+      // `--bg` token and reported a confident (and wrong) pass/fail.
+      const adapter: AdapterLike = {
+        name: 'cascade-override',
+        components: {},
+        styles: '.hero { color: var(--fg); background-color: var(--bg); background: white; }',
+        tokens: { fg: '#000000', bg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: '#000000',
+          backgroundValue: 'white',
+        },
+      ]);
+    });
+
+    it('the reverse order — a token-based background-color declared AFTER a plain background shorthand — resolves the token and measures normally', () => {
+      const adapter: AdapterLike = {
+        name: 'cascade-reverse',
+        components: {},
+        styles: '.hero { background: white; background-color: var(--bg); color: var(--fg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+      expect(report.contrast[0]?.ratio).toBeCloseTo(21, 1);
+    });
+
+    it('an earlier !important declaration beats a later normal one, regardless of source order', () => {
+      // If importance were ignored and only source order mattered, the later
+      // plain `background: white` would win — white text on white would
+      // pass. Honouring !important, the earlier var(--bg) (#000000) wins,
+      // and white-on-black fails — the two answers are deliberately made to
+      // differ so this test would fail if importance were dropped.
+      const adapter: AdapterLike = {
+        name: 'cascade-important',
+        components: {},
+        styles:
+          '.hero { color: var(--fg); background-color: var(--bg) !important; background: white; }',
+        tokens: { fg: '#ffffff', bg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+      expect(report.contrast[0]?.ratio).toBeCloseTo(21, 1);
+    });
+
+    it('the identical shape applies to color, not just background: a later plain colour overriding a token is unmeasurable', () => {
+      const adapter: AdapterLike = {
+        name: 'cascade-color-override',
+        components: {},
+        styles: '.hero { color: var(--fg); color: black; background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: 'black',
+          backgroundValue: '#ffffff',
+        },
+      ]);
+    });
+
+    // -------------------------------------------------------------------
+    // Round 15 — a token reference embedded (not leading) in a declaration
+    // must still be found. review (correctness) rejection against 0aeba37,
+    // reproduced live against the built HEAD code before this fix landed:
+    // a background of `linear-gradient(var(--bg), red)` matched neither the
+    // pure branch (whole value isn't one bare var()) nor the old
+    // LEADING_VAR_REFERENCE_PATTERN (var() wasn't the leading text), so the
+    // whole pair silently vanished from contrast, unmeasurableContrast, AND
+    // unresolvedTokens — even though both tokens genuinely resolved.
+    // -------------------------------------------------------------------
+
+    it('a token reference embedded (not leading) in a background declaration is unmeasurable, not silently dropped from every report', () => {
+      const adapter: AdapterLike = {
+        name: 'embedded-token-reference',
+        components: {},
+        styles: '.hero { color: var(--fg); background: linear-gradient(var(--bg), red); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toHaveLength(0);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: '#000000',
+          backgroundValue: 'linear-gradient(var(--bg), red)',
+        },
+      ]);
+    });
+
+    it('the identical shape applies to color: a token embedded (not leading) in a color declaration is unmeasurable, not dropped', () => {
+      const adapter: AdapterLike = {
+        name: 'embedded-token-reference-color',
+        components: {},
+        styles: '.hero { color: linear-gradient(var(--fg), red); background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toHaveLength(0);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: 'linear-gradient(var(--fg), red)',
+          backgroundValue: '#ffffff',
+        },
+      ]);
+    });
+
+    it('a slot where no declaration ever referenced a token is not counted at all, not reported as unmeasurable', () => {
+      // Two plain literal background declarations, neither a var() reference
+      // — there is no token to identify this pair by, so it is silently
+      // absent, matching the existing rule for a slot with no declaration.
+      const adapter: AdapterLike = {
+        name: 'cascade-no-token-ever',
+        components: {},
+        styles: '.hero { color: var(--fg); background: red; background-color: blue; }',
+        tokens: { fg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — rule-scanning tolerances the module comment documents as
+  // deliberate: an at-rule-wrapped rule is still found, and a slot where the
+  // expected declaration is a comment or unrecognised property counts as
+  // nothing rather than a wrong measurement. review (testing) rejection
+  // against 7c37931 — both were documented but neither had a test.
+  // ---------------------------------------------------------------------------
+
+  describe('rule scanning tolerances', () => {
+    it('a rule wrapped in an at-rule (@media) is still found and parsed like an unwrapped rule', () => {
+      const adapter: AdapterLike = {
+        name: 'at-rule-wrapped',
+        components: {},
+        styles: '@media (min-width: 600px) { .ds-thing { color: var(--fg); background: var(--bg); } }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.selector).toBe('.ds-thing');
+      expect(report.contrast[0]?.passes).toBe(true);
+    });
+
+    it('a CSS comment sitting where a colour declaration was expected is not counted as a pair at all', () => {
+      const adapter: AdapterLike = {
+        name: 'comment-in-place-of-declaration',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); /* no background declared here */ }',
+        tokens: { fg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+    });
+
+    it('an unrecognised property name is not mistaken for background or color', () => {
+      const adapter: AdapterLike = {
+        name: 'unrecognised-property',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); backgroundish: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      // The var(--bg) reference inside the unrecognised property is still
+      // found by the token-reference scan (which does not care about
+      // property names), so it should NOT show up as unresolved either.
+      expect(report.unresolvedTokens).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — the four kinds stay distinguishable
+  // ---------------------------------------------------------------------------
+
+  describe('the four counted facts are distinguishable from each other', () => {
+    it('a missing component, an escape hatch, an unresolved token, and a contrast fail all report under different, distinct kinds', () => {
+      const adapter: AdapterLike = {
+        name: 'everything-at-once',
+        components: {
+          prompt: (_props) => '<div class="ds-prompt"></div>',
+          'custom-widget': (_props) => '<div class="custom"></div>',
+        },
+        styles:
+          '.ds-thing { color: var(--fg); background: var(--bg); } .ds-other { border-color: var(--ds-orphan); }',
+        tokens: { fg: '#777777', bg: '#888888' }, // fails contrast at the default bar
+      };
+      const report = check(adapter, []);
+
+      expect(report.missing).toContain('compare-set'); // missing coverage
+      expect(report.escapeHatches).toEqual([{ kind: 'escapeHatch', component: 'custom-widget' }]);
+      expect(report.unresolvedTokens).toEqual([{ kind: 'unresolvedToken', token: 'ds-orphan' }]);
+      expect(report.contrast[0]?.passes).toBe(false);
+      expect(report.contrast[0]?.kind).toBe('contrast');
+
+      // Every kind present is a different string — a reader can always tell which is which.
+      const kindsPresent = new Set([
+        ...report.escapeHatches.map((f) => f.kind),
+        ...report.unresolvedTokens.map((f) => f.kind),
+        ...report.contrast.map((f) => f.kind),
+      ]);
+      expect(kindsPresent).toEqual(new Set(['escapeHatch', 'unresolvedToken', 'contrast']));
+    });
+  });
+
+  describe('WCAG21_AA_NORMAL_TEXT_CONTRAST', () => {
+    it('is the documented default, 4.5', () => {
+      expect(WCAG21_AA_NORMAL_TEXT_CONTRAST).toBe(4.5);
+    });
+
+    it('is what check() uses when no contrastBar option is given', () => {
+      const adapter: AdapterLike = {
+        name: 'default-bar',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast[0]?.bar).toBe(WCAG21_AA_NORMAL_TEXT_CONTRAST);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — renderGaps is genuinely optional, not just optional in the type
+  // ---------------------------------------------------------------------------
+
+  describe('renderGaps default parameter', () => {
+    it('check(adapter) with renderGaps omitted entirely returns empty findings rather than throwing', () => {
+      // Every other call in this file supplies renderGaps explicitly (at least
+      // `[]`), so none of them would notice the default disappearing. This
+      // calls check() with the second argument genuinely absent — the one
+      // shape that actually exercises the default `= []` on `check()`'s own
+      // signature, which the function's doc-comment advertises as the point
+      // of this story: coverage, escape hatches, tokens and contrast need no
+      // render() call at all.
+      const report = check(SKETCH_LIKE_ADAPTER);
+      expect(report.findings).toEqual([]);
+      expect(report.implemented).toContain('prompt');
     });
   });
 });

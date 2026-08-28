@@ -1,20 +1,32 @@
 /**
- * The structural gate: checks coverage of an adapter against the port.
+ * The structural gate: checks an adapter against the port and reports four
+ * counted facts (story 3.3) — never agent testimony:
  *
- * Reports which port components are implemented by the adapter, which are
- * missing, and which rendered blocks fell back to a gap. Distinguishes three
- * finding kinds: a gap (adapter has no renderer), a defect (renderer threw),
- * and a schema finding (props failed the port schema before the adapter was
- * called — a data problem, not an adapter problem).
+ *   - coverage         — which port components the adapter implements (`implemented`/`missing`)
+ *   - escape hatches   — adapter components with no port entry at all
+ *   - token resolution — `var(--x)` references in `styles` with no matching `tokens` entry
+ *   - contrast         — WCAG 2.1 luminance-ratio pairs found in `styles`, measured against
+ *                         a bar that defaults to WCAG 2.1 AA normal text (4.5:1) and is
+ *                         overridable per call
+ *
+ * Also classifies a prior `render()` call's gap records into gap / defect /
+ * schema findings, distinguishing a finding about a design system (gap) from
+ * a finding about the adapter's own code (defect) from a data problem
+ * (schema).
  */
 export const PACKAGE_NAME = '@design-space/gate';
 
-export { check } from './gate.js';
+export { check, WCAG21_AA_NORMAL_TEXT_CONTRAST } from './gate.js';
 export type {
   GapFinding,
   DefectFinding,
   SchemaFinding,
   Finding,
+  EscapeHatchFinding,
+  UnresolvedTokenFinding,
+  ContrastFinding,
+  UnmeasurableContrastFinding,
+  CheckOptions,
   CoverageReport,
 } from './gate.js';
 export type { AdapterLike, Adapter } from '@design-space/adapter-contract';
