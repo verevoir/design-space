@@ -91,15 +91,20 @@ export interface ContrastFinding {
 /**
  * A contrast pair was found — a rule declares both `color` and `background`
  * against tokens that both resolve — but the pair cannot be confidently
- * measured, for one of two reasons: at least one resolved token value is
+ * measured, for one of three reasons: at least one resolved token value is
  * not a colour this check can parse (not hex, not an opaque `rgb()`/`rgba()`
  * with alpha 1 — named CSS colours like `chartreuse`, gradients, and partial
- * alpha all land here); or at least one of the two declarations is not a
+ * alpha all land here); at least one of the two declarations is not a
  * single, standalone colour reference — e.g. `background: var(--bg)
  * url(hero.png) no-repeat`, where the flat token colour is only one layer
  * of what actually renders, so measuring it alone could report a ratio that
- * does not describe what a reader would see. Either way: an unmeasurable
- * pair must never appear as a contrast pass or fail.
+ * does not describe what a reader would see; or the declaration that wins
+ * the cascade for a slot (the last one in source order, unless an earlier
+ * one carries `!important`) is a plain literal with no token reference at
+ * all — e.g. `background-color: var(--bg); background: white;`, where
+ * `white` overrides the token and measuring `--bg`'s own value would report
+ * a confident number for a colour that no longer renders. Either way: an
+ * unmeasurable pair must never appear as a contrast pass or fail.
  */
 export interface UnmeasurableContrastFinding {
   readonly kind: 'unmeasurableContrast';
@@ -149,20 +154,43 @@ export interface CoverageReport {
 // innermost `selector { … }` blocks (the pattern does not track brace
 // nesting, so an at-rule wrapping a rule is not specially rejected — the
 // inner rule still gets found and parsed the same as an unwrapped one) and,
-// within each, a `color` declaration and a `background`/`background-color`
-// declaration, each naming a `var(--token[, fallback])` reference.
+// within each, EVERY `color` declaration and every `background`/
+// `background-color` declaration (there can be more than one of each in a
+// single rule — a later one can override an earlier one), each naming a
+// `var(--token[, fallback])` reference.
+//
+// Which declaration actually WINS for a slot is resolved by the two cascade
+// rules this scan can determine from source text alone within one rule: a
+// declaration carrying `!important` beats a normal one regardless of which
+// comes first, and among declarations of equal importance the LAST one in
+// source order wins — this is why `background-color: var(--bg); background:
+// white;` must resolve to `white`, not to `--bg`'s value, and why an
+// earlier `!important` still beats a later declaration that lacks one. This
+// is not a full CSS cascade engine — it does not model shorthand resets
+// beyond treating `background` and `background-color` as one combined slot
+// (already true of the regex below), and it does not attempt to parse a
+// colour out of a shorthand value that does not itself lead with `var(`.
+// Anything past what these two rules resolve is left unmeasured rather than
+// guessed at, exactly like every other unparseable case here.
 //
 // A declaration counts as MEASURABLE only if its entire value is exactly one
 // such reference, optionally followed by `!important` — nothing else. A
-// declaration that names a token but also carries other content (e.g.
-// `background: var(--bg) url(hero.png) no-repeat`, where the flat colour is
-// only one layer of what actually renders) is recognised as carrying more
-// than a single colour reference; the pair it belongs to is reported as
-// `unmeasurableContrast`, never guessed at as a pass or fail. A rule where a
-// declaration is not found at all (a CSS comment sitting where a colour
-// declaration was expected, an unrecognised property) is simply not counted
-// as a pair at all — silence, not a wrong measurement, matching the
-// existing rule that a lone `color` with no `background` counts nowhere.
+// winning declaration that names a token but also carries other content
+// (e.g. `background: var(--bg) url(hero.png) no-repeat`, where the flat
+// colour is only one layer of what actually renders) is recognised as
+// carrying more than a single colour reference. A winning declaration that
+// carries no token reference at all — a plain literal or keyword — is still
+// reported, identified by the most recently referenced token for that slot
+// (so a reader can see which token got overridden), but with the ACTUAL
+// winning text as its value, never the overridden token's own resolved
+// value; if no declaration for the slot ever referenced a token at all,
+// there is nothing to identify the pair by and it is not counted. Either
+// way the pair it belongs to is reported as `unmeasurableContrast`, never
+// guessed at as a pass or fail. A rule where a declaration is not found at
+// all (a CSS comment sitting where a colour declaration was expected, an
+// unrecognised property) is simply not counted as a pair at all — silence,
+// not a wrong measurement, matching the existing rule that a lone `color`
+// with no `background` counts nowhere.
 // ---------------------------------------------------------------------------
 
 const RULE_PATTERN = /([^{}]+)\{([^{}]*)\}/g;
@@ -203,6 +231,100 @@ function parseColourDeclarationValue(rawValue: string): ParsedDeclarationValue |
   return null;
 }
 
+/** One declaration seen for a property slot (`color`, or `background`/`background-color` combined), in source order. */
+interface DeclarationOccurrence {
+  readonly rawValue: string;
+  readonly important: boolean;
+}
+
+// The literal `!important` this codebase's own PURE-match pattern above
+// already recognises — matched the same way here so cascade priority and
+// value parsing never disagree about what counts as "important".
+const IMPORTANT_SUFFIX_PATTERN = /!important\s*$/;
+
+function hasImportantSuffix(rawValue: string): boolean {
+  return IMPORTANT_SUFFIX_PATTERN.test(rawValue.trim());
+}
+
+/**
+ * Which declaration for one property slot actually takes effect: the last
+ * `!important` one if any exist (regardless of what comes after it), else
+ * the last normal one. Importance is checked before source order, matching
+ * the real CSS cascade rule for two declarations of the same specificity.
+ */
+function resolveWinningDeclaration(
+  occurrences: readonly DeclarationOccurrence[],
+): DeclarationOccurrence | undefined {
+  let lastImportant: DeclarationOccurrence | undefined;
+  let lastNormal: DeclarationOccurrence | undefined;
+  for (const occurrence of occurrences) {
+    if (occurrence.important) {
+      lastImportant = occurrence;
+    } else {
+      lastNormal = occurrence;
+    }
+  }
+  return lastImportant ?? lastNormal;
+}
+
+/**
+ * The most recently declared token-bearing value for a slot, in source
+ * order, independent of importance — used only to LABEL a pair when the
+ * winning declaration itself carries no token (see `resolveSlot`). Never
+ * used as the reported value: that is always the winning declaration's own
+ * text, so an overridden token's colour can never be silently substituted
+ * for what would actually render.
+ */
+function lastTokenBearingDeclaration(
+  occurrences: readonly DeclarationOccurrence[],
+): ParsedDeclarationValue | undefined {
+  let last: ParsedDeclarationValue | undefined;
+  for (const occurrence of occurrences) {
+    const parsed = parseColourDeclarationValue(occurrence.rawValue);
+    if (parsed !== null) {
+      last = parsed;
+    }
+  }
+  return last;
+}
+
+/**
+ * Resolves one property slot (every `color` declaration in a rule, or
+ * every `background`/`background-color` declaration treated as one
+ * combined slot) to the value that should be measured, honouring cascade
+ * order — see the module comment above `RULE_PATTERN` for the two rules
+ * this does and does not model. Returns `undefined` when the slot has no
+ * declaration at all, or when the winning declaration has no token and no
+ * earlier declaration in the slot ever named one either — both cases mean
+ * there is nothing to report a pair by, so the slot is silently absent
+ * rather than guessed at.
+ */
+function resolveSlot(
+  occurrences: readonly DeclarationOccurrence[],
+): ParsedDeclarationValue | undefined {
+  if (occurrences.length === 0) {
+    return undefined;
+  }
+  const winning = resolveWinningDeclaration(occurrences);
+  if (winning === undefined) {
+    return undefined;
+  }
+  const winningParsed = parseColourDeclarationValue(winning.rawValue);
+  if (winningParsed !== null) {
+    return winningParsed;
+  }
+  // The winning declaration carries no var() reference at all — a plain
+  // literal or keyword overrode an earlier token. Identify the slot by the
+  // most recently referenced token, but report the winning declaration's
+  // OWN text as the value: the overridden token's resolved colour must
+  // never be reported as if it were still what renders.
+  const lastToken = lastTokenBearingDeclaration(occurrences);
+  if (lastToken === undefined) {
+    return undefined;
+  }
+  return { token: lastToken.token, pure: false, rawValue: winning.rawValue.trim() };
+}
+
 interface ContrastPair {
   readonly selector: string;
   readonly foregroundToken: string;
@@ -226,20 +348,24 @@ function findContrastPairs(styles: string): ContrastPair[] {
   for (const ruleMatch of styles.matchAll(RULE_PATTERN)) {
     const selector = ruleMatch[1]!.trim();
     const body = ruleMatch[2]!;
-    let foreground: ParsedDeclarationValue | undefined;
-    let background: ParsedDeclarationValue | undefined;
+    const colorOccurrences: DeclarationOccurrence[] = [];
+    const backgroundOccurrences: DeclarationOccurrence[] = [];
     for (const rawDecl of body.split(';')) {
       const decl = rawDecl.trim();
       const colorMatch = COLOR_DECLARATION_PATTERN.exec(decl);
       if (colorMatch) {
-        foreground = parseColourDeclarationValue(colorMatch[1]!) ?? foreground;
+        const rawValue = colorMatch[1]!;
+        colorOccurrences.push({ rawValue, important: hasImportantSuffix(rawValue) });
         continue;
       }
       const bgMatch = BACKGROUND_DECLARATION_PATTERN.exec(decl);
       if (bgMatch) {
-        background = parseColourDeclarationValue(bgMatch[1]!) ?? background;
+        const rawValue = bgMatch[1]!;
+        backgroundOccurrences.push({ rawValue, important: hasImportantSuffix(rawValue) });
       }
     }
+    const foreground = resolveSlot(colorOccurrences);
+    const background = resolveSlot(backgroundOccurrences);
     if (foreground !== undefined && background !== undefined) {
       pairs.push({
         selector,

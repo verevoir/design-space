@@ -609,6 +609,159 @@ describe('check()', () => {
       expect(report.contrast).toHaveLength(1);
       expect(report.contrast[0]?.passes).toBe(true);
     });
+
+    // -------------------------------------------------------------------
+    // Round 14 — the cascade fix: the LAST declaration for a slot wins,
+    // not the first one that happens to parse as var(). review
+    // (correctness) rejection against 7c37931, reproduced live against the
+    // built HEAD code before this fix landed.
+    // -------------------------------------------------------------------
+
+    it('a later plain background declaration overriding an earlier token-based background-color is unmeasurable, not a stale confident measurement', () => {
+      // The exact repro the correctness lens gave: background-color's token
+      // must not survive being overridden by a later plain `background:
+      // white`. Before the fix, `?? previous` silently kept the stale
+      // `--bg` token and reported a confident (and wrong) pass/fail.
+      const adapter: AdapterLike = {
+        name: 'cascade-override',
+        components: {},
+        styles: '.hero { color: var(--fg); background-color: var(--bg); background: white; }',
+        tokens: { fg: '#000000', bg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: '#000000',
+          backgroundValue: 'white',
+        },
+      ]);
+    });
+
+    it('the reverse order — a token-based background-color declared AFTER a plain background shorthand — resolves the token and measures normally', () => {
+      const adapter: AdapterLike = {
+        name: 'cascade-reverse',
+        components: {},
+        styles: '.hero { background: white; background-color: var(--bg); color: var(--fg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+      expect(report.contrast[0]?.ratio).toBeCloseTo(21, 1);
+    });
+
+    it('an earlier !important declaration beats a later normal one, regardless of source order', () => {
+      // If importance were ignored and only source order mattered, the later
+      // plain `background: white` would win — white text on white would
+      // pass. Honouring !important, the earlier var(--bg) (#000000) wins,
+      // and white-on-black fails — the two answers are deliberately made to
+      // differ so this test would fail if importance were dropped.
+      const adapter: AdapterLike = {
+        name: 'cascade-important',
+        components: {},
+        styles:
+          '.hero { color: var(--fg); background-color: var(--bg) !important; background: white; }',
+        tokens: { fg: '#ffffff', bg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+      expect(report.contrast[0]?.ratio).toBeCloseTo(21, 1);
+    });
+
+    it('the identical shape applies to color, not just background: a later plain colour overriding a token is unmeasurable', () => {
+      const adapter: AdapterLike = {
+        name: 'cascade-color-override',
+        components: {},
+        styles: '.hero { color: var(--fg); color: black; background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: 'black',
+          backgroundValue: '#ffffff',
+        },
+      ]);
+    });
+
+    it('a slot where no declaration ever referenced a token is not counted at all, not reported as unmeasurable', () => {
+      // Two plain literal background declarations, neither a var() reference
+      // — there is no token to identify this pair by, so it is silently
+      // absent, matching the existing rule for a slot with no declaration.
+      const adapter: AdapterLike = {
+        name: 'cascade-no-token-ever',
+        components: {},
+        styles: '.hero { color: var(--fg); background: red; background-color: blue; }',
+        tokens: { fg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — rule-scanning tolerances the module comment documents as
+  // deliberate: an at-rule-wrapped rule is still found, and a slot where the
+  // expected declaration is a comment or unrecognised property counts as
+  // nothing rather than a wrong measurement. review (testing) rejection
+  // against 7c37931 — both were documented but neither had a test.
+  // ---------------------------------------------------------------------------
+
+  describe('rule scanning tolerances', () => {
+    it('a rule wrapped in an at-rule (@media) is still found and parsed like an unwrapped rule', () => {
+      const adapter: AdapterLike = {
+        name: 'at-rule-wrapped',
+        components: {},
+        styles: '@media (min-width: 600px) { .ds-thing { color: var(--fg); background: var(--bg); } }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.selector).toBe('.ds-thing');
+      expect(report.contrast[0]?.passes).toBe(true);
+    });
+
+    it('a CSS comment sitting where a colour declaration was expected is not counted as a pair at all', () => {
+      const adapter: AdapterLike = {
+        name: 'comment-in-place-of-declaration',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); /* no background declared here */ }',
+        tokens: { fg: '#000000' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+    });
+
+    it('an unrecognised property name is not mistaken for background or color', () => {
+      const adapter: AdapterLike = {
+        name: 'unrecognised-property',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); backgroundish: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      // The var(--bg) reference inside the unrecognised property is still
+      // found by the token-reference scan (which does not care about
+      // property names), so it should NOT show up as unresolved either.
+      expect(report.unresolvedTokens).toHaveLength(0);
+    });
   });
 
   // ---------------------------------------------------------------------------
