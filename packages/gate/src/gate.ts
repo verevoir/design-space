@@ -90,11 +90,16 @@ export interface ContrastFinding {
 
 /**
  * A contrast pair was found — a rule declares both `color` and `background`
- * against tokens that both resolve — but at least one resolved value is not
- * a colour this check can parse (not hex, not an opaque `rgb()`/`rgba()`
- * with alpha 1). Named CSS colours (`chartreuse`), gradients, and partial
- * alpha are all reported here rather than guessed at: an unmeasurable pair
- * must never appear as a contrast pass or fail.
+ * against tokens that both resolve — but the pair cannot be confidently
+ * measured, for one of two reasons: at least one resolved token value is
+ * not a colour this check can parse (not hex, not an opaque `rgb()`/`rgba()`
+ * with alpha 1 — named CSS colours like `chartreuse`, gradients, and partial
+ * alpha all land here); or at least one of the two declarations is not a
+ * single, standalone colour reference — e.g. `background: var(--bg)
+ * url(hero.png) no-repeat`, where the flat token colour is only one layer
+ * of what actually renders, so measuring it alone could report a ratio that
+ * does not describe what a reader would see. Either way: an unmeasurable
+ * pair must never appear as a contrast pass or fail.
  */
 export interface UnmeasurableContrastFinding {
   readonly kind: 'unmeasurableContrast';
@@ -140,25 +145,72 @@ export interface CoverageReport {
 // ---------------------------------------------------------------------------
 // Static scanning helpers
 //
-// Regex-based — a deliberate heuristic, not a CSS parser: it looks for
-// `selector { … }` blocks and, within each, a `color` declaration and a
-// `background`/`background-color` declaration, each naming a `var(--token)`.
-// Comments, `!important`, shorthand `background: var(--x) url(...)`, and
-// deeply nested at-rules are not specially handled — anything this scan
-// cannot confidently read is left unmeasured rather than guessed at, per the
-// same rule colour parsing follows below.
+// Regex-based — a deliberate heuristic, not a CSS parser: it looks for the
+// innermost `selector { … }` blocks (the pattern does not track brace
+// nesting, so an at-rule wrapping a rule is not specially rejected — the
+// inner rule still gets found and parsed the same as an unwrapped one) and,
+// within each, a `color` declaration and a `background`/`background-color`
+// declaration, each naming a `var(--token[, fallback])` reference.
+//
+// A declaration counts as MEASURABLE only if its entire value is exactly one
+// such reference, optionally followed by `!important` — nothing else. A
+// declaration that names a token but also carries other content (e.g.
+// `background: var(--bg) url(hero.png) no-repeat`, where the flat colour is
+// only one layer of what actually renders) is recognised as carrying more
+// than a single colour reference; the pair it belongs to is reported as
+// `unmeasurableContrast`, never guessed at as a pass or fail. A rule where a
+// declaration is not found at all (a CSS comment sitting where a colour
+// declaration was expected, an unrecognised property) is simply not counted
+// as a pair at all — silence, not a wrong measurement, matching the
+// existing rule that a lone `color` with no `background` counts nowhere.
 // ---------------------------------------------------------------------------
 
 const RULE_PATTERN = /([^{}]+)\{([^{}]*)\}/g;
 const VAR_REFERENCE_PATTERN = /var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)\s*(?:,[^)]*)?\)/g;
-const COLOR_DECLARATION_PATTERN = /^color\s*:\s*var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)/;
-const BACKGROUND_DECLARATION_PATTERN =
-  /^background(?:-color)?\s*:\s*var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)/;
+const COLOR_DECLARATION_PATTERN = /^color\s*:\s*(.+)$/;
+const BACKGROUND_DECLARATION_PATTERN = /^background(?:-color)?\s*:\s*(.+)$/;
+
+/**
+ * A declaration's value is measurable only if it is exactly one
+ * `var(--token[, fallback])` reference, optionally trailed by `!important`
+ * — nothing else. Anything else that still leads with a `var(--token)`
+ * reference is reported as that token, but flagged impure: the declaration
+ * carries more than a single colour reference, so it must not be silently
+ * measured as if the token's own value were the whole story. A value with
+ * no `var()` reference at all is not a candidate — returns `null`.
+ */
+const SINGLE_VAR_REFERENCE_VALUE_PATTERN =
+  /^var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)\s*(?:,[^)]*)?\)\s*(?:!important)?$/;
+const LEADING_VAR_REFERENCE_PATTERN = /^var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)/;
+
+interface ParsedDeclarationValue {
+  readonly token: string;
+  readonly pure: boolean;
+  /** The raw, trimmed declaration value — used for reporting when `pure` is false. */
+  readonly rawValue: string;
+}
+
+function parseColourDeclarationValue(rawValue: string): ParsedDeclarationValue | null {
+  const value = rawValue.trim();
+  const pureMatch = SINGLE_VAR_REFERENCE_VALUE_PATTERN.exec(value);
+  if (pureMatch) {
+    return { token: pureMatch[1]!, pure: true, rawValue: value };
+  }
+  const looseMatch = LEADING_VAR_REFERENCE_PATTERN.exec(value);
+  if (looseMatch) {
+    return { token: looseMatch[1]!, pure: false, rawValue: value };
+  }
+  return null;
+}
 
 interface ContrastPair {
   readonly selector: string;
   readonly foregroundToken: string;
   readonly backgroundToken: string;
+  readonly foregroundPure: boolean;
+  readonly backgroundPure: boolean;
+  readonly foregroundRawValue: string;
+  readonly backgroundRawValue: string;
 }
 
 function findReferencedTokens(styles: string): Set<string> {
@@ -174,22 +226,30 @@ function findContrastPairs(styles: string): ContrastPair[] {
   for (const ruleMatch of styles.matchAll(RULE_PATTERN)) {
     const selector = ruleMatch[1]!.trim();
     const body = ruleMatch[2]!;
-    let foregroundToken: string | undefined;
-    let backgroundToken: string | undefined;
+    let foreground: ParsedDeclarationValue | undefined;
+    let background: ParsedDeclarationValue | undefined;
     for (const rawDecl of body.split(';')) {
       const decl = rawDecl.trim();
       const colorMatch = COLOR_DECLARATION_PATTERN.exec(decl);
       if (colorMatch) {
-        foregroundToken = colorMatch[1];
+        foreground = parseColourDeclarationValue(colorMatch[1]!) ?? foreground;
         continue;
       }
       const bgMatch = BACKGROUND_DECLARATION_PATTERN.exec(decl);
       if (bgMatch) {
-        backgroundToken = bgMatch[1];
+        background = parseColourDeclarationValue(bgMatch[1]!) ?? background;
       }
     }
-    if (foregroundToken !== undefined && backgroundToken !== undefined) {
-      pairs.push({ selector, foregroundToken, backgroundToken });
+    if (foreground !== undefined && background !== undefined) {
+      pairs.push({
+        selector,
+        foregroundToken: foreground.token,
+        backgroundToken: background.token,
+        foregroundPure: foreground.pure,
+        backgroundPure: background.pure,
+        foregroundRawValue: foreground.rawValue,
+        backgroundRawValue: background.rawValue,
+      });
     }
   }
   return pairs;
@@ -361,8 +421,27 @@ export function check(
     ) {
       continue;
     }
-    const foregroundValue = adapter.tokens[pair.foregroundToken]!;
-    const backgroundValue = adapter.tokens[pair.backgroundToken]!;
+    // A side is reported by its resolved token value when its declaration was
+    // a single, standalone reference; otherwise by the raw declaration value,
+    // so the reason it is unmeasurable (extra content beyond the token) is
+    // visible rather than hidden behind what looks like an ordinary colour.
+    const foregroundValue = pair.foregroundPure
+      ? adapter.tokens[pair.foregroundToken]!
+      : pair.foregroundRawValue;
+    const backgroundValue = pair.backgroundPure
+      ? adapter.tokens[pair.backgroundToken]!
+      : pair.backgroundRawValue;
+    if (!pair.foregroundPure || !pair.backgroundPure) {
+      unmeasurableContrast.push({
+        kind: 'unmeasurableContrast',
+        selector: pair.selector,
+        foregroundToken: pair.foregroundToken,
+        backgroundToken: pair.backgroundToken,
+        foregroundValue,
+        backgroundValue,
+      });
+      continue;
+    }
     const fg = parseColour(foregroundValue);
     const bg = parseColour(backgroundValue);
     if (fg === null || bg === null) {

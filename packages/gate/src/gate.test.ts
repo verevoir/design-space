@@ -396,6 +396,21 @@ describe('check()', () => {
       const report = check(adapter, []);
       expect(report.unresolvedTokens).toHaveLength(0);
     });
+
+    it('a var(--x, fallback) reference with no matching tokens entry is still detected as an unresolved token, fallback and all', () => {
+      // VAR_REFERENCE_PATTERN's trailing `(?:,[^)]*)?` group exists to match
+      // this exact fallback shape. Removing that group makes the whole var()
+      // fail to match at all when a fallback is present, so the token would
+      // silently vanish from this report instead of showing up as unresolved.
+      const adapter: AdapterLike = {
+        name: 'fallback-reference',
+        components: {},
+        styles: '.a { color: var(--ds-fallback, red); }',
+        tokens: {},
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toEqual([{ kind: 'unresolvedToken', token: 'ds-fallback' }]);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -538,6 +553,62 @@ describe('check()', () => {
       expect(report.contrast).toHaveLength(1);
       expect(report.contrast[0]?.ratio).toBeCloseTo(21, 1);
     });
+
+    it('an out-of-range rgb() channel value is reported as unmeasurable, not silently clamped or passed', () => {
+      // isByte's bounds check (0-255) is what excludes this — mutating isByte
+      // to always return true would let 999 through as a real channel value
+      // and this pair would wrongly end up in `contrast` instead of here.
+      const adapter: AdapterLike = {
+        name: 'out-of-range-rgb',
+        components: {},
+        styles: '.ds-thing { color: var(--fg); background: var(--bg); }',
+        tokens: { fg: 'rgb(999, 0, 0)', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toHaveLength(1);
+      expect(report.unmeasurableContrast[0]?.foregroundValue).toBe('rgb(999, 0, 0)');
+      expect(report.unmeasurableContrast[0]?.backgroundValue).toBe('#ffffff');
+    });
+
+    it('a background declaration mixing a colour token with other content (e.g. an image layer) is unmeasurable, not silently measured', () => {
+      // The exact shape docs finding 1 traced: an unanchored background
+      // pattern used to grab just the `--bg` token and silently discard
+      // `url(hero.png) no-repeat`, reporting a confident pass/fail for a
+      // declaration that is not actually a flat colour. It must now be
+      // recognised as carrying more than a single colour reference.
+      const adapter: AdapterLike = {
+        name: 'mixed-background',
+        components: {},
+        styles: '.hero { color: var(--fg); background: var(--bg) url(hero.png) no-repeat; }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: '#000000',
+          backgroundValue: 'var(--bg) url(hero.png) no-repeat',
+        },
+      ]);
+    });
+
+    it('!important trailing a single var() reference does not make the declaration impure — it is still measured', () => {
+      const adapter: AdapterLike = {
+        name: 'important-trailing',
+        components: {},
+        styles: '.ds-thing { color: var(--fg) !important; background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unmeasurableContrast).toHaveLength(0);
+      expect(report.contrast).toHaveLength(1);
+      expect(report.contrast[0]?.passes).toBe(true);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -588,6 +659,25 @@ describe('check()', () => {
       };
       const report = check(adapter, []);
       expect(report.contrast[0]?.bar).toBe(WCAG21_AA_NORMAL_TEXT_CONTRAST);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 3.3 — renderGaps is genuinely optional, not just optional in the type
+  // ---------------------------------------------------------------------------
+
+  describe('renderGaps default parameter', () => {
+    it('check(adapter) with renderGaps omitted entirely returns empty findings rather than throwing', () => {
+      // Every other call in this file supplies renderGaps explicitly (at least
+      // `[]`), so none of them would notice the default disappearing. This
+      // calls check() with the second argument genuinely absent — the one
+      // shape that actually exercises the default `= []` on `check()`'s own
+      // signature, which the function's doc-comment advertises as the point
+      // of this story: coverage, escape hatches, tokens and contrast need no
+      // render() call at all.
+      const report = check(SKETCH_LIKE_ADAPTER);
+      expect(report.findings).toEqual([]);
+      expect(report.implemented).toContain('prompt');
     });
   });
 });

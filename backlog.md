@@ -741,6 +741,25 @@ design system) from a *defect* (a finding about the adapter).
 
 **Writes.** `packages/gate`.
 
+**Status.** Met, and separately: no caller yet. The done-when clauses above are met by
+`packages/gate`'s `check()` — an adapter missing a component is reported as missing; an adapter
+that renders a component via a fallback is reported as an escape hatch and never counted as
+coverage; every `var(--x)` reference in `styles` with no matching `tokens` entry is located; the
+gap/defect distinction was already true before this story, from the render-time classification
+`check()` already carried. Contrast, named in the Outcome above but not spelled out as its own
+done-when clause, is also built: WCAG 2.1 relative luminance measured against a named, overridable
+bar (`WCAG21_AA_NORMAL_TEXT_CONTRAST`, default 4.5 — WCAG 2.1 AA, normal text), and a pair this
+check cannot confidently measure — an unparseable colour, or a declaration carrying more than a
+single colour reference — is reported as unmeasurable rather than guessed at as a pass.
+
+What is not yet true: `check()` has no caller anywhere in this repository. `packages/studio`, the
+only production entry point that runs at build or serve time, never imports `@design-space/gate`;
+`packages/pipeline` depends on it but its own entry point is an unimplemented placeholder; there
+is no CLI, no `aigency.json` row, no release step that runs it. The capability this story asked
+for exists and is tested, but nothing in the running system currently produces this report for
+anyone to read — wiring a caller in is separate, follow-up work outside this story's declared
+write-set (`packages/gate`).
+
 ---
 
 ## Wave 4 — the cheap axis, and the view
