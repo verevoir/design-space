@@ -24,6 +24,14 @@
  * deliberate deployed-behaviour change — Cloud Run now does a small static file read per
  * request instead of one at container boot — judged worth it for the iteration loop.
  *
+ * Every read in this file — the per-request document read, the startup probe read, and the
+ * gaps-sidecar read — is bounded by `DOCUMENT_READ_TIMEOUT_MS` (see below `readRenderedDocument`).
+ * Before this bound existed, a stalled disk turned a per-request read into a request held open
+ * indefinitely — the resilience-lens finding this fixes, against this file's own introduction
+ * of per-request I/O. The startup and sidecar reads carry the identical unbounded-`fs.readFile`
+ * shape and are bounded for the same reason, even though in practice a startup hang would
+ * eventually be caught by Cloud Run's own deploy health check rather than by this process.
+ *
  * The gaps sidecar is still read once, at startup, and is not part of this per-request
  * freshness: nothing in the response surfaces gaps today (see the comment on `gaps` below),
  * so there is nothing yet for a stale sidecar to make visibly wrong.
@@ -48,6 +56,33 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DOCUMENT_PATH = join(__dirname, 'document.html');
 
 /**
+ * Same-container local disk read of a small pre-rendered HTML document — not a network call.
+ * 5 seconds is three orders of magnitude beyond what a healthy read of a file this size should
+ * ever take (page cache makes a repeat read near-instant), while still failing within a
+ * request-serving timeframe rather than holding a connection open forever if the disk stalls.
+ */
+export const DOCUMENT_READ_TIMEOUT_MS = 5_000;
+
+/**
+ * Turn a disk-read failure into a message that distinguishes a timeout from any other cause —
+ * ENOENT, EACCES, corruption, whatever else `fs.readFile` can reject with.
+ *
+ * Checked against `'AbortError'`, not `'TimeoutError'` — confirmed by running
+ * `serve-read-timeout.test.ts` rather than assumed from the `AbortSignal.timeout()` docs
+ * alone: `fs.promises.readFile` does not propagate the aborting signal's own `reason` through
+ * to its rejection. Passing a signal whose `reason` was an explicit `TimeoutError` DOMException
+ * still surfaced here as Node's own generic `AbortError` ('The operation was aborted.') — so
+ * that is what every abort of this read looks like, regardless of what fired it or what reason
+ * it carried. Without this check, an operator would see only that generic, unattributed
+ * message and be unable to tell a stalled disk from any other fs failure.
+ */
+function describeReadFailure(err: NodeJS.ErrnoException): string {
+  return err.name === 'AbortError'
+    ? `timed out after ${DOCUMENT_READ_TIMEOUT_MS}ms — the disk read did not complete`
+    : err.message;
+}
+
+/**
  * Read the document fresh off disk for a single request, wrapping a read failure in the same
  * legible shape `serveDocument`'s startup check uses — named path, underlying message — so
  * whichever one fires (startup or a later request) reads the same way in a log.
@@ -63,17 +98,24 @@ const DOCUMENT_PATH = join(__dirname, 'document.html');
  * The gaps sidecar is deliberately NOT re-read here: it is captured once by `serveDocument`
  * and passed in, since nothing in the response surfaces it yet (see the comment there). Only
  * `html` needs to be live.
+ *
+ * `signal` is a parameter rather than this function constructing `AbortSignal.timeout()`
+ * itself, so `serve-read-timeout.test.ts` can drive the real read against a real, controlled
+ * signal — see that file's header for why.
  */
-async function readRenderedDocument(
+export async function readRenderedDocument(
   documentPath: string,
   gaps: readonly GapRecord[],
+  signal: AbortSignal,
 ): Promise<RenderResult> {
-  const html = await readFile(documentPath, 'utf-8').catch((err: NodeJS.ErrnoException) => {
-    throw new Error(
-      `Studio server could not read the pre-rendered document at ${documentPath} for this request: ${err.message}.`,
-      { cause: err },
-    );
-  });
+  const html = await readFile(documentPath, { encoding: 'utf-8', signal }).catch(
+    (err: NodeJS.ErrnoException) => {
+      throw new Error(
+        `Studio server could not read the pre-rendered document at ${documentPath} for this request: ${describeReadFailure(err)}.`,
+        { cause: err },
+      );
+    },
+  );
   return { html, gaps };
 }
 
@@ -91,9 +133,15 @@ export async function serveDocument(documentPath: string): Promise<Server> {
   // container that can never serve fails fast and loudly at boot rather than starting and
   // answering every request with a 503. What actually reaches a response is read again, fresh,
   // by `readRenderedDocument` on each request below — this result is deliberately discarded.
-  await readFile(documentPath, 'utf-8').catch((err: NodeJS.ErrnoException) => {
+  // Bounded by the same DOCUMENT_READ_TIMEOUT_MS as the per-request read below — an unbounded
+  // read here is the identical shape (fs.readFile with no signal), just at startup rather than
+  // per request; a stalled disk here would hang the whole container before it ever binds a port.
+  await readFile(documentPath, {
+    encoding: 'utf-8',
+    signal: AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS),
+  }).catch((err: NodeJS.ErrnoException) => {
     throw new Error(
-      `Studio server failed to read the pre-rendered document at ${documentPath}: ${err.message}. ` +
+      `Studio server failed to read the pre-rendered document at ${documentPath}: ${describeReadFailure(err)}. ` +
         'Run the prerender build step before starting the server.',
       { cause: err },
     );
@@ -108,12 +156,17 @@ export async function serveDocument(documentPath: string): Promise<Server> {
   // Revisit when the server actually surfaces gaps: at that point serving an empty list WOULD
   // hide a finding, and failing loudly becomes the right call. At that same point, re-read this
   // per request too, the way `html` now is.
-  const gaps: readonly GapRecord[] = await readFile(gapsPath, 'utf-8')
+  // Bounded for the same reason as the startup probe above — an unbounded readFile here is the
+  // identical shape, just against the sidecar path instead of the document path.
+  const gaps: readonly GapRecord[] = await readFile(gapsPath, {
+    encoding: 'utf-8',
+    signal: AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS),
+  })
     .then((raw) => JSON.parse(raw) as GapRecord[])
     .catch((err: NodeJS.ErrnoException) => {
       if (err.code !== 'ENOENT') {
         process.stderr.write(
-          `Studio server could not read the gaps sidecar at ${gapsPath}: ${err.message}. ` +
+          `Studio server could not read the gaps sidecar at ${gapsPath}: ${describeReadFailure(err)}. ` +
             'Serving the document with an empty gap list.\n',
         );
       }
@@ -121,7 +174,8 @@ export async function serveDocument(documentPath: string): Promise<Server> {
     });
 
   const server = await startServer({
-    getRendered: () => readRenderedDocument(documentPath, gaps),
+    getRendered: () =>
+      readRenderedDocument(documentPath, gaps, AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS)),
   });
   const addr = server.address();
   const port = addr && typeof addr === 'object' ? addr.port : '?';
