@@ -96,9 +96,12 @@ export interface ContrastFinding {
  * with alpha 1 — named CSS colours like `chartreuse`, gradients, and partial
  * alpha all land here); at least one of the two declarations is not a
  * single, standalone colour reference — e.g. `background: var(--bg)
- * url(hero.png) no-repeat`, where the flat token colour is only one layer
- * of what actually renders, so measuring it alone could report a ratio that
- * does not describe what a reader would see; or the declaration that wins
+ * url(hero.png) no-repeat` (extra content trailing the token) or
+ * `background: linear-gradient(var(--bg), red)` (the token embedded inside
+ * another function rather than leading the value) — where the flat token
+ * colour is only one layer of what actually renders, so measuring it alone
+ * could report a ratio that does not describe what a reader would see; or
+ * the declaration that wins
  * the cascade for a slot (the last one in source order, unless an earlier
  * one carries `!important`) is a plain literal with no token reference at
  * all — e.g. `background-color: var(--bg); background: white;`, where
@@ -168,10 +171,17 @@ export interface CoverageReport {
 // earlier `!important` still beats a later declaration that lacks one. This
 // is not a full CSS cascade engine — it does not model shorthand resets
 // beyond treating `background` and `background-color` as one combined slot
-// (already true of the regex below), and it does not attempt to parse a
-// colour out of a shorthand value that does not itself lead with `var(`.
-// Anything past what these two rules resolve is left unmeasured rather than
-// guessed at, exactly like every other unparseable case here.
+// (already true of the regex below). A `var(--token)` reference is
+// recognised wherever it appears in a declaration's value, not only when it
+// leads it — so a token embedded inside another function, e.g. `background:
+// linear-gradient(var(--bg), red)`, is still found and the declaration
+// correctly reported as carrying more than a single colour reference
+// (unmeasurable), rather than silently vanishing from every report because
+// no branch recognised it at all. This scan still never computes an actual
+// rendered colour out of a gradient, `url()`, or any other function — only
+// whether a token reference is present, which is enough to classify the
+// pair honestly. Anything past what these rules resolve is left unmeasured
+// rather than guessed at, exactly like every other unparseable case here.
 //
 // A declaration counts as MEASURABLE only if its entire value is exactly one
 // such reference, optionally followed by `!important` — nothing else. A
@@ -201,15 +211,20 @@ const BACKGROUND_DECLARATION_PATTERN = /^background(?:-color)?\s*:\s*(.+)$/;
 /**
  * A declaration's value is measurable only if it is exactly one
  * `var(--token[, fallback])` reference, optionally trailed by `!important`
- * — nothing else. Anything else that still leads with a `var(--token)`
- * reference is reported as that token, but flagged impure: the declaration
- * carries more than a single colour reference, so it must not be silently
- * measured as if the token's own value were the whole story. A value with
- * no `var()` reference at all is not a candidate — returns `null`.
+ * — nothing else. Anything else that contains a `var(--token)` reference
+ * ANYWHERE in the value — not only leading it, e.g. a token embedded inside
+ * another function such as `linear-gradient(var(--bg), red)` — is reported
+ * as that token, but flagged impure: the declaration carries more than a
+ * single colour reference, so it must not be silently measured as if the
+ * token's own value were the whole story, and it must not silently vanish
+ * from every report either. A value with no `var()` reference at all is
+ * not a candidate — returns `null`.
  */
 const SINGLE_VAR_REFERENCE_VALUE_PATTERN =
   /^var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)\s*(?:,[^)]*)?\)\s*(?:!important)?$/;
-const LEADING_VAR_REFERENCE_PATTERN = /^var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)/;
+// Unanchored deliberately: a token reference can appear anywhere in a
+// declaration's value, not only leading it — see parseColourDeclarationValue.
+const EMBEDDED_VAR_REFERENCE_PATTERN = /var\(\s*--([a-zA-Z][a-zA-Z0-9-]*)/;
 
 interface ParsedDeclarationValue {
   readonly token: string;
@@ -224,7 +239,7 @@ function parseColourDeclarationValue(rawValue: string): ParsedDeclarationValue |
   if (pureMatch) {
     return { token: pureMatch[1]!, pure: true, rawValue: value };
   }
-  const looseMatch = LEADING_VAR_REFERENCE_PATTERN.exec(value);
+  const looseMatch = EMBEDDED_VAR_REFERENCE_PATTERN.exec(value);
   if (looseMatch) {
     return { token: looseMatch[1]!, pure: false, rawValue: value };
   }

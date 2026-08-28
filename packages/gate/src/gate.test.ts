@@ -697,6 +697,61 @@ describe('check()', () => {
       ]);
     });
 
+    // -------------------------------------------------------------------
+    // Round 15 — a token reference embedded (not leading) in a declaration
+    // must still be found. review (correctness) rejection against 0aeba37,
+    // reproduced live against the built HEAD code before this fix landed:
+    // a background of `linear-gradient(var(--bg), red)` matched neither the
+    // pure branch (whole value isn't one bare var()) nor the old
+    // LEADING_VAR_REFERENCE_PATTERN (var() wasn't the leading text), so the
+    // whole pair silently vanished from contrast, unmeasurableContrast, AND
+    // unresolvedTokens — even though both tokens genuinely resolved.
+    // -------------------------------------------------------------------
+
+    it('a token reference embedded (not leading) in a background declaration is unmeasurable, not silently dropped from every report', () => {
+      const adapter: AdapterLike = {
+        name: 'embedded-token-reference',
+        components: {},
+        styles: '.hero { color: var(--fg); background: linear-gradient(var(--bg), red); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toHaveLength(0);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: '#000000',
+          backgroundValue: 'linear-gradient(var(--bg), red)',
+        },
+      ]);
+    });
+
+    it('the identical shape applies to color: a token embedded (not leading) in a color declaration is unmeasurable, not dropped', () => {
+      const adapter: AdapterLike = {
+        name: 'embedded-token-reference-color',
+        components: {},
+        styles: '.hero { color: linear-gradient(var(--fg), red); background: var(--bg); }',
+        tokens: { fg: '#000000', bg: '#ffffff' },
+      };
+      const report = check(adapter, []);
+      expect(report.unresolvedTokens).toHaveLength(0);
+      expect(report.contrast).toHaveLength(0);
+      expect(report.unmeasurableContrast).toEqual([
+        {
+          kind: 'unmeasurableContrast',
+          selector: '.hero',
+          foregroundToken: 'fg',
+          backgroundToken: 'bg',
+          foregroundValue: 'linear-gradient(var(--fg), red)',
+          backgroundValue: '#ffffff',
+        },
+      ]);
+    });
+
     it('a slot where no declaration ever referenced a token is not counted at all, not reported as unmeasurable', () => {
       // Two plain literal background declarations, neither a var() reference
       // — there is no token to identify this pair by, so it is silently
