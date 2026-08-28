@@ -149,10 +149,42 @@ Two rules follow:
   imagery, microcopy, real spacing — that have not been made. Two levels of fidelity, neither
   of them shipped-looking.
 
-The sketch style carries "provisional" through **typography and colour**, not wobbly geometry:
-handwriting face, warm paper, ink rather than black, one hard offset shadow, straight borders.
-That choice survives arbitrary generated content, where wobbly geometry fights every layout and
-gets twee at scale.
+The sketch style's reference is now **hand-drawn, like Excalidraw** — typography, colour, *and*
+geometry all carry "provisional", not typography and colour alone. Handwriting face, warm paper,
+and ink rather than black are unchanged. Outline only: the hard offset shadow this section used
+to name is gone. A rough, hand-drawn edge is drawn on screens, actions, status rows, the compare-set table's own
+outer edge, and — via a wrapper span, since `<input>` cannot itself host a pseudo-element —
+`input-set` and `option-list`'s controls; the table's internal cell rules are what actually stays
+straight — the rough edge sits on the table's own outer border only, not on each cell, so the
+internal grid still reads as a real table (see the constraints below for how that layer is built).
+
+**This replaces, rather than adds to, what this section said before.** It used to argue that
+wobbly geometry "fights every layout and gets twee at scale" and that typography and colour alone
+should carry "provisional". That argument was written before anything rendered — a prediction,
+not a measurement. It has since been applied to the real five-screen broadband-switch journey,
+and the prediction did not hold: applied there, the geometry does neither. Recorded here as a
+prediction that failed rather than a clause quietly deleted, since that is more useful to whoever
+reads this next than silence would be.
+
+**How it is achieved**, because the constraints are non-obvious and someone will otherwise
+reimplement this badly: a percent-encoded `data:image/svg+xml` URL wrapping an
+`feTurbulence`/`feDisplacementMap` SVG filter, declared once as a CSS custom property and
+referenced from `filter:`. Two hard constraints, both found by doing it rather than anticipated:
+
+- **The filter must sit on a border-only `::before` layer, never on the element itself.** Applied
+  directly to the element, it displaces the text too, which reads as a rendering fault rather
+  than as hand-drawn.
+- **`<input>` itself cannot carry it, but the adapter-rendered components that emit it can.**
+  `<input>` is a replaced element and cannot render pseudo-elements — confirmed by probing it,
+  not assumed, and that half of the original finding stands. But `input-set` and `option-list`
+  are components the sketch adapter renders itself — it owns their markup, not only their CSS —
+  so it wraps each control in its own `<span class="*-control-wrap">`, gives that span the rough
+  `::before` border, and makes the `<input>`'s own border transparent. No change to `render.ts`
+  and no widening of the adapter contract was needed: the markup a component renderer emits was
+  always this adapter's to decide. "Form controls stay straight" was the wrong conclusion to
+  draw from the true browser constraint above it, and does not hold any more.
+
+Verified in Chrome only — data-URI SVG filter support has historically varied across browsers.
 
 ## 6. Storage
 

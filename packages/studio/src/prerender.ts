@@ -11,8 +11,9 @@
  * makes journeys editable through the service, this becomes a runtime resolve against the
  * conversation overlay, and the seam it goes through is already this one.
  */
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, rename } from 'node:fs/promises';
 import { dirname, join, basename, extname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { sketchAdapter } from '@design-space/adapter-sketch';
 import { validateJourney } from '@design-space/journey-model';
@@ -40,6 +41,21 @@ export function gapsPathFor(outPath: string): string {
   const ext = extname(outPath);
   const stem = basename(outPath, ext);
   return join(dirname(outPath), `${stem}.gaps.json`);
+}
+
+/**
+ * Writes `data` to `path` atomically: to a uniquely-named temporary file in the SAME directory
+ * first, then renamed into place. A rename within one filesystem is atomic at the OS level, so
+ * any reader of `path` — including serve.ts's per-request read, which races a rebuild for the
+ * whole life of a running container rather than only at startup — always observes either the
+ * complete previous content or the complete new content, and never a truncated or partial
+ * write. The temp name carries a random suffix so two overlapping writers, though none exist
+ * today, cannot collide on the same temp file.
+ */
+async function writeAtomically(path: string, data: string): Promise<void> {
+  const tmpPath = `${path}.${randomUUID()}.tmp`;
+  await writeFile(tmpPath, data, 'utf-8');
+  await rename(tmpPath, path);
 }
 
 /**
@@ -72,13 +88,13 @@ export async function prerender(options: PrerenderOptions): Promise<{ gaps: read
   const rendered = render(result.document, sketchAdapter);
 
   await mkdir(dirname(options.outPath), { recursive: true });
-  // Write the HTML document and its gaps sidecar atomically enough for a build step.
-  // The sidecar carries the full GapRecord array so serve.ts can pass real gaps to the
-  // server rather than an empty list.
+  // Write the HTML document and its gaps sidecar via writeAtomically (see above) — a reader
+  // can race either write and must never observe a torn file. The sidecar carries the full
+  // GapRecord array so serve.ts can pass real gaps to the server rather than an empty list.
   const gapsPath = gapsPathFor(options.outPath);
   await Promise.all([
-    writeFile(options.outPath, rendered.html, 'utf-8'),
-    writeFile(gapsPath, JSON.stringify(rendered.gaps), 'utf-8'),
+    writeAtomically(options.outPath, rendered.html),
+    writeAtomically(gapsPath, JSON.stringify(rendered.gaps)),
   ]);
 
   return { gaps: rendered.gaps.map((g) => g.component) };

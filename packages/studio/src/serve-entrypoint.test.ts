@@ -39,8 +39,14 @@ async function loadServeWithReadFileError(cause: Error): Promise<{
   exitCode: number | undefined;
   stderrOutput: string;
 }> {
-  // Wire the readFile mock to reject with the supplied cause.
+  // Wire the readFile mock to reject with the supplied cause. mockReset() first, not just the
+  // once-queue append this used to be: a `mockResolvedValueOnce`/`mockRejectedValueOnce` queue
+  // set by an earlier test in this file can survive `vi.clearAllMocks()` (which clears call
+  // history, not queued once-implementations) and silently answer THIS test's calls instead —
+  // exactly the leakage that broke `loadServeWithDocument` once the document became readable
+  // more than twice per test (see there).
   const fsMod = await import('node:fs/promises');
+  vi.mocked(fsMod.readFile).mockReset();
   vi.mocked(fsMod.readFile).mockRejectedValueOnce(cause);
 
   // Wire startServer so it would not bind a port if readFile somehow succeeded.
@@ -93,10 +99,17 @@ async function loadServeWithDocument(
   startServerBehaviour: { ok: true; port: number } | { ok: false; error: Error },
 ): Promise<{ exitCode: number | undefined; stdoutOutput: string; stderrOutput: string }> {
   const fsMod = await import('node:fs/promises');
-  vi.mocked(fsMod.readFile).mockResolvedValueOnce(html);
-  // serve.ts makes a second readFile call for the gaps sidecar (.catch(() => []) handles any
-  // error, but the auto-mock returns undefined which is not a promise — supply an explicit value).
-  vi.mocked(fsMod.readFile).mockResolvedValueOnce('[]');
+  // serveDocument() reads two different files — the document and the gaps sidecar — and,
+  // since `getRendered` is a live provider now rather than a value fixed at startup, the
+  // document can be read again an arbitrary number of times after serveDocument() itself
+  // returns (the "passes the document it read to the server" test below calls the provider
+  // explicitly, exercising exactly that path). A fixed FIFO queue of `mockResolvedValueOnce`
+  // calls assumes one specific call count and order; a persistent implementation keyed on
+  // which path was asked for answers any call, any number of times, correctly — and does not
+  // leak into the next test the way an unconsumed once-queue entry can survive `mockClear()`.
+  vi.mocked(fsMod.readFile).mockReset();
+  vi.mocked(fsMod.readFile).mockImplementation(((path: unknown) =>
+    Promise.resolve(String(path).endsWith('.gaps.json') ? '[]' : html)) as typeof fsMod.readFile);
 
   const serverMod = await import('./server.js');
   if (startServerBehaviour.ok) {
@@ -256,9 +269,18 @@ describe('serve.ts: success path', () => {
   it('passes the document it read to the server rather than an empty page', async () => {
     await loadServeWithDocument('<html>the real document</html>', { ok: true, port: 8080 });
 
+    // ServerOptions.getRendered is a provider function, not a plain value — `toHaveBeenCalledWith`
+    // can confirm the shape (a function was passed) but cannot itself call it, so the actual
+    // freshness claim ("it resolves to the document that was read") is checked by calling the
+    // real argument the mock captured.
     const serverMod = await import('./server.js');
-    expect(vi.mocked(serverMod.startServer)).toHaveBeenCalledWith(
-      expect.objectContaining({ rendered: expect.objectContaining({ html: '<html>the real document</html>' }) }),
+    const startServerMock = vi.mocked(serverMod.startServer);
+    expect(startServerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ getRendered: expect.any(Function) }),
     );
+    const passedOptions = startServerMock.mock.calls[0]?.[0];
+    expect(passedOptions).toBeDefined();
+    const rendered = await passedOptions!.getRendered();
+    expect(rendered).toEqual(expect.objectContaining({ html: '<html>the real document</html>' }));
   });
 });

@@ -18,3 +18,8 @@ coverage/
 board-status-*.json
 job-log-*.txt
 summary-out.txt
+
+# scratch copy prerender-build.test.ts creates inside packages/studio to exercise the outPath
+# default by really running the script -- removed in afterAll, kept here only in case a crash
+# skips that.
+.ds-prerender-default-*/

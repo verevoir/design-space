@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
 import { createStudioServer, startServer } from './server.js';
 import type { RenderResult } from '@design-space/render';
 import { PORT_VERSION } from '@design-space/port';
@@ -9,8 +8,14 @@ import { PORT_VERSION } from '@design-space/port';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRendered(html: string): RenderResult {
-  return { html, gaps: [] };
+/**
+ * ServerOptions now takes a provider function, not a value (`getRendered`) — the server itself
+ * stays ignorant of whether the answer is cached or read fresh per call (see server.ts). Most
+ * tests in this file want a value fixed for the test's own duration, so this wraps one in a
+ * provider that always resolves to it.
+ */
+function providedRendered(html: string): () => Promise<RenderResult> {
+  return () => Promise.resolve({ html, gaps: [] });
 }
 
 /**
@@ -28,33 +33,6 @@ function bindServer(server: Server, teardown: (fn: () => void) => void): Promise
       }
       teardown(() => server.close());
       resolve(`http://127.0.0.1:${addr.port}`);
-    });
-  });
-}
-
-/**
- * Ask the OS for a free port by binding a net server to port 0, recording the
- * assigned port, then closing it. Returns the port number.
- *
- * The caller must use the port immediately — there is a tiny window between
- * close() and the next bind, but that is unavoidable for any strategy that
- * does not modify startServer() to accept port 0 directly.
- */
-function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const net = createNetServer();
-    net.once('error', reject);
-    net.listen(0, '0.0.0.0', () => {
-      const addr = net.address();
-      if (!addr || typeof addr === 'string') {
-        net.close(() => reject(new Error('unexpected address shape')));
-        return;
-      }
-      const port = addr.port;
-      net.close((err) => {
-        if (err) reject(err);
-        else resolve(port);
-      });
     });
   });
 }
@@ -77,14 +55,14 @@ describe('createStudioServer()', () => {
 
   describe('/health endpoint', () => {
     it('returns HTTP 200', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/health`);
       expect(res.status).toBe(200);
     });
 
     it('returns JSON with status=ok', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/health`);
       const body = await res.json() as Record<string, unknown>;
@@ -95,7 +73,7 @@ describe('createStudioServer()', () => {
       // PORT_VERSION is documented as "MAJOR.MINOR" (two dot-separated integer
       // segments). This assertion checks the actual format — a value like
       // "0.1.0" (three segments) would fail, proving the doc-comment is honoured.
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/health`);
       const body = await res.json() as Record<string, unknown>;
@@ -111,7 +89,7 @@ describe('createStudioServer()', () => {
       const orig = process.env['K_REVISION'];
       process.env['K_REVISION'] = 'design-space-studio-00042-abc';
       try {
-        const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+        const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
         const base = await bindServer(server, register);
         const res = await fetch(`${base}/health`);
         const body = await res.json() as Record<string, unknown>;
@@ -131,7 +109,7 @@ describe('createStudioServer()', () => {
       const orig = process.env['K_REVISION'];
       delete process.env['K_REVISION'];
       try {
-        const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+        const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
         const base = await bindServer(server, register);
         const res = await fetch(`${base}/health`);
         const body = await res.json() as Record<string, unknown>;
@@ -147,7 +125,7 @@ describe('createStudioServer()', () => {
 
   describe('/ endpoint', () => {
     it('returns HTTP 200', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html><body>hi</body></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html><body>hi</body></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/`);
       expect(res.status).toBe(200);
@@ -155,7 +133,7 @@ describe('createStudioServer()', () => {
 
     it('returns the rendered HTML body', async () => {
       const html = '<!DOCTYPE html><html><body><h1>Journey</h1></body></html>';
-      const server = createStudioServer({ rendered: makeRendered(html) });
+      const server = createStudioServer({ getRendered: providedRendered(html) });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/`);
       const text = await res.text();
@@ -163,7 +141,7 @@ describe('createStudioServer()', () => {
     });
 
     it('Content-Type is text/html', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/`);
       expect(res.headers.get('content-type')).toContain('text/html');
@@ -172,11 +150,84 @@ describe('createStudioServer()', () => {
 
   describe('unknown route', () => {
     it('returns HTTP 404 for an unrecognised path', async () => {
-      const server = createStudioServer({ rendered: makeRendered('<html></html>') });
+      const server = createStudioServer({ getRendered: providedRendered('<html></html>') });
       const base = await bindServer(server, register);
       const res = await fetch(`${base}/not-a-real-path`);
       expect(res.status).toBe(404);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createStudioServer() calls its provider fresh, per request — this is the whole point of
+// `getRendered` being a function rather than a value: the server has no cached copy of its
+// own, so two requests can see two different answers, and a rejected call is a request-time
+// failure rather than something that can only happen at startup.
+// ---------------------------------------------------------------------------
+
+describe('createStudioServer(): the provider is called per request, not once at creation', () => {
+  let cleanup: (() => void) | undefined;
+
+  afterEach(() => {
+    cleanup?.();
+    cleanup = undefined;
+  });
+
+  function register(fn: () => void) {
+    cleanup = fn;
+  }
+
+  it('serves whatever the provider returns on THIS call, not what it returned when the server was created', async () => {
+    let current = 'first';
+    const server = createStudioServer({
+      getRendered: () => Promise.resolve({ html: current, gaps: [] }),
+    });
+    const base = await bindServer(server, register);
+
+    const first = await (await fetch(`${base}/`)).text();
+    expect(first).toBe('first');
+
+    current = 'second';
+    const second = await (await fetch(`${base}/`)).text();
+    expect(second).toBe('second');
+  });
+
+  it('answers 503 rather than crashing when the provider rejects for a request, and logs the failure reason to stderr', async () => {
+    const server = createStudioServer({
+      getRendered: () => Promise.reject(new Error('document unavailable for this request')),
+    });
+    const base = await bindServer(server, register);
+
+    // handleRequest's own catch branch is deliberate behaviour (server.ts: "reported to stderr
+    // — the container log is where an operator would look"), but until now only the HTTP status
+    // was asserted here, leaving the logged diagnostic itself unverified — stubbing out or
+    // deleting the stderr write would not have failed this test.
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr) as typeof process.stderr.write;
+    process.stderr.write = (chunk: unknown, encodingOrCb?: unknown, cb?: unknown): boolean => {
+      stderrChunks.push(String(chunk));
+      return (origWrite as (c: unknown, e?: unknown, cb?: unknown) => boolean)(chunk, encodingOrCb, cb);
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(`${base}/`);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    expect(res.status).toBe(503);
+    expect(
+      stderrChunks.some(
+        (c) =>
+          c.includes('Studio server: the document provider failed for a request') &&
+          c.includes('document unavailable for this request'),
+      ),
+    ).toBe(true);
+
+    // The server itself is still up and answers normally afterwards — one failed provider
+    // call for one request must not have crashed the process or wedged the server.
+    const res2 = await fetch(`${base}/health`);
+    expect(res2.status).toBe(200);
   });
 });
 
@@ -232,20 +283,22 @@ describe('startServer()', () => {
   // ---------------------------------------------------------------------------
 
   it('resolves to a listening Server when the port is available', async () => {
-    const port = await findFreePort();
+    // PORT=0 asks the OS to assign a free ephemeral port directly — no separate probe-then-
+    // rebind step, and so no window in which something else could grab the same number.
     const origPort = process.env['PORT'];
-    process.env['PORT'] = String(port);
+    process.env['PORT'] = '0';
     try {
-      const server = await startServer({ rendered: makeRendered('<html></html>') });
+      const server = await startServer({ getRendered: providedRendered('<html></html>') });
       started = server;
       const addr = server.address();
       expect(addr).not.toBeNull();
       expect(typeof addr).toBe('object');
-      if (addr && typeof addr === 'object') {
-        expect(addr.port).toBe(port);
-      }
-      // Confirm it is actually serving HTTP.
-      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      if (!addr || typeof addr !== 'object') throw new Error('unexpected address shape');
+      // The bound port is read back off the server, never assumed — the OS chose it.
+      expect(addr.port).toBeGreaterThan(0);
+      expect(addr.port).toBeLessThanOrEqual(65535);
+      // Confirm it is actually serving HTTP, on the port actually bound.
+      const res = await fetch(`http://127.0.0.1:${addr.port}/health`);
       expect(res.status).toBe(200);
     } finally {
       if (origPort === undefined) {
@@ -262,7 +315,7 @@ describe('startServer()', () => {
     process.env['PORT'] = String(port);
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/already in use/);
     } finally {
       if (origPort === undefined) {
@@ -279,7 +332,7 @@ describe('startServer()', () => {
     process.env['PORT'] = String(port);
     let caughtMessage = '';
     try {
-      await startServer({ rendered: makeRendered('<html></html>') });
+      await startServer({ getRendered: providedRendered('<html></html>') });
     } catch (err) {
       caughtMessage = err instanceof Error ? err.message : String(err);
     } finally {
@@ -307,7 +360,7 @@ describe('startServer()', () => {
     process.env['PORT'] = 'not-a-port';
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/PORT is invalid/);
     } finally {
       if (origPort === undefined) {
@@ -323,7 +376,7 @@ describe('startServer()', () => {
     process.env['PORT'] = 'badvalue';
     let caughtMessage = '';
     try {
-      await startServer({ rendered: makeRendered('<html></html>') });
+      await startServer({ getRendered: providedRendered('<html></html>') });
     } catch (err) {
       caughtMessage = err instanceof Error ? err.message : String(err);
     } finally {
@@ -336,13 +389,17 @@ describe('startServer()', () => {
     expect(caughtMessage).toContain('badvalue');
   });
 
-  it('rejects when PORT is set to 0 (out of valid range 1-65535)', async () => {
+  it('accepts PORT=0 as "let the OS assign a free ephemeral port", not an out-of-range value', async () => {
+    // 0 is Node's own convention for OS-assigned ports (net.Server.listen(0, ...)), not a
+    // malformed value — rejecting it is what used to force every real-server test in this
+    // package onto a racy probe-and-rebind workaround instead of binding directly.
     const origPort = process.env['PORT'];
     process.env['PORT'] = '0';
     try {
-      await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
-      ).rejects.toThrow(/PORT is invalid/);
+      const server = await startServer({ getRendered: providedRendered('<html></html>') });
+      started = server;
+      const addr = server.address();
+      expect(addr && typeof addr === 'object' ? addr.port : 0).toBeGreaterThan(0);
     } finally {
       if (origPort === undefined) {
         delete process.env['PORT'];
@@ -357,7 +414,7 @@ describe('startServer()', () => {
     process.env['PORT'] = '80.5';
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/PORT is invalid/);
     } finally {
       if (origPort === undefined) {
@@ -375,8 +432,54 @@ describe('startServer()', () => {
     process.env['PORT'] = '65536';
     try {
       await expect(
-        startServer({ rendered: makeRendered('<html></html>') }),
+        startServer({ getRendered: providedRendered('<html></html>') }),
       ).rejects.toThrow(/PORT is invalid/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
+  it('rejects when PORT is set to the empty string, rather than silently binding an ephemeral port', async () => {
+    // Number('') === 0 in JS. Without an explicit blank check, an empty PORT (an ordinary
+    // shape for a container misconfiguration — an unresolved template variable, an empty env
+    // override) would silently take the same branch as the deliberate PORT=0 convention
+    // instead of failing loudly. undefined (never set) and '' (set but blank) must not collapse
+    // to the same outcome.
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = '';
+    try {
+      await expect(
+        startServer({ getRendered: providedRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+    } finally {
+      if (origPort === undefined) {
+        delete process.env['PORT'];
+      } else {
+        process.env['PORT'] = origPort;
+      }
+    }
+  });
+
+  it('rejects when PORT is set to a whitespace-only string, and the error names the actual raw value', async () => {
+    const origPort = process.env['PORT'];
+    process.env['PORT'] = '   ';
+    try {
+      await expect(
+        startServer({ getRendered: providedRendered('<html></html>') }),
+      ).rejects.toThrow(/PORT is invalid/);
+      // The raw value, not the coerced number, is what makes a blank PORT diagnosable —
+      // JSON.stringify('   ') is what should appear in the error, not "0" or "NaN".
+      let caughtMessage = '';
+      try {
+        await startServer({ getRendered: providedRendered('<html></html>') });
+      } catch (err) {
+        caughtMessage = err instanceof Error ? err.message : String(err);
+      }
+      expect(caughtMessage).toContain(JSON.stringify('   '));
     } finally {
       if (origPort === undefined) {
         delete process.env['PORT'];
@@ -403,13 +506,12 @@ describe('startServer()', () => {
   // ---------------------------------------------------------------------------
 
   it('forwards post-startup server errors to stderr rather than leaving them unhandled', async () => {
-    // Let startServer() bind on a free port and resolve.
-    const port = await findFreePort();
+    // Let startServer() bind on a free, OS-assigned port and resolve.
     const origPort = process.env['PORT'];
-    process.env['PORT'] = String(port);
+    process.env['PORT'] = '0';
     let server: Server;
     try {
-      server = await startServer({ rendered: makeRendered('<html></html>') });
+      server = await startServer({ getRendered: providedRendered('<html></html>') });
       started = server;
     } finally {
       if (origPort === undefined) {

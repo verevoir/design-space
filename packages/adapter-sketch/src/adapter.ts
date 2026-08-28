@@ -1,4 +1,11 @@
-import { type PromptProps } from '@design-space/port';
+import {
+  type PromptProps,
+  type CompareSetProps,
+  type InputSetProps,
+  type StatusProps,
+  type OptionListProps,
+  type SummaryProps,
+} from '@design-space/port';
 import { type Adapter, type ComponentRenderer } from '@design-space/adapter-contract';
 import { SKETCH_CSS_CUSTOM_PROPERTIES } from './tokens.js';
 import { SKETCH_STYLES } from './styles.js';
@@ -8,6 +15,61 @@ import { SKETCH_STYLES } from './styles.js';
 // its own structural copy — this package used to be the only place `Adapter`
 // was declared at all, which is what made the two later copies in `render`
 // and `gate` invisible drift instead of an obvious duplication.
+
+// ---------------------------------------------------------------------------
+// Rough, monochrome marks
+//
+// A glyph here stands in for a properly designed mark — a future issue, not
+// a settled piece of iconography — so it is drawn to read as deliberately
+// undesigned, the same move the GAP box makes. Emoji are out: several
+// render in full colour on macOS regardless of any CSS rule, which no
+// stylesheet can reach. A borrowed monochrome character (`✓`, `✦`) is out
+// too: monochrome, but it carries a designed voice, which is the opposite
+// of a placeholder.
+//
+// Inline SVG instead: `stroke="currentColor"` and `fill="none"` make it
+// monochrome by construction — it cannot introduce hue no matter what
+// tokens an adapter variant supplies — and sizing in `em` (via the CSS
+// classes in styles.ts) keeps it in step with the surrounding type.
+// Roughness lives in the path data: an open line rather than a closed
+// geometric one, a tick that overshoots, marks that don't quite meet
+// themselves. This is a different mechanism from the border roughness in
+// styles.ts (mechanism and rationale: docs/architecture.md §5, ADR 0010) —
+// a mark is a glyph, drawn once as fixed path data, not a layout primitive
+// whose position or size responds to content.
+//
+// Both the wrapping `<span>` and the `<svg>` itself carry `aria-hidden` —
+// belt and braces — since the mark is decorative: the tone label in words
+// (`renderStatus`) and the "Recommended: " prefix (`renderCompareSet`)
+// already carry the meaning for assistive tech.
+// ---------------------------------------------------------------------------
+
+function roughGlyph(
+  className: string,
+  viewBox: string,
+  path: string,
+  options?: { readonly strokeWidth?: string; readonly strokeAttrs?: string },
+): string {
+  const strokeWidth = options?.strokeWidth ?? '1.6';
+  const strokeAttrs = options?.strokeAttrs ?? 'stroke-linecap="round" stroke-linejoin="round"';
+  return `<svg class="${className}" viewBox="${viewBox}" aria-hidden="true" focusable="false"><path d="${path}" stroke="currentColor" fill="none" stroke-width="${strokeWidth}" ${strokeAttrs}/></svg>`;
+}
+
+// Each path is fixed, hand-chosen data — never derived from props — so none of it needs
+// escaping. Left open or asymmetric on purpose:
+//   - GLYPH_GOOD's final stroke overshoots past where a closed tick would stop.
+//   - GLYPH_PENDING is closed (a trailing `Z`) — an open hexagon read as a stray scribble, not
+//     a shape — but closing it alone still read as a bowtie. It only reads as an hourglass
+//     once the viewBox is narrower than it is tall (14×20), which is why the pending mark's
+//     viewBox differs from the other two: closed and narrow are independent properties, and
+//     both are needed together. Verified live in the browser.
+//   - GLYPH_EMPHASIS's four strokes are visibly different lengths crossing off-centre, not a
+//     regular asterisk — scaling the old, more regular version up read as a bolder *designed*
+//     asterisk, the opposite of the scrawled mark this is meant to be. Verified live in the
+//     browser; irregularity fixed it, not size.
+const GLYPH_GOOD = 'M3.6 10.9 L8.3 15.6 L17.2 3.9';
+const GLYPH_PENDING = 'M2.6 2.4 L11.5 2.0 L7.4 9.8 L11.2 17.6 L2.2 18.0 L6.6 10.1 Z';
+const GLYPH_EMPHASIS = 'M5.4 1.0 L6.9 11.1 M1.2 4.9 L11.4 6.9 M2.9 1.6 L9.6 10.9 M10.6 2.4 L2.2 9.4';
 
 // ---------------------------------------------------------------------------
 // Component implementations
@@ -22,7 +84,166 @@ function renderPrompt(props: PromptProps): string {
 </div>`;
 }
 
+/**
+ * `compare-set` renders as a plain HTML table — `<th scope="col">` per
+ * attribute, `<th scope="row">` per item name — so the comparison stays a
+ * real table to assistive tech, not a div grid that only looks like one.
+ *
+ * `emphasis` is expressed sketchily rather than as a polished highlight: no
+ * fill colour, no badge, no border-colour swap. A single rough inline-SVG
+ * mark (`GLYPH_EMPHASIS`, see above) sits next to the item name, and that
+ * row's borders turn dashed — two channels, neither of them a colour fill,
+ * so the row does not read as a finished "featured plan" card. A
+ * screen-reader-only "Recommended: " prefix carries the same meaning the
+ * mark carries visually, since `aria-hidden` alone would drop it for
+ * anyone not seeing the glyph.
+ */
+function renderCompareSet(props: CompareSetProps): string {
+  const headerCells = props.attributes
+    .map((attribute) => `<th scope="col">${escapeHtml(attribute)}</th>`)
+    .join('');
+  const rows = props.items
+    .map((item) => {
+      const emphasisMark = item.emphasis
+        ? `<span class="ds-compare-set__emphasis-mark" aria-hidden="true">${roughGlyph('ds-compare-set__emphasis-svg', '0 0 12 12', GLYPH_EMPHASIS, { strokeWidth: '1.5', strokeAttrs: 'stroke-linecap="round"' })}</span><span class="ds-visually-hidden">Recommended: </span>`
+        : '';
+      const rowClass = item.emphasis ? ' class="ds-compare-set__item--emphasis"' : '';
+      const cells = item.values.map((value) => `<td>${escapeHtml(value)}</td>`).join('');
+      return `<tr${rowClass}><th scope="row">${emphasisMark}${escapeHtml(item.name)}</th>${cells}</tr>`;
+    })
+    .join('\n    ');
+  return `<table class="ds-compare-set">
+  <thead><tr><th scope="col"></th>${headerCells}</tr></thead>
+  <tbody>
+    ${rows}
+  </tbody>
+</table>`;
+}
+
+/**
+ * `input-set` renders real semantic form controls, not a styled lookalike:
+ * a `<label for>` genuinely associated with its `<input id>`, the
+ * `required` attribute actually present when the field is required (not
+ * only implied by an asterisk), and `kind` mapped straight onto the input's
+ * native `type`. Sketch fidelity here is about visual weight — a
+ * hand-drawn label and a plain-bordered control — not about dropping the
+ * semantics a real form needs.
+ *
+ * The control's id folds the field's own label (slugified) together with its
+ * position in the array — `ds-field-<slug>-<index>` — the same shape
+ * `renderOptionList` below uses for the identical reason: two fields whose
+ * labels collide, or differ only in characters `slugify` strips, would
+ * otherwise produce duplicate ids and silently break the second field's
+ * `<label for>` association. A renderer receives only this block's own props,
+ * never the journey document or a sibling block (architecture §3: an adapter
+ * must not know which journey it renders), so the index is the only
+ * disambiguator available here — and it is sufficient, since it is unique by
+ * construction within one block.
+ */
+function renderInputSet(props: InputSetProps): string {
+  const fields = props.fields
+    .map((field, index) => {
+      const id = `ds-field-${slugify(field.label)}-${index}`;
+      const requiredMark = field.required
+        ? `<span class="ds-field__required" aria-hidden="true"> *</span>`
+        : '';
+      const requiredAttrs = field.required
+        ? ' required aria-required="true"'
+        : ' aria-required="false"';
+      return `<div class="ds-field">
+    <label class="ds-field__label" for="${escapeAttr(id)}">${escapeHtml(field.label)}${requiredMark}</label>
+    <span class="ds-field__control-wrap"><input class="ds-field__control" type="${escapeAttr(field.kind)}" id="${escapeAttr(id)}" name="${escapeAttr(id)}"${requiredAttrs}></span>
+  </div>`;
+    })
+    .join('\n  ');
+  return `<div class="ds-input-set">
+  ${fields}
+</div>`;
+}
+
+/**
+ * `status` carries its tone through more than colour: a distinct rough
+ * inline-SVG mark (`GLYPH_PENDING`/`GLYPH_GOOD`, see above), a short text
+ * label naming the tone in words, and a border style (dashed for pending,
+ * solid for good) — three independent channels, so a reader who cannot
+ * perceive colour still gets the tone from the mark or the label alone.
+ * `role="status"` makes this an ARIA live region, appropriate for a
+ * message that can change as a check completes.
+ */
+function renderStatus(props: StatusProps): string {
+  const glyph =
+    props.tone === 'good'
+      ? roughGlyph('ds-status__glyph-svg', '0 0 20 20', GLYPH_GOOD)
+      : roughGlyph('ds-status__glyph-svg', '0 0 14 20', GLYPH_PENDING, {
+          strokeWidth: '1.5',
+          strokeAttrs: 'stroke-linejoin="round"',
+        });
+  const label = props.tone === 'good' ? 'Good' : 'Pending';
+  return `<div class="ds-status ds-status--${escapeAttr(props.tone)}" role="status">
+  <span class="ds-status__glyph" aria-hidden="true">${glyph}</span>
+  <span class="ds-status__label">${escapeHtml(label)}</span>
+  <span class="ds-status__message">${escapeHtml(props.message)}</span>
+</div>`;
+}
+
+/**
+ * `option-list` renders each option as a real `<label>` wrapping a
+ * `<input type="checkbox">`, with an explicit `for`/`id` pair alongside the
+ * wrapping association for maximum assistive-tech compatibility. The
+ * port's `selection` enum admits only `'many'` today (ADR 0001: not
+ * widened ahead of a journey that actually needs single-select), so
+ * checkboxes are the only control this renderer needs to produce.
+ */
+function renderOptionList(props: OptionListProps): string {
+  const options = props.options
+    .map((option, index) => {
+      const id = `ds-option-${slugify(option.label)}-${index}`;
+      return `<label class="ds-option" for="${escapeAttr(id)}">
+    <span class="ds-option__control-wrap"><input class="ds-option__control" type="checkbox" id="${escapeAttr(id)}" name="${escapeAttr(id)}"></span>
+    <span class="ds-option__text">
+      <span class="ds-option__label">${escapeHtml(option.label)}</span>
+      <span class="ds-option__detail">${escapeHtml(option.detail)}</span>
+    </span>
+  </label>`;
+    })
+    .join('\n  ');
+  return `<div class="ds-option-list" role="group">
+  ${options}
+</div>`;
+}
+
+/**
+ * `summary`'s `editTarget` becomes a real in-page anchor: `render.ts`
+ * assembles every screen as a `<section id="screen-<id>">` in one
+ * document, so `#screen-<editTarget>` is not a placeholder — it genuinely
+ * jumps to that screen's section today, with no additional route needed.
+ * It is not validated against the journey's actual screen ids here — this
+ * renderer receives only this block's own props, not the journey document
+ * (architecture §3) — so an `editTarget` naming a screen that does not
+ * exist produces a dead anchor rather than a render-time error, the same
+ * trade `render.ts`'s own `renderAction` makes for an action's `target`.
+ */
+function renderSummary(props: SummaryProps): string {
+  const rows = props.rows
+    .map(
+      (row) => `<div class="ds-summary__row">
+    <span class="ds-summary__label">${escapeHtml(row.label)}</span>
+    <span class="ds-summary__value">${escapeHtml(row.value)}</span>
+    <a class="ds-summary__edit" href="#screen-${escapeAttr(row.editTarget)}">Edit</a>
+  </div>`,
+    )
+    .join('\n  ');
+  return `<div class="ds-summary">
+  ${rows}
+</div>`;
+}
+
 const renderPromptComponent: ComponentRenderer<PromptProps> = renderPrompt;
+const renderCompareSetComponent: ComponentRenderer<CompareSetProps> = renderCompareSet;
+const renderInputSetComponent: ComponentRenderer<InputSetProps> = renderInputSet;
+const renderStatusComponent: ComponentRenderer<StatusProps> = renderStatus;
+const renderOptionListComponent: ComponentRenderer<OptionListProps> = renderOptionList;
+const renderSummaryComponent: ComponentRenderer<SummaryProps> = renderSummary;
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -36,6 +257,29 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Escapes text for use inside a double-quoted HTML attribute value,
+ * additionally escaping single quotes — which `escapeHtml` does not —
+ * mirroring `render.ts`'s own private `escapeAttr`. That one cannot be
+ * imported: it is not part of `@design-space/render`'s public entry point,
+ * so this package carries its own copy rather than reaching past the
+ * boundary.
+ */
+function escapeAttr(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Turns a label into a lowercase, hyphenated id fragment. */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 // ---------------------------------------------------------------------------
 // Adapter export
 // ---------------------------------------------------------------------------
@@ -44,6 +288,11 @@ export const sketchAdapter: Adapter = {
   name: 'sketch',
   components: {
     prompt: (props: unknown) => renderPromptComponent(props as PromptProps),
+    'compare-set': (props: unknown) => renderCompareSetComponent(props as CompareSetProps),
+    'input-set': (props: unknown) => renderInputSetComponent(props as InputSetProps),
+    status: (props: unknown) => renderStatusComponent(props as StatusProps),
+    'option-list': (props: unknown) => renderOptionListComponent(props as OptionListProps),
+    summary: (props: unknown) => renderSummaryComponent(props as SummaryProps),
   },
   styles: SKETCH_STYLES,
   tokens: SKETCH_CSS_CUSTOM_PROPERTIES,

@@ -9,7 +9,6 @@
  * prerender fails".
  */
 import { execFile } from 'node:child_process';
-import { createServer } from 'node:net';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -25,12 +24,29 @@ const scriptPath = resolve(
   '../scripts/prerender-build.mjs',
 );
 
-/** Run the script against a repo path, capturing stdout, stderr and the exit code. */
+/**
+ * Run the script against a repo path, capturing stdout, stderr and the exit code.
+ *
+ * `outPath`, when supplied, is passed as the script's second positional argument. Every call
+ * below that writes real output now supplies one pointing at a scratch path — letting a test
+ * fall back to the script's real default (packages/studio/dist/document.html) is exactly the
+ * defect this file used to have and no longer should.
+ *
+ * `journeyId`, when supplied, is passed as the script's third positional argument. It cannot be
+ * given without `outPath` also being given — there is no call site here that wants a
+ * non-default journey written to the real dist/document.html, and the signature does not offer
+ * that shape.
+ */
 async function runScript(
   repoPath: string,
+  outPath?: string,
+  journeyId?: string,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const { stdout, stderr } = await execFileAsync('node', [scriptPath, repoPath], {
+    const args = [scriptPath, repoPath];
+    if (outPath !== undefined) args.push(outPath);
+    if (journeyId !== undefined) args.push(journeyId);
+    const { stdout, stderr } = await execFileAsync('node', args, {
       encoding: 'utf8',
       timeout: 60_000,
     });
@@ -72,41 +88,191 @@ describe('prerender-build.mjs — the build step the container runs', () => {
     let outDir: string;
 
     beforeAll(async () => {
-      // The script writes to packages/studio/dist/document.html relative to itself, so the
-      // success run exercises the real output path rather than a redirected one.
-      outDir = join(dirname(scriptPath), '../dist');
-      await mkdir(outDir, { recursive: true });
+      // The real repository is a legitimate INPUT here — it exercises the real broadband-switch
+      // journey — but the OUTPUT goes to a scratch directory, not packages/studio/dist/. A test
+      // that writes the real, served build artifact as a side effect of running is a defect
+      // regardless of whether what it writes happens to be correct; see the no-gaps block below
+      // for what happens when it is not (that was the actual incident this fix responds to).
+      outDir = await mkdtemp(join(tmpdir(), 'ds-prerender-build-success-'));
     });
 
-    it('reports the unimplemented components as gaps rather than passing silently', async () => {
-      const repoRoot = resolve(dirname(scriptPath), '../../..');
-      const { code, stdout } = await runScript(repoRoot);
+    afterAll(async () => {
+      if (outDir) await rm(outDir, { recursive: true, force: true });
+    });
 
+    it('reports zero gaps for the reference journey — every port component now has a sketch renderer (story 3.1)', async () => {
+      const repoRoot = resolve(dirname(scriptPath), '../../..');
+      const { code, stdout } = await runScript(repoRoot, join(outDir, 'document.html'));
+
+      // Until story 3.1, only `prompt` was implemented, so this same build reported five gaps
+      // (compare-set, input-set, status, option-list, summary) against the real broadband-switch
+      // journey. The sketch adapter now implements every port component, and the real journey's
+      // block props all validate against the induced schemas, so the build's own gaps branch
+      // (`if (gaps.length > 0)`) must not fire at all — inverted from the prior assertion rather
+      // than deleted, since the old premise ("the reference journey must report gaps") is exactly
+      // what this story sets out to make false.
       expect(code).toBe(0);
-      // Only `prompt` is implemented in wave 2S, so the reference journey must report gaps.
-      // A silent success here would mean the gaps branch never fires and nobody learns which
-      // components are missing at build time.
-      expect(stdout).toContain('gaps (unimplemented components):');
-      expect(stdout).toContain('compare-set');
+      expect(stdout).toContain('Prerender complete.');
+      expect(stdout).not.toContain('gaps (unimplemented components):');
     });
   });
+
+  describe('the default output path, exercised by actually running the script', () => {
+    // The literal expression under test — `process.argv[3] ?? join(__dirname, '../dist/document.html')`
+    // — can only be exercised by really running the script with no third argument, and doing that
+    // at its real location would overwrite the real, served packages/studio/dist/document.html —
+    // precisely the corruption this file's other blocks exist to stop. So the script, plus the
+    // ONE compiled sibling it imports (`../dist/prerender.js`, a leaf module: it imports only
+    // bare `@design-space/*` specifiers and node builtins, no further relative siblings), are
+    // copied into a scratch directory placed inside this package — so Node's module resolution
+    // still walks up to the workspace's real node_modules from the copy, the same way it does
+    // from the real dist/. Running the copy with no third argument makes `__dirname` resolve
+    // inside the scratch tree, so the real fallback computes a scratch path and writes there.
+    // A prior version of this test asserted the fallback expression's literal spelling instead —
+    // a refactor that reformatted it would have broken that test for no behavioural reason, and a
+    // genuine regression in where the default resolves would have sailed through untouched. This
+    // version fails on the second and passes through the first.
+    let scratchRoot: string;
+
+    beforeAll(async () => {
+      const studioRoot = resolve(dirname(scriptPath), '..');
+      scratchRoot = await mkdtemp(join(studioRoot, '.ds-prerender-default-'));
+      await mkdir(join(scratchRoot, 'scripts'), { recursive: true });
+      await mkdir(join(scratchRoot, 'dist'), { recursive: true });
+      const scriptSource = await readFile(scriptPath, 'utf-8');
+      await writeFile(join(scratchRoot, 'scripts', 'prerender-build.mjs'), scriptSource, 'utf-8');
+      const compiledPrerender = await readFile(join(studioRoot, 'dist', 'prerender.js'), 'utf-8');
+      await writeFile(join(scratchRoot, 'dist', 'prerender.js'), compiledPrerender, 'utf-8');
+    });
+
+    afterAll(async () => {
+      if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true });
+    });
+
+    it('defaults outPath to dist/document.html next to the script when no third argument is given', async () => {
+      const repoRoot = resolve(dirname(scriptPath), '../../..');
+      const scratchScript = join(scratchRoot, 'scripts', 'prerender-build.mjs');
+
+      // Only repoPath is passed — no outPath — so the real fallback runs, against the copy's own
+      // __dirname, exactly as it would for a real zero-argument invocation.
+      const { code, stdout } = await execFileAsync('node', [scratchScript, repoRoot], {
+        encoding: 'utf8',
+        timeout: 60_000,
+      }).then(
+        (r) => ({ code: 0, stdout: r.stdout }),
+        (err: { code?: number; stdout?: string }) => ({ code: err.code ?? 1, stdout: err.stdout ?? '' }),
+      );
+
+      expect(code).toBe(0);
+      expect(stdout).toContain('Prerender complete.');
+
+      // Checks where it actually wrote, not merely what the source names as the default.
+      const written = await readFile(join(scratchRoot, 'dist', 'document.html'), 'utf-8');
+      expect(written.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('journeyId selects which journey renders — exercised by actually running the script, not by reading its source', () => {
+    // The literal expression under test — `process.argv[4] ?? 'broadband-switch'` — is exercised
+    // properly only by running the script and observing WHICH journey it actually rendered, both
+    // with a real non-default id supplied and with none. A prior version of this test asserted
+    // only the default, and did so by reading the script's source text for the fallback
+    // expression's literal spelling — a refactor that reformatted it would have broken that test
+    // for no behavioural reason, and the happy path (a real id actually selecting a different
+    // journey) had no coverage at all. This block replaces it with two real runs against a
+    // scratch repository carrying two real, valid journeys.
+    //
+    // Deliberately not `broadband-switch.postcode-first`: that id contains a `.`, which the
+    // store's SAFE_ID (`/^[A-Za-z0-9][A-Za-z0-9_-]*$/`) forbids — a known, separate, currently
+    // unmeetable blocker (backlog.md, story 3.1's Status), not something this test should try to
+    // route around. `broadband-switch-alt` is SAFE_ID-valid and serves the same purpose: a real,
+    // reachable, non-default journey id.
+    let journeyRepo: string;
+
+    beforeAll(async () => {
+      journeyRepo = await mkdtemp(join(tmpdir(), 'ds-prerender-journeyid-'));
+      const git = (...args: string[]) => execFileAsync('git', args, { cwd: journeyRepo });
+      await git('init', '-q');
+      await git('config', 'user.email', 'test@example.invalid');
+      await git('config', 'user.name', 'Test');
+      await git('config', 'commit.gpgsign', 'false');
+
+      await mkdir(join(journeyRepo, 'examples', 'journeys'), { recursive: true });
+      await writeFile(
+        join(journeyRepo, 'examples', 'journeys', 'broadband-switch.json'),
+        JSON.stringify({
+          id: 'broadband-switch',
+          title: 'Default journey marker',
+          intent: 'Prove the fourth argument default resolves to THIS journey.',
+          entry: 'only',
+          screens: [
+            {
+              id: 'only',
+              purpose: 'The default journey.',
+              blocks: [{ component: 'prompt', props: { heading: 'DEFAULT JOURNEY MARKER' } }],
+              actions: [{ label: 'Done', weight: 'primary', target: null }],
+              annotations: [],
+            },
+          ],
+        }),
+        'utf-8',
+      );
+      await writeFile(
+        join(journeyRepo, 'examples', 'journeys', 'broadband-switch-alt.json'),
+        JSON.stringify({
+          id: 'broadband-switch-alt',
+          title: 'Alt journey marker',
+          intent: 'Prove a real, non-default fourth argument selects THIS journey instead.',
+          entry: 'only',
+          screens: [
+            {
+              id: 'only',
+              purpose: 'The alternate journey.',
+              blocks: [{ component: 'prompt', props: { heading: 'ALT JOURNEY MARKER' } }],
+              actions: [{ label: 'Done', weight: 'primary', target: null }],
+              annotations: [],
+            },
+          ],
+        }),
+        'utf-8',
+      );
+      await git('add', '-A');
+      await git('commit', '-qm', 'two journeys, to prove journeyId selects between them');
+    });
+
+    afterAll(async () => {
+      if (journeyRepo) await rm(journeyRepo, { recursive: true, force: true });
+    });
+
+    it('renders the journey named by a real fourth argument, not the default', async () => {
+      const outPath = join(journeyRepo, 'alt-document.html');
+      const { code, stdout } = await runScript(journeyRepo, outPath, 'broadband-switch-alt');
+
+      expect(code).toBe(0);
+      expect(stdout).toContain('Prerender complete.');
+
+      const written = await readFile(outPath, 'utf-8');
+      expect(written).toContain('ALT JOURNEY MARKER');
+      expect(written).not.toContain('DEFAULT JOURNEY MARKER');
+    });
+
+    it('renders the default journey (broadband-switch) when no fourth argument is given — a real run, not a source-text match', async () => {
+      const outPath = join(journeyRepo, 'default-document.html');
+      const { code, stdout } = await runScript(journeyRepo, outPath);
+
+      expect(code).toBe(0);
+      expect(stdout).toContain('Prerender complete.');
+
+      const written = await readFile(outPath, 'utf-8');
+      expect(written).toContain('DEFAULT JOURNEY MARKER');
+      expect(written).not.toContain('ALT JOURNEY MARKER');
+    });
+  });
+
 });
 
 
 const HTML = '<!doctype html><html><body><h1>entry point document</h1></body></html>';
-
-/** Ask the OS for a free port by binding :0 and reading it back. */
-async function findFreePort(): Promise<number> {
-  const srv = createServer();
-  await new Promise<void>((res, rej) => {
-    srv.once('error', rej);
-    srv.listen(0, '127.0.0.1', () => res());
-  });
-  const addr = srv.address();
-  const port = addr && typeof addr === 'object' ? addr.port : 0;
-  await new Promise<void>((res) => srv.close(() => res()));
-  return port;
-}
 
 describe('serve.ts as the process entry point', () => {
   let entryDir: string;
@@ -135,9 +301,10 @@ describe('serve.ts as the process entry point', () => {
     );
     if (!hadDocument) await writeFile(docPath, HTML, 'utf-8');
 
-    const port = await findFreePort();
+    // PORT=0 asks the OS to assign a free ephemeral port — no separate probe step naming a
+    // number ahead of time, and so nothing for the container's own bind to race against.
     const child = execFile('node', [serveJs], {
-      env: { ...process.env, PORT: String(port) },
+      env: { ...process.env, PORT: '0' },
     });
 
     try {
@@ -156,7 +323,19 @@ describe('serve.ts as the process entry point', () => {
         });
       });
 
-      expect(line).toContain(`listening on port ${port}`);
+      // The port was never chosen ahead of time — it is read back out of the child's own
+      // stdout, which is what actually announces the port the OS handed it.
+      const announced = line.match(/listening on port (\d+)/);
+      expect(announced).not.toBeNull();
+      const port = Number(announced?.[1]);
+      expect(Number.isInteger(port)).toBe(true);
+      expect(port).toBeGreaterThan(0);
+      expect(port).toBeLessThanOrEqual(65535);
+
+      // Confirm it is actually reachable on the announced port, not just that a number was
+      // printed.
+      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(res.status).toBe(200);
     } finally {
       child.kill();
       if (!hadDocument) await rm(docPath, { force: true });
@@ -206,7 +385,12 @@ describe('serve.ts as the process entry point', () => {
     });
 
     it('completes without reporting gaps when nothing is missing', async () => {
-      const { code, stdout } = await runScript(cleanRepo);
+      // Output goes inside the same scratch repo, never the real dist/document.html — this is
+      // the exact test that produced the fixture ("Only implemented components" / "All
+      // implemented" / "Done") found being served in production. Passing outPath explicitly is
+      // the fix; the script's default was never wrong for its own real invocation, only for a
+      // caller like this one that redirected the input but not the output.
+      const { code, stdout } = await runScript(cleanRepo, join(cleanRepo, 'document.html'));
 
       expect(code).toBe(0);
       expect(stdout).toContain('Prerender complete.');

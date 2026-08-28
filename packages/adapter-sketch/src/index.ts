@@ -1,8 +1,9 @@
 /**
  * The sketch adapter: implements the component port in the hand-drawn style.
  *
- * Story 2S.1 implements ONE component — `prompt`. Wave 3.1 will complete the
- * full port. Nothing in this package may know which journey it is rendering.
+ * Implements every component in the port (story 3.1): prompt, compare-set,
+ * input-set, status, option-list, summary. Nothing in this package may know
+ * which journey it is rendering.
  *
  * As of story 2.2, the adapter also supplies `styles` (component appearance,
  * moved out of `render`'s module constant) and `tokens` (this adapter's

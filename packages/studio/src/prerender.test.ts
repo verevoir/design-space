@@ -8,13 +8,27 @@ import { execFile } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ObjectLookupError, ObjectNotFoundError } from '@design-space/store';
 import { prerender } from './prerender.js';
+
+// Partial mock, not vi.mock('node:fs/promises') bare: every real fs call this file already
+// makes (mkdtemp, mkdir, readFile, rm, writeFile — the git-fixture setup above and every
+// existing test) must keep hitting the real filesystem unchanged. Only `rename` is wrapped in
+// a vi.fn, and its DEFAULT implementation is still the real `rename` (vi.fn(actual.rename)) —
+// so this is a no-op for every test except the one below that deliberately overrides it. Same
+// convention serve-entrypoint.test.ts already established: vi.mock calls are hoisted before
+// any import and intercept the named module wherever it is imported, including inside
+// prerender.ts itself.
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
+import { rename } from 'node:fs/promises';
 
 const execFileAsync = promisify(execFile);
 
@@ -75,7 +89,11 @@ describe('prerender', () => {
   it('reports the gaps rather than leaving them to be noticed on the page', async () => {
     const { gaps } = await prerender({ repoPath, journeyId: 'demo', ref: 'HEAD', outPath });
 
-    // Only `prompt` is implemented in wave 2S, so compare-set must come back as a gap.
+    // As of story 3.1 the sketch adapter has a renderer for compare-set, so this no longer
+    // fails as "unimplemented" — but the fixture journey above passes an empty `items` array,
+    // which fails compare-set's own induced port schema (items.min(1)). The adapter is never
+    // called; render() records it as a schema-validation gap instead, under the same
+    // component name. Either way it reaches here as a gap, which is what this test checks.
     expect(gaps).toContain('compare-set');
   });
 
@@ -127,6 +145,63 @@ describe('prerender', () => {
     } finally {
       process.env['PATH'] = origPath;
       rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('prerender writes the document atomically, so a reader never observes a torn file', () => {
+  it('leaves outPath untouched until the rename completes, then holds the complete new content — never a partial write in between', async () => {
+    const target = join(repoPath, 'out', 'atomic-check.html');
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, 'OLD CONTENT', 'utf-8');
+
+    const { rename: realRename } =
+      await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+
+    // A gate this test controls, not a race against the real filesystem: `rename` is paused
+    // open until the test has confirmed outPath is still untouched, then released so the real
+    // rename can complete. Nothing here depends on timing or ordering beyond promise chains.
+    let releaseRename: () => void = () => undefined;
+    const renameGate = new Promise<void>((resolve) => {
+      releaseRename = resolve;
+    });
+    let renameSeen: () => void = () => undefined;
+    const renameSeenPromise = new Promise<void>((resolve) => {
+      renameSeen = resolve;
+    });
+
+    const renameMock = vi.mocked(rename);
+    renameMock.mockImplementation(async (...args: Parameters<typeof realRename>) => {
+      // Fires synchronously, before the gate, on whichever of the two concurrent renames
+      // (document, gaps sidecar) happens to run first — either way neither has completed yet.
+      renameSeen();
+      await renameGate;
+      return realRename(...args);
+    });
+
+    try {
+      const prerenderPromise = prerender({
+        repoPath,
+        journeyId: 'demo',
+        ref: 'HEAD',
+        outPath: target,
+      });
+
+      await renameSeenPromise;
+
+      // The temp file has been written, but the atomic rename is gated open — outPath must be
+      // exactly what it was before this call. If the fix regressed to a plain writeFile
+      // straight to outPath, this would already have changed by the time we get here.
+      const duringWrite = await readFile(target, 'utf-8');
+      expect(duringWrite).toBe('OLD CONTENT');
+
+      releaseRename();
+      await prerenderPromise;
+
+      const after = await readFile(target, 'utf-8');
+      expect(after).toContain('Choose a new package');
+    } finally {
+      renameMock.mockImplementation(realRename);
     }
   });
 });

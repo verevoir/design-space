@@ -463,6 +463,31 @@ leftover blocks; inducing from the two journeys together yields one vocabulary r
 the port carries a version identifier that adapter output can be keyed on; adding a component is
 possible and removing or renaming one within a session is refused.
 
+**Status.** Done, with per-clause evidence below rather than an unqualified assertion. This
+story's bar is about expressibility — whether both journeys validate against the induced
+schemas — not about rendering, which is 3.1's separate, currently-blocked bar; nothing below
+depends on the store or `SAFE_ID`.
+
+- *Both reference journeys are expressible entirely in the induced port with no leftover
+  blocks*: met. `packages/port/src/registry.test.ts` walks every block in both
+  `broadband-switch` and `broadband-switch.postcode-first`, by journey name and screen id, and
+  asserts each validates against `getContract(block.component).propsSchema` — no block in either
+  journey is left unchecked.
+- *Inducing from the two journeys together yields one vocabulary rather than two*: met. Both
+  journeys validate against the same single `PORT_COMPONENTS` registry (`registry.ts`), not two
+  separate ones; `registry.test.ts` also pins it to exactly the six components "induced jointly
+  from both reference journeys" (`index.ts`, `registry.ts`; ADR 0001).
+- *The port carries a version identifier that adapter output can be keyed on*: met.
+  `PORT_VERSION` (`packages/port/src/version.ts`) is exported from the package's public entry
+  point and served at `/health` (`packages/studio/src/server.ts`); `server.test.ts`'s "returns
+  the port version in MAJOR.MINOR format" test asserts the served value matches `PORT_VERSION`
+  exactly.
+- *Adding a component is possible and removing or renaming one within a session is refused*:
+  met. `registry.test.ts`'s own test pins the registry to the exact six names via a hard
+  equality assertion; renaming or removing any of them changes that list and fails the test —
+  and so the gate — immediately. `docs/architecture.md`'s "The port grows monotonically"
+  section states the same invariant in prose.
+
 **Writes.** `packages/port`.
 **Reads.** `packages/journey-model`, `examples/journeys`.
 **Unblocks.** 3.1, 3.2, 3.3 — this is where the plan fans to three.
@@ -550,9 +575,10 @@ different job from designing a hand-drawn rendering, and doing both here would r
 story, two jobs. This story writes the sketch style *against* that contract.
 
 **Outcome.** A hand-drawn adapter implements the whole port. The rendering reads as provisional
-through typography and colour — handwriting face, warm paper, ink rather than black, one hard
-offset shadow, straight geometry — and stays legible with content of arbitrary length.
-Annotations render as margin notes.
+through typography, colour and a hand-drawn (Excalidraw-style) rough outline — handwriting
+face, warm paper, ink rather than black, outline only with no drop shadow (see
+`docs/architecture.md` §5 for the mechanism) — and stays legible with content of arbitrary
+length. Annotations render as margin notes.
 
 **Why.** This is the editing surface and the default, not a peer of the other adapters
 (architecture §5). A mediocre theme render is a shrug; a mediocre sketch render breaks the
@@ -562,6 +588,28 @@ conversation the tool exists to have.
 end to end; a screen whose text is three times longer than the reference still reads; and the
 output has been looked at and accepted by eye — this story has a taste bar that no automated
 check stands in for.
+
+**Status.** Open — not done. One clause below is currently unmeetable, not merely unproven;
+per-clause evidence follows, matching 2.2's convention above rather than an unqualified assertion.
+
+- *Every port component renders with no escape hatch*: met. The sketch adapter implements all
+  six port components with zero missing (`adapter.test.ts`, "sketchAdapter implements every port
+  component (story 3.1)"), and the real `broadband-switch` journey prerenders with zero reported
+  gaps (`prerender-build.test.ts`, "reports zero gaps for the reference journey — every port
+  component now has a sketch renderer (story 3.1)").
+- *Both reference journeys render end to end*: **not met, and currently unmeetable**, not merely
+  untested. The postcode-first variation's own store id is `broadband-switch.postcode-first`
+  (`prerender-build.mjs`'s header comment), but the store's `resolveObject()` calls
+  `validateId()`, and `packages/store/src/resolver.ts`'s
+  `SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/` forbids `.` — so this journey cannot be reached by id
+  at all today. No test anywhere calls `prerender()` with that id; the postcode-first fixture's
+  only coverage is at the port/schema and adapter-unit level, never through the store or through
+  `prerender-build.mjs`'s real invocation path.
+- *A screen whose text is three times longer than the reference still reads*: unproven, not
+  assumed either way — checked directly, and no test or fixture in the repository exercises
+  stretched or long-form text against either journey.
+- *The output has been looked at and accepted by eye*: met. The operator has viewed the rendered
+  journey and accepted it, iterating across several rounds.
 
 **Writes.** `packages/adapter-sketch`.
 **Note.** The one story in phase 1 that is not bulk work.

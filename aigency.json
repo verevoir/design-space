@@ -30,6 +30,13 @@
       "description": "ESLint. Blocking because a worker can fix it by editing its own output, which is the line between a gate that teaches and one that nags.",
       "blocking": true,
       "timeoutMs": 60000
+    },
+    {
+      "name": "prerender",
+      "kind": "query",
+      "command": ["node", "packages/studio/scripts/prerender-build.mjs"],
+      "description": "Regenerates packages/studio/dist/document.html by rendering the broadband-switch journey at git HEAD with the compiled sketch adapter, and reports what it did on stdout — including a 'gaps (unimplemented components):' line naming anything the adapter has no renderer for. Requires `npm run build` to have already run: the script imports from each package's dist/, not its source.",
+      "timeoutMs": 120000
     }
   ]
 }
