@@ -40,6 +40,16 @@ npm run verify
 
 `npm run verify` builds every package with `tsc -b`, runs all tests with Vitest, lints with ESLint, and checks that every documented exit contract under `scripts/` is precisely asserted in tests (`scripts/check-exit-contracts.mjs`). It must be green before any change merges.
 
+**Optional: a local pre-push gate.** `.githooks/pre-push` runs `npm run verify` before a push and
+blocks it on failure — a seatbelt against your own slip, not enforcement (it's bypassable with
+`git push --no-verify`, and the CI panel remains what actually certifies a change). Committing
+`.githooks/pre-push` does not turn it on by itself: `core.hooksPath` is local, per-clone git
+config, so each clone that wants it has to opt in once:
+
+```sh
+git config core.hooksPath .githooks
+```
+
 ### Container (Docker)
 
 The studio server is packaged as a multi-stage Docker image. The build stage compiles every package and prerenders the broadband-switch journey into a static HTML document; the runtime stage serves it from that document with no git dependency.

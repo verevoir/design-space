@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+# design-space — local pre-push gate.
+#
+# Runs this repository's own gates (npm run verify: build, test, lint,
+# exit-contracts) before a push and BLOCKS the push if any of them fail.
+#
+# THIS IS A SEATBELT, NOT ENFORCEMENT. It is bypassable at will
+# (git push --no-verify), and it runs on whatever is checked out locally,
+# not against a clean checkout the way CI does. Its job is to catch your own
+# slip before it leaves this machine — a broken build, a failing test, a
+# lint violation — not to certify the change. The CI panel
+# (.github/workflows/antagonistic-review.yml, the required `promote` gate)
+# remains the certifier: nothing this hook does substitutes for review, and a
+# clean run here is not an approval.
+#
+# There is no local review half here. capabilities' local review panel
+# (pre-gate:local) is not usable from this repo today — the wrapper script
+# is not part of that package's published files, and the package is private.
+# This hook only runs the gates design-space itself declares.
+echo "pre-push: running npm run verify (build, test, lint, exit-contracts) — bypass with: git push --no-verify"
+
+npm run verify
+
+code=$?
+if [ "$code" -ne 0 ]; then
+  echo ""
+  echo "pre-push BLOCKED the push (npm run verify exited ${code})."
+  echo "  This is a local seatbelt, not enforcement — the CI panel is what actually certifies a change."
+  echo "  Fix the failure above, or bypass deliberately with: git push --no-verify"
+fi
+exit "$code"

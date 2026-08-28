@@ -20,6 +20,7 @@
     "close-preview-environment.test.ts",
     "service-urls.test.ts",
     "exit-contracts.test.ts",
-    "upsert-preview-comment.test.ts"
+    "upsert-preview-comment.test.ts",
+    "pre-push-hook.test.ts"
   ]
 }
