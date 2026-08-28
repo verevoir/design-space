@@ -399,6 +399,101 @@ assertion — and confirm `rollback.sh` restores traffic to the captured rollbac
 against the live service. This carries real production risk (a live traffic cut during the test)
 and is an operator decision to run deliberately; it is not planned or scheduled here.
 
+**Provenance, stated explicitly:** the dates on entries in this section mark when the events they
+describe happened, not when the entries were written. Entries here are composed after the fact,
+from session records, rather than contemporaneously as each event was settled. A reader should
+weigh the dates accordingly: they mark the incidents, not the record-keeping.
+
+**Known gap, recorded 2026-08-20.** Branch protection on this repository requires status checks
+to be green; it does not require that `promote.yml` was the thing that ran them through to a
+merge. PR #18 is the proof: a direct merge call landed it the moment `ci` and Socket Security
+were green, and nothing in branch protection asked whether the promotion sequence — deploy,
+smoke, canary, traffic cut — had happened at all. What has protected every prior change onto
+this repository is that nothing except `promote.yml` was calling the merge API: convention, not
+enforcement, and convention held only until an instruction assumed otherwise. See the ADR 0007
+amendment of 2026-08-20 for the incident this records.
+
+**Candidate fix, not decided here.** A required status check named `promote` — the same pattern
+`antagonistic-review` already uses to make a check mandatory rather than advisory — would close
+this: a merge could not go green without `promote.yml` itself reporting success, so a bare merge
+call would have nothing to point at. The tradeoff is real and unresolved: `promote.yml`
+deliberately skips certain flows — a fork PR gets no preview and cannot be promoted at all, since
+WIF's provider condition is scoped to `verevoir/design-space` and a fork's head can be issued no
+credential (both `promote.yml`'s and `preview.yml`'s own fork guards say so directly) — so a
+required `promote` check would also block those PRs from ever going green, not only the
+accidental-bypass case it is meant to catch. Whether that tradeoff is acceptable, and whether a
+narrower mechanism exists that catches the bypass without also catching every flow `promote.yml`
+intentionally skips, needs an operator ruling — this entry states the hole and the candidate fix
+without pre-deciding which way that ruling should go, the way 2.2's disputed clause did before
+its 2026-08-19 ruling.
+
+**Correction, 2026-08-25 — the candidate fix above does not close the hole, and its stated tradeoff
+is inverted.** The required-status-check fix recorded above does not work. GitHub's documented
+behaviour, confirmed against GitHub's own documentation on 2026-08-25: a job skipped by a
+conditional `if:` reports Success and does not block a merge, even as a required check — only a
+whole workflow skipped by path or branch filtering stays Pending and blocks. `promote.yml` is one
+job gated by a single job-level condition (draft status and the `promote` label); an unlabelled
+PR skips that job rather than failing any step in it, so a required `promote` check would report
+skipped, skipped counts as success, and the bare merge stays permitted exactly as before.
+Observed directly rather than merely reasoned: PR #9, unlabelled, already carries a check run
+named `promote` with conclusion `skipped` on its head — the check exists and reports, it does not
+simply fail to appear. See the ADR 0007 amendment of 2026-08-25 for the full argument, including
+the pattern that does work (`antagonistic-review`'s split between a skippable panel job and an
+`if: always()` aggregator, verified to fail closed by reading `aggregate.sh` directly).
+
+The stated tradeoff — that a required `promote` check "would also block those PRs from ever going
+green" — is inverted, and this part is inference from the workflow's control flow: no fork PR has
+been observed exercising this path. Reading `promote.yml`'s YAML directly: the job-level `if:`
+tests only draft status and the `promote` label, not fork status. The fork-guard step (`Skip
+promotion for fork pull requests`) writes an explanation to the job summary and exits 0 rather
+than failing. Every step after it carries its own
+`if: github.event.pull_request.head.repo.full_name == github.repository`, so on a fork PR those
+steps are skipped, not failed. A labelled fork PR therefore runs the job, fails nothing, and
+concludes success — having deployed, smoked and promoted nothing. Forks are not blocked from
+going green; they pass trivially, which is a worse problem for a required check than the one this
+entry was worried about.
+
+What the ruling now actually turns on, stated as a direction and not a decision: a required check
+on `promote.yml` cannot enforce anything, because `promote.yml` performs its own merge (at the
+squash-merge step, authenticated as the default `GITHUB_TOKEN`) after that same check would need
+to have already concluded — a required gate on the workflow that merges itself is a merge-time
+deadlock, detailed in the ADR 0007 amendment of 2026-08-25. Restricting who may push to `main` —
+refusing a bare merge call on the identity making it, rather than on check status — is one
+direction that does not depend on check-status timing at all, but it is not decided here. This
+entry states the hole and the options; the operator rules.
+
+**Observation, 2026-08-26 — the review gate's fail-closed behaviour was observed operating in
+production, and separately, an undiagnosed harness defect appeared alongside it.** On PR #20's
+antagonistic review run against commit `88176c09a90daae80c35728244f020c37e1f4738`, the
+`review (testing)` lens returned `REJECT` with zero findings, and its own job log gives the
+reason directly: `BASE_SHA`, `HEAD_SHA` and `HEAD_ROOT` came back empty, so it had no diff to
+review, and it wrote a fail-closed verdict rather than approving on absent input or fabricating a
+finding. That is the `aggregate.sh` fail-closed property described in the amendment above, now
+observed operating end-to-end on a real run, rather than established only by reading the script.
+Stated separately and plainly, because the two halves should not be blurred together: why those
+three environment variables were unset on this particular run is an unexplained defect in the
+review harness. It is not diagnosed here, and no fix is proposed here. The fail-closed behaviour
+worked as designed; the environment that should have supplied it did not, and nobody yet knows
+why.
+
+**Correction, 2026-08-26 (later the same day) — the environment failure recorded above is now substantially diagnosed, and the panelist was not the faulty component.**
+
+**Provenance, stated explicitly:** what follows comes from the `review (testing)` job log for the `88176c0` run, fetched by another session via `gh api actions/jobs/{id}/logs` and relayed to this record by the operator. This entry has not independently re-verified it — the tooling available to this record cannot reach a historical job log: the tool that reads PR checks answers only for a PR's *current* head, and every job-log-fetching row declared in this repository's local scaffolding (`aigency.json`) carries a job id fixed at declaration time, none of which targets this run. Recorded as observed-in-log-by-another-session, not as independently confirmed here.
+
+**Correction, 2026-08-27 — the `aigency.json` claim above is false of this repository, and is dropped.** This repository's `aigency.json` carries no job-log-fetching rows at all; that description was true of a different, uncommitted working tree (a standalone clone with its own local `aigency.json` carrying ad hoc polling rows), not of this repository, and should not have been asserted here. The narrower point still holds on its own: `read_pull_request_review` answers only for a pull request's *current* head, so once the head moved past `88176c0`, that run's job log became unreachable through it — a limit on the belt's reach, not evidence the log was deleted.
+
+**What the log established.** The workflow step itself set all three variables correctly — `BASE_SHA=5dd9b244c65c02de7b58083ac954cab699d4e368`, `HEAD_SHA=88176c09a90daae80c35728244f020c37e1f4738`, `HEAD_ROOT=/home/runner/work/_temp/pr-head` — but all three were empty inside the Bash tool the lens actually ran: its first command was an environment dump, and the output was `BASE_SHA= HEAD_SHA= HEAD_ROOT=`, followed by `ls: cannot access '': No such file or directory`. **The panelist inspected before it reported, and its summary was accurate** — it dumped the environment, found nothing, and wrote `REJECT` with zero findings naming the cause. State this plainly, since the observation above reads as though the lens itself were the faulty part: it was not. Sibling lenses on the identical run received the populated values through the identical command and ran normally — `security` and `correctness` each made 11–12 tool calls; `testing` made three and stopped, having correctly concluded there was nothing to review.
+
+This means the failure is **non-deterministic across the five parallel lenses of one run**, not a fixed defect in the env-plumbing path — a deterministic defect would have failed all five identically, and it did not. It should be expected to recur and to resist reproduction on demand.
+
+This refutes both hypotheses entertained when the observation above was first written: that the executing workflow text differed from what sat on base at the time (it ran as written — the log shows the step itself resolved every variable correctly), and that the panelist was narrating a failure it had not actually inspected (it inspected first, then reported what it found).
+
+**What remains open, precisely.** Whether the *entire* environment was empty inside the tool that ran, or only the workflow's three custom variables. If `PATH`/`RUNNER_TEMP`/`GITHUB_WORKSPACE` were populated while only the custom vars were empty, the fault sits in `claude-code-base-action`'s own `env:` propagation into the tool; if everything was empty, the fault is a bare subprocess spawn losing its parent's environment. These are different defects with different owners, and the log available could answer this but has not yet been read for that specific question.
+
+**The durable, gate-level finding, which depends on none of the above and needs no log evidence to check.** To `aggregate.sh`, a lens that could not review is indistinguishable from a lens that reviewed and rejected. The verdict *summary* tells the two apart for a human reader — `REJECT` with zero findings and an environment message, versus `REJECT` with findings quoting evidence — but nothing downstream reads the summary; the gate reads the `verdict` token alone. The consequence: as built, the gate cannot distinguish a working panel from one silently running four lenses out of five. This is not a claim that `aggregate.sh` "collapses everything" — it does not: a missing verdict file gets its own "did not run to completion" message in the report, an absent verdict field renders as none, an untakeable findings count prints `?`. What is binary is the *gate's decision*, not its reporting — unanimous-approval-or-closed is a project policy choice, not a defect in the aggregator. Whether
+that policy choice is the right one is not a decision this repository has recorded anywhere;
+stating it here describes the gate's current behaviour, it does not cite a ruling on it.
+
 ### 2S.5 The smoke test authenticates as an identity that can only invoke
 
 **Outcome.** Preview and canary smoke tests authenticate as a principal holding
