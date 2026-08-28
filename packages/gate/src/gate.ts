@@ -266,10 +266,20 @@ function hasImportantSuffix(rawValue: string): boolean {
  * `!important` one if any exist (regardless of what comes after it), else
  * the last normal one. Importance is checked before source order, matching
  * the real CSS cascade rule for two declarations of the same specificity.
+ *
+ * Requires `occurrences` to be non-empty. Its only caller, `resolveSlot`,
+ * already checks this before calling — given a non-empty input, every
+ * iteration of the loop below assigns either `lastImportant` or
+ * `lastNormal`, so by the time the loop ends at least one is always set:
+ * the `??` below can never fall through to `undefined`. That is true for
+ * every non-empty input, not just the typical one, which is why the return
+ * type carries no `| undefined` — an `undefined` return here would be
+ * unreachable and untestable dead code, exactly the shape a review round
+ * caught when this function used to advertise that possibility.
  */
 function resolveWinningDeclaration(
   occurrences: readonly DeclarationOccurrence[],
-): DeclarationOccurrence | undefined {
+): DeclarationOccurrence {
   let lastImportant: DeclarationOccurrence | undefined;
   let lastNormal: DeclarationOccurrence | undefined;
   for (const occurrence of occurrences) {
@@ -279,7 +289,12 @@ function resolveWinningDeclaration(
       lastNormal = occurrence;
     }
   }
-  return lastImportant ?? lastNormal;
+  // Non-null by the precondition above (occurrences non-empty) — not by
+  // TypeScript's own inference, since `occurrences` is a plain array type
+  // rather than a non-empty tuple. This documents an invariant the caller
+  // holds, rather than re-deriving it in a way that would itself need an
+  // unreachable else-branch.
+  return (lastImportant ?? lastNormal) as DeclarationOccurrence;
 }
 
 /**
@@ -321,9 +336,6 @@ function resolveSlot(
     return undefined;
   }
   const winning = resolveWinningDeclaration(occurrences);
-  if (winning === undefined) {
-    return undefined;
-  }
   const winningParsed = parseColourDeclarationValue(winning.rawValue);
   if (winningParsed !== null) {
     return winningParsed;
