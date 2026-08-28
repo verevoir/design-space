@@ -32,6 +32,16 @@
  * shape and are bounded for the same reason, even though in practice a startup hang would
  * eventually be caught by Cloud Run's own deploy health check rather than by this process.
  *
+ * All three reads also take `signal` as a PARAMETER rather than each constructing its own
+ * `AbortSignal.timeout()` internally. The first pass at this fix only did that for the
+ * per-request read (`readRenderedDocument`), which left the startup probe's and the sidecar's
+ * own `AbortError` branches unreachable by any test — a real review finding, not a hypothetical
+ * one: the reviewer named the exact regression it left uncaught — `describeReadFailure`'s
+ * `err.name === 'AbortError'` check silently reverting to `err.code` (which an `AbortError`
+ * does not set) would have passed every existing test while quietly breaking the diagnostic
+ * message. `probeDocumentReadable` and `readGapsSidecar` below now take the identical shape,
+ * and `serve-read-timeout.test.ts` drives all three the same way.
+ *
  * The gaps sidecar is still read once, at startup, and is not part of this per-request
  * freshness: nothing in the response surfaces gaps today (see the comment on `gaps` below),
  * so there is nothing yet for a stale sidecar to make visibly wrong.
@@ -120,48 +130,50 @@ export async function readRenderedDocument(
 }
 
 /**
- * Read a pre-rendered document and its gaps sidecar, and serve them — the document freshly on
- * every request, the gaps sidecar once (see `readRenderedDocument`).
+ * A startup probe, not what gets served: confirms the document is readable NOW, so a container
+ * that can never serve fails fast and loudly at boot rather than starting and answering every
+ * request with a 503. What actually reaches a response is read again, fresh, by
+ * `readRenderedDocument` on each request — this function's result is deliberately discarded by
+ * its caller.
  *
- * Exported so tests can drive the real thing against a real path without the production entry
- * point having to accept one from outside.
+ * `signal` is a parameter for the same reason as `readRenderedDocument`'s: so
+ * `serve-read-timeout.test.ts` can drive the real read against a real, controlled
+ * already-aborted signal, rather than only exercising the ENOENT path this catch block already
+ * handled. `serveDocument` supplies `AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS)`.
  */
-export async function serveDocument(documentPath: string): Promise<Server> {
-  const gapsPath = gapsPathFor(documentPath);
+export async function probeDocumentReadable(documentPath: string, signal: AbortSignal): Promise<void> {
+  await readFile(documentPath, { encoding: 'utf-8', signal }).catch(
+    (err: NodeJS.ErrnoException) => {
+      throw new Error(
+        `Studio server failed to read the pre-rendered document at ${documentPath}: ${describeReadFailure(err)}. ` +
+          'Run the prerender build step before starting the server.',
+        { cause: err },
+      );
+    },
+  );
+}
 
-  // A startup probe, not what gets served: this confirms the document is readable NOW, so a
-  // container that can never serve fails fast and loudly at boot rather than starting and
-  // answering every request with a 503. What actually reaches a response is read again, fresh,
-  // by `readRenderedDocument` on each request below — this result is deliberately discarded.
-  // Bounded by the same DOCUMENT_READ_TIMEOUT_MS as the per-request read below — an unbounded
-  // read here is the identical shape (fs.readFile with no signal), just at startup rather than
-  // per request; a stalled disk here would hang the whole container before it ever binds a port.
-  await readFile(documentPath, {
-    encoding: 'utf-8',
-    signal: AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS),
-  }).catch((err: NodeJS.ErrnoException) => {
-    throw new Error(
-      `Studio server failed to read the pre-rendered document at ${documentPath}: ${describeReadFailure(err)}. ` +
-        'Run the prerender build step before starting the server.',
-      { cause: err },
-    );
-  });
-
-  // The gaps sidecar is carried so the server HAS the data; no response surfaces it yet
-  // (`handleRequest` reads only `rendered.html`). So an unreadable sidecar must not stop a
-  // perfectly good document being served — refusing to start over data nothing reads would
-  // trade real availability for none. It is reported on stderr instead, because a build that
-  // writes an unparseable sidecar is still a defect worth seeing.
-  //
-  // Revisit when the server actually surfaces gaps: at that point serving an empty list WOULD
-  // hide a finding, and failing loudly becomes the right call. At that same point, re-read this
-  // per request too, the way `html` now is.
-  // Bounded for the same reason as the startup probe above — an unbounded readFile here is the
-  // identical shape, just against the sidecar path instead of the document path.
-  const gaps: readonly GapRecord[] = await readFile(gapsPath, {
-    encoding: 'utf-8',
-    signal: AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS),
-  })
+/**
+ * Read the gaps sidecar once, at startup. The gaps sidecar is carried so the server HAS the
+ * data; no response surfaces it yet (`handleRequest` reads only `rendered.html`). So an
+ * unreadable sidecar must not stop a perfectly good document being served — refusing to start
+ * over data nothing reads would trade real availability for none. It is reported on stderr
+ * instead, because a build that writes an unparseable sidecar is still a defect worth seeing.
+ *
+ * Revisit when the server actually surfaces gaps: at that point serving an empty list WOULD
+ * hide a finding, and failing loudly becomes the right call. At that same point, re-read this
+ * per request too, the way `html` now is.
+ *
+ * `signal` is a parameter for the same reason as `readRenderedDocument`'s and
+ * `probeDocumentReadable`'s: so a test can drive this against a real, controlled
+ * already-aborted signal and observe the diagnostic on stderr, rather than only exercising the
+ * ENOENT and JSON.parse-failure paths this catch block already handled.
+ */
+export async function readGapsSidecar(
+  gapsPath: string,
+  signal: AbortSignal,
+): Promise<readonly GapRecord[]> {
+  return readFile(gapsPath, { encoding: 'utf-8', signal })
     .then((raw) => JSON.parse(raw) as GapRecord[])
     .catch((err: NodeJS.ErrnoException) => {
       if (err.code !== 'ENOENT') {
@@ -172,6 +184,24 @@ export async function serveDocument(documentPath: string): Promise<Server> {
       }
       return [];
     });
+}
+
+/**
+ * Read a pre-rendered document and its gaps sidecar, and serve them — the document freshly on
+ * every request, the gaps sidecar once (see `readRenderedDocument`).
+ *
+ * Exported so tests can drive the real thing against a real path without the production entry
+ * point having to accept one from outside.
+ */
+export async function serveDocument(documentPath: string): Promise<Server> {
+  const gapsPath = gapsPathFor(documentPath);
+
+  await probeDocumentReadable(documentPath, AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS));
+
+  const gaps: readonly GapRecord[] = await readGapsSidecar(
+    gapsPath,
+    AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS),
+  );
 
   const server = await startServer({
     getRendered: () =>

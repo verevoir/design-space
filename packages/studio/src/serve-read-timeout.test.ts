@@ -1,8 +1,13 @@
 /**
- * Tests for the disk-read bound added to serve.ts's per-request and startup document reads —
- * round 12's fix for the antagonistic review's resilience-lens rejection of `d092ce1`: a
- * per-request `readFile` with no timeout, `AbortSignal`, or other bound could hold a request
- * open indefinitely if the disk stalled.
+ * Tests for the disk-read bound added to serve.ts's per-request, startup-probe and
+ * gaps-sidecar reads — round 12's fix for the antagonistic review's resilience-lens rejection
+ * of `d092ce1` (a per-request `readFile` with no timeout, `AbortSignal`, or other bound could
+ * hold a request open indefinitely if the disk stalled), extended in round 13 to cover the
+ * other two read sites: round 12 only made `readRenderedDocument` take `signal` as an
+ * injectable parameter, leaving `serveDocument`'s startup probe and gaps-sidecar reads
+ * constructing `AbortSignal.timeout()` inline — bounded, but with their `AbortError` branches
+ * unreachable by any test. `probeDocumentReadable` and `readGapsSidecar` now take the same
+ * injectable-`signal` shape, and this file drives all three the same way.
  *
  * WHY THIS FILE DOES NOT MOCK node:fs/promises (unlike serve-entrypoint.test.ts): the point
  * here is to exercise Node's REAL, documented `signal` support on `fs.promises.readFile` — a
@@ -48,12 +53,27 @@
  * does NOT prove that `AbortSignal.timeout(5_000)` actually fires at real-world 5000ms; that is
  * Node's own documented timer contract, covered by Node's own test suite, not something this
  * package re-verifies. Recorded here plainly rather than left to be assumed from a green run.
+ *
+ * WHY THE ASSERTIONS BELOW CHECK THE EXACT "timed out after ...ms" WORDING, NOT JUST "did it
+ * reject/write something": the reviewer who found this gap named the specific regression a
+ * weaker assertion would miss — `describeReadFailure`'s `err.name === 'AbortError'` check
+ * silently reverting to `err.code` (which an `AbortError` does not set) would still make the
+ * read fail, and would still produce SOME message, but the message would be Node's generic
+ * "The operation was aborted." rather than the diagnostic this fix exists to supply. Every
+ * abort-path assertion below therefore matches the specific timeout wording, not merely
+ * "rejects" or "writes to stderr" — so that exact regression fails these tests, not just a
+ * hypothetical total breakage.
  */
 import { describe, it, expect } from 'vitest';
 import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readRenderedDocument, DOCUMENT_READ_TIMEOUT_MS } from './serve.js';
+import {
+  readRenderedDocument,
+  probeDocumentReadable,
+  readGapsSidecar,
+  DOCUMENT_READ_TIMEOUT_MS,
+} from './serve.js';
 
 describe('readRenderedDocument(): the disk read is bounded by a signal, and a timeout is diagnosable', () => {
   it('rejects immediately, without reading, when handed an already-aborted signal — the shape a fired timeout produces', async () => {
@@ -120,5 +140,137 @@ describe('readRenderedDocument(): the disk read is bounded by a signal, and a ti
   it('the production timeout bound is 5 seconds — a same-container disk read, not a network call', () => {
     // Pinned so a change to the constant is a deliberate, reviewed decision, not a silent drift.
     expect(DOCUMENT_READ_TIMEOUT_MS).toBe(5_000);
+  });
+});
+
+describe('probeDocumentReadable(): the startup probe read is bounded by an injectable signal, and a timeout is diagnosable', () => {
+  it('rejects with the specific timeout wording when handed an already-aborted signal', async () => {
+    const dir = join(tmpdir(), `studio-probe-timeout-test-${process.pid}-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, 'document.html');
+    await writeFile(path, '<html>should never be read — the signal is already aborted</html>', 'utf-8');
+
+    try {
+      const alreadyAborted = AbortSignal.abort();
+      // Matches the exact wording, not merely "rejects" — see this file's header on why a
+      // weaker assertion would not catch describeReadFailure reverting to err.code.
+      await expect(probeDocumentReadable(path, alreadyAborted)).rejects.toThrow(
+        new RegExp(`timed out after ${DOCUMENT_READ_TIMEOUT_MS}ms`),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still names ENOENT distinctly from a timeout, so the pre-existing startup-failure message is unchanged', async () => {
+    const missingPath = join(
+      tmpdir(),
+      `studio-probe-timeout-missing-${process.pid}-${Date.now()}.html`,
+    );
+    const controller = new AbortController();
+
+    let message = '';
+    try {
+      await probeDocumentReadable(missingPath, controller.signal);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(/ENOENT|no such file/);
+    expect(message).not.toContain('timed out');
+    expect(message).toContain('Run the prerender build step before starting the server');
+  });
+
+  it('resolves without disturbing the happy path when the signal never aborts', async () => {
+    const dir = join(tmpdir(), `studio-probe-timeout-happy-${process.pid}-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, 'document.html');
+    await writeFile(path, '<html>ordinary probe read</html>', 'utf-8');
+
+    try {
+      await expect(
+        probeDocumentReadable(path, AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS)),
+      ).resolves.toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('readGapsSidecar(): the sidecar read is bounded by an injectable signal, and a timeout is diagnosable on stderr', () => {
+  it('reports the specific timeout wording on stderr, and serves an empty gap list, when handed an already-aborted signal', async () => {
+    // readGapsSidecar never throws for a non-ENOENT failure — it logs to stderr and returns []
+    // (see its own doc comment: an unreadable sidecar must not stop a good document being
+    // served). So the timeout diagnostic has to be observed on stderr, the same way
+    // serve-e2e.test.ts's existing "unreadable gaps sidecar" test observes a JSON.parse
+    // failure — this is the identical mechanism, just triggered by an abort instead.
+    const dir = join(tmpdir(), `studio-sidecar-timeout-test-${process.pid}-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const gapsPath = join(dir, 'document.gaps.json');
+    // Valid JSON, so a passing test that accidentally DID read the file would still be
+    // distinguishable — the real assertion is that this content is never reached at all.
+    await writeFile(gapsPath, '[]', 'utf-8');
+
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: Uint8Array | string): boolean => {
+      stderrChunks.push(String(chunk));
+      return true;
+    };
+
+    try {
+      const alreadyAborted = AbortSignal.abort();
+      const gaps = await readGapsSidecar(gapsPath, alreadyAborted);
+      expect(gaps).toEqual([]);
+    } finally {
+      process.stderr.write = origWrite;
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    const stderrOutput = stderrChunks.join('');
+    // Matches the exact wording, not merely "wrote something to stderr" — see this file's
+    // header on why a weaker assertion would not catch describeReadFailure reverting to
+    // err.code, which would still produce SOME stderr line, just the wrong one.
+    expect(stderrOutput).toContain(`timed out after ${DOCUMENT_READ_TIMEOUT_MS}ms`);
+    expect(stderrOutput).toContain('could not read the gaps sidecar');
+  });
+
+  it('stays silent on stderr and serves an empty list for an absent sidecar, unaffected by the signal change', async () => {
+    const missingPath = join(
+      tmpdir(),
+      `studio-sidecar-timeout-missing-${process.pid}-${Date.now()}.json`,
+    );
+    const controller = new AbortController();
+
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: Uint8Array | string): boolean => {
+      stderrChunks.push(String(chunk));
+      return true;
+    };
+
+    let gaps: readonly unknown[];
+    try {
+      gaps = await readGapsSidecar(missingPath, controller.signal);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+
+    expect(gaps).toEqual([]);
+    expect(stderrChunks.join('')).toBe('');
+  });
+
+  it('reads the real sidecar content when the signal never aborts, so the bound does not disturb the happy path', async () => {
+    const dir = join(tmpdir(), `studio-sidecar-timeout-happy-${process.pid}-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const gapsPath = join(dir, 'document.gaps.json');
+    const records = [{ screenId: 'screen-1', component: 'compare-set' }];
+    await writeFile(gapsPath, JSON.stringify(records), 'utf-8');
+
+    try {
+      const gaps = await readGapsSidecar(gapsPath, AbortSignal.timeout(DOCUMENT_READ_TIMEOUT_MS));
+      expect(gaps).toEqual(records);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

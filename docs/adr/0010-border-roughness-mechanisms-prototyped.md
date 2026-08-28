@@ -12,7 +12,9 @@ in "Trigger to revisit".
 sketch adapter's hand-drawn border treatment as a percent-encoded `data:image/svg+xml`
 `feTurbulence` / `feDisplacementMap` CSS filter — declared once as the `--ds-rough-filter` custom
 property and applied via `filter: var(--ds-rough-filter)` on a `::before` layer over
-`.ds-screen`, `.ds-action`, `.ds-status` and the compare-set `<table>`. That is one of three
+`.ds-screen`, `.ds-action`, `.ds-status`, the compare-set `<table>`, and — via a wrapper span,
+since `<input>` cannot itself host a pseudo-element — `input-set`'s and `option-list`'s control
+wrappers (`.ds-field__control-wrap`, `.ds-option__control-wrap`). That is one of three
 mechanisms that were prototyped
 live today before that one was chosen. The other two are recorded here so the reasoning survives
 a restart rather than being re-derived — or re-attempted — later.
