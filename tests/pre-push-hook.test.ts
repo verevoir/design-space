@@ -118,6 +118,14 @@ describe('.githooks/pre-push — behaviour, against a stub npm', () => {
     const r = runHook(dir);
 
     expect(r.stdout).toContain('BLOCKED');
-    expect(r.stdout).toContain('--no-verify');
+    // Anchored to the failure-only sentence, not the bare substring '--no-verify' — the hook
+    // also prints '--no-verify' unconditionally in its startup line (present on every run,
+    // success or failure), so a loose toContain('--no-verify') is satisfied by that line alone
+    // and cannot fail even if this failure-specific bypass instruction is deleted entirely.
+    // review (testing) rejection against 7624b6a, verified by mutation: deleting the line below
+    // from the hook left the old assertion green.
+    expect(r.stdout).toContain(
+      'Fix the failure above, or bypass deliberately with: git push --no-verify',
+    );
   });
 });
