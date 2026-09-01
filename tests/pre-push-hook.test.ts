@@ -172,18 +172,24 @@ describe('.githooks/pre-push — behaviour, against a stub npm', () => {
   '.githooks/pre-push — bounds npm run verify with `timeout` (this machine has one on PATH)',
   () => {
     it('kills a hanging npm run verify after the configured bound, rather than blocking the push forever', async () => {
-      // The stub sleeps 5s; the bound is overridden to 1s, so `timeout` kills it well inside
-      // this test's own 10s HOOK_SPAWN_TIMEOUT_MS backstop — never depends on that backstop firing.
-      const dir = await stubNpmSleep(5, 0);
-      const r = runHookWithEnv(dir, { PRE_PUSH_VERIFY_TIMEOUT_S: '1' });
+      // The stub sleeps 9s; the bound is overridden to 3s, so `timeout` kills it with several
+      // seconds of margin inside this test's own 10s HOOK_SPAWN_TIMEOUT_MS backstop — never
+      // depends on that backstop firing. 3s (not something tighter like 1s) is deliberate: under
+      // a loaded test run this process's own spawn/exec overhead alone has been observed to
+      // exceed 1s, which would kill even a genuinely-fast run and make the OTHER test below
+      // ("does not disturb") flaky for a reason that has nothing to do with the hook's logic.
+      const dir = await stubNpmSleep(9, 0);
+      const r = runHookWithEnv(dir, { PRE_PUSH_VERIFY_TIMEOUT_S: '3' });
 
       expect(r.code).not.toBe(0);
-      expect(r.stdout).toContain('did not complete within 1s and was killed');
+      expect(r.stdout).toContain('did not complete within 3s and was killed');
     });
 
     it('does not disturb a normal, fast run — the bound only matters when something hangs', async () => {
+      // 5s of headroom over an instant no-op stub, generous enough to absorb this process's own
+      // spawn/exec overhead under load without the bound itself becoming the flaky variable.
       const dir = await stubNpm(0);
-      const r = runHookWithEnv(dir, { PRE_PUSH_VERIFY_TIMEOUT_S: '1' });
+      const r = runHookWithEnv(dir, { PRE_PUSH_VERIFY_TIMEOUT_S: '5' });
 
       expect(r.code).toBe(0);
       expect(r.stdout).not.toContain('was killed');
