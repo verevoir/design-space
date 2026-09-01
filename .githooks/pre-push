@@ -10,20 +10,44 @@
 # slip before it leaves this machine — a broken build, a failing test, a
 # lint violation — not to certify the change. The CI panel
 # (.github/workflows/antagonistic-review.yml — its `antagonistic-review`
-# aggregator job, not `promote`, is the required status check; see ADR 0007
-# for why `promote` is label-gated, skippable, and cannot serve that role)
-# remains the certifier: nothing this hook does substitutes for review, and a
-# clean run here is not an approval.
+# aggregator job is documented, in that file's own header, as the required
+# status check, not `promote`; see ADR 0007 for why `promote` is label-gated,
+# skippable, and cannot serve that role) remains the certifier: nothing this
+# hook does substitutes for review, and a clean run here is not an approval.
+# Whether that documented setting matches this repository's LIVE branch
+# protection configuration on GitHub has never been read back and confirmed —
+# ADR 0007 records that gap (its "belt gap") explicitly rather than assuming
+# either way, and this comment makes no stronger claim than the ADR does.
 #
 # There is no local review half here. capabilities' local review panel
 # (pre-gate:local) is not usable from this repo today — the wrapper script
 # is not part of that package's published files, and the package is private.
 # This hook only runs the gates design-space itself declares.
+#
+# npm run verify is bounded, not left to hang forever: PRE_PUSH_VERIFY_TIMEOUT_S
+# (default 600s = 10 minutes — generous headroom over a cold install/build/test/
+# lint/exit-contracts run; it exists to catch a genuine hang, not to bound a
+# normal run) wraps it via the coreutils `timeout` command when it is on PATH.
+# Where `timeout` is absent (stock macOS ships no GNU/BSD `timeout`), the hook
+# degrades to running unbounded rather than refusing to work at all — a hang
+# goes uncaught there, but every push still runs the gate.
+PRE_PUSH_VERIFY_TIMEOUT_S="${PRE_PUSH_VERIFY_TIMEOUT_S:-600}"
+
 echo "pre-push: running npm run verify (build, test, lint, exit-contracts) — bypass with: git push --no-verify"
 
-npm run verify
+if command -v timeout >/dev/null 2>&1; then
+  timeout "$PRE_PUSH_VERIFY_TIMEOUT_S" npm run verify
+  code=$?
+  if [ "$code" -eq 124 ]; then
+    echo ""
+    echo "pre-push: npm run verify did not complete within ${PRE_PUSH_VERIFY_TIMEOUT_S}s and was killed — this looks like a hang, not an ordinary failure."
+  fi
+else
+  echo "pre-push: 'timeout' is not on PATH — running npm run verify unbounded (a hang will not be caught here)."
+  npm run verify
+  code=$?
+fi
 
-code=$?
 if [ "$code" -ne 0 ]; then
   echo ""
   echo "pre-push BLOCKED the push (npm run verify exited ${code})."

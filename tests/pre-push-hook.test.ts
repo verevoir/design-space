@@ -74,7 +74,7 @@ async function stubNpm(code: number): Promise<string> {
 // a synchronous call blocks the whole process, so Vitest's own async test-timeout cannot
 // preempt a hang here the way it can for a spawn()-based call. 10s is generous headroom over
 // what the stubbed npm needs (it exits immediately); it exists to fail this test loudly with a
-// diagnosable signal.aborted/SIGTERM-driven non-zero code rather than hanging the CI job
+// diagnosable, aborted/SIGTERM-driven non-zero exit code rather than hanging the CI job
 // indefinitely if a future change makes the hook (or the stub) wait on something.
 const HOOK_SPAWN_TIMEOUT_MS = 10_000;
 
@@ -82,6 +82,38 @@ function runHook(pathPrefix: string): { code: number; stdout: string; stderr: st
   const res = spawnSync('sh', [HOOK], {
     encoding: 'utf-8',
     env: { ...process.env, PATH: `${pathPrefix}:${process.env['PATH'] ?? ''}` },
+    timeout: HOOK_SPAWN_TIMEOUT_MS,
+  });
+  return { code: res.status ?? 1, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+}
+
+// Does this environment have a `timeout` command on PATH? Real check, run once — CI
+// (ubuntu-latest) ships coreutils' `timeout`; stock macOS does not, and the hook's own
+// fallback branch exists specifically for that case (see .githooks/pre-push's comment).
+// runHook() only prepends the stub npm's directory to PATH, so the REAL system PATH —
+// and therefore a real `timeout` if this machine has one — is still reachable by the hook.
+const HAS_TIMEOUT_CMD = spawnSync('sh', ['-c', 'command -v timeout'], { stdio: 'ignore' }).status === 0;
+
+/** A stub `npm` that sleeps `sleepSeconds` then exits `code` — for exercising a hang. */
+async function stubNpmSleep(sleepSeconds: number, code: number): Promise<string> {
+  const dir = await tmp('ds-prepush-npm-stub-slow-');
+  const path = join(dir, 'npm');
+  await writeFile(
+    path,
+    `#!/bin/sh\necho "stub-npm called: $@"\nsleep ${sleepSeconds}\nexit ${code}\n`,
+    'utf-8',
+  );
+  await chmod(path, 0o755);
+  return dir;
+}
+
+function runHookWithEnv(
+  pathPrefix: string,
+  extraEnv: Record<string, string>,
+): { code: number; stdout: string; stderr: string } {
+  const res = spawnSync('sh', [HOOK], {
+    encoding: 'utf-8',
+    env: { ...process.env, PATH: `${pathPrefix}:${process.env['PATH'] ?? ''}`, ...extraEnv },
     timeout: HOOK_SPAWN_TIMEOUT_MS,
   });
   return { code: res.status ?? 1, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
@@ -127,5 +159,50 @@ describe('.githooks/pre-push — behaviour, against a stub npm', () => {
     expect(r.stdout).toContain(
       'Fix the failure above, or bypass deliberately with: git push --no-verify',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// npm run verify is bounded — review (resilience) rejection against 7aab3d3: the hook's own
+// real invocation had no timeout, unlike the test harness's spawnSync call above, so a hang in
+// build/test/lint/exit-contracts would block git push forever with no diagnosable signal.
+// ---------------------------------------------------------------------------
+
+(HAS_TIMEOUT_CMD ? describe : describe.skip)(
+  '.githooks/pre-push — bounds npm run verify with `timeout` (this machine has one on PATH)',
+  () => {
+    it('kills a hanging npm run verify after the configured bound, rather than blocking the push forever', async () => {
+      // The stub sleeps 5s; the bound is overridden to 1s, so `timeout` kills it well inside
+      // this test's own 10s HOOK_SPAWN_TIMEOUT_MS backstop — never depends on that backstop firing.
+      const dir = await stubNpmSleep(5, 0);
+      const r = runHookWithEnv(dir, { PRE_PUSH_VERIFY_TIMEOUT_S: '1' });
+
+      expect(r.code).not.toBe(0);
+      expect(r.stdout).toContain('did not complete within 1s and was killed');
+    });
+
+    it('does not disturb a normal, fast run — the bound only matters when something hangs', async () => {
+      const dir = await stubNpm(0);
+      const r = runHookWithEnv(dir, { PRE_PUSH_VERIFY_TIMEOUT_S: '1' });
+
+      expect(r.code).toBe(0);
+      expect(r.stdout).not.toContain('was killed');
+    });
+  },
+);
+
+describe('.githooks/pre-push — the no-`timeout`-on-PATH fallback', () => {
+  // Forcing `timeout` off a child's PATH reliably and portably (independent of which OS/distro
+  // this machine is, and of merged-/bin-vs-/usr/bin layouts) is not practical from here — so
+  // unlike the bound-and-kill behaviour above, this fallback branch's own RUNTIME is not
+  // exercised end-to-end. What is checked is that the branch and its two distinct messages
+  // genuinely exist in the shipped hook, so the source cannot silently lose the fallback without
+  // this failing — a static pin, honestly labelled as one rather than passed off as behavioural
+  // coverage it is not.
+  it('the source contains both the timeout-present and timeout-absent branches, each with its own message', () => {
+    const content = readFileSync(HOOK, 'utf-8');
+    expect(content).toContain('command -v timeout');
+    expect(content).toContain("'timeout' is not on PATH");
+    expect(content).toContain('did not complete within');
   });
 });
