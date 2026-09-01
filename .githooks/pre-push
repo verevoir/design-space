@@ -9,7 +9,9 @@
 # not against a clean checkout the way CI does. Its job is to catch your own
 # slip before it leaves this machine — a broken build, a failing test, a
 # lint violation — not to certify the change. The CI panel
-# (.github/workflows/antagonistic-review.yml, the required `promote` gate)
+# (.github/workflows/antagonistic-review.yml — its `antagonistic-review`
+# aggregator job, not `promote`, is the required status check; see ADR 0007
+# for why `promote` is label-gated, skippable, and cannot serve that role)
 # remains the certifier: nothing this hook does substitutes for review, and a
 # clean run here is not an approval.
 #

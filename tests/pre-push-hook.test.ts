@@ -69,10 +69,20 @@ async function stubNpm(code: number): Promise<string> {
   return dir;
 }
 
+// Bounded: an unbounded spawnSync is exactly the hazard tests/smoke-sh.test.ts documents and
+// deliberately avoids elsewhere in this repo ("Using spawnSync would block the event loop") —
+// a synchronous call blocks the whole process, so Vitest's own async test-timeout cannot
+// preempt a hang here the way it can for a spawn()-based call. 10s is generous headroom over
+// what the stubbed npm needs (it exits immediately); it exists to fail this test loudly with a
+// diagnosable signal.aborted/SIGTERM-driven non-zero code rather than hanging the CI job
+// indefinitely if a future change makes the hook (or the stub) wait on something.
+const HOOK_SPAWN_TIMEOUT_MS = 10_000;
+
 function runHook(pathPrefix: string): { code: number; stdout: string; stderr: string } {
   const res = spawnSync('sh', [HOOK], {
     encoding: 'utf-8',
     env: { ...process.env, PATH: `${pathPrefix}:${process.env['PATH'] ?? ''}` },
+    timeout: HOOK_SPAWN_TIMEOUT_MS,
   });
   return { code: res.status ?? 1, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
 }
